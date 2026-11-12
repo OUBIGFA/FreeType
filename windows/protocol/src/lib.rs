@@ -118,6 +118,8 @@ pub struct Config {
     pub font_size: u32,
     /// 候选窗字体（字体族名）。
     pub font_family: String,
+    /// 选中候选的样子：pink 品牌粉、blue 蓝、green 微信绿、sogou 不画底色块只换字色。
+    pub candidate_style: String,
 
     // —— 拼音 ——
     /// 模糊音总开关；打开时用 [`Config::fuzzy_groups`] 里的几组。
@@ -210,6 +212,7 @@ impl Default for Config {
             horizontal: true,
             font_size: 18,
             font_family: DEFAULT_FONT.into(),
+            candidate_style: "pink".into(),
             fuzzy: false,
             fuzzy_groups: fuzzy::DEFAULT,
             shuangpin: false,
@@ -253,6 +256,7 @@ impl Default for Config {
 
 /// 双拼方案。
 pub const SHUANGPIN_SCHEMES: [&str; 7] = ["ziranma", "xiaohe", "microsoft", "sogou", "abc", "ziguang", "pinyinjiajia"];
+pub const CANDIDATE_STYLES: [&str; 4] = ["pink", "blue", "green", "sogou"];
 pub const SHIFT_TOGGLES: [&str; 4] = ["both", "left", "right", "off"];
 pub const SELECT_KEYS: [&str; 3] = ["off", "semicolon", "quote"];
 pub const MODE_SCOPES: [&str; 2] = ["global", "app"];
@@ -287,6 +291,7 @@ impl Config {
         }
         self.fuzzy_groups &= 0xfff;
         self.page_keys &= 0xf;
+        pick(&mut self.candidate_style, &CANDIDATE_STYLES, &d.candidate_style);
         pick(&mut self.shuangpin_scheme, &SHUANGPIN_SCHEMES, &d.shuangpin_scheme);
         pick(&mut self.shift_toggle, &SHIFT_TOGGLES, &d.shift_toggle);
         pick(&mut self.select_keys, &SELECT_KEYS, &d.select_keys);
@@ -505,6 +510,9 @@ pub struct Frame {
     pub font_size: u32,
     #[serde(default)]
     pub font_family: String,
+    /// 候选强调色，见 [`Config::candidate_style`]。
+    #[serde(default)]
+    pub candidate_style: String,
     /// 候选竖排。
     #[serde(default)]
     pub vertical: bool,
@@ -657,12 +665,16 @@ mod tests {
             hotkey_emoji: "ctrl+x".into(),
             mode_scope: "window".into(),
             font_family: "  ".into(),
+            candidate_style: "purple".into(),
             ..Config::default()
         }
         .sanitized();
         assert_eq!(config.hotkey_emoji, "off");
         assert_eq!(config.mode_scope, "global");
         assert_eq!(config.font_family, DEFAULT_FONT);
+        assert_eq!(config.candidate_style, "pink");
+        let sogou = Config { candidate_style: "sogou".into(), ..Config::default() }.sanitized();
+        assert_eq!(sogou.candidate_style, "sogou");
     }
 
     #[test]

@@ -9,6 +9,8 @@ type Config struct {
 	Horizontal bool   `json:"horizontal"`
 	FontSize   int    `json:"font_size"`
 	FontFamily string `json:"font_family"`
+	// CandidateStyle 是选中候选的样子：pink blue green sogou。
+	CandidateStyle string `json:"candidate_style"`
 
 	Fuzzy           bool   `json:"fuzzy"`
 	FuzzyGroups     int    `json:"fuzzy_groups"`
@@ -57,7 +59,7 @@ type Config struct {
 // defaultConfig 和服务进程的默认值一样（连不上服务进程时界面先按它画）。
 func defaultConfig() Config {
 	return Config{
-		PageSize: 7, Horizontal: true, FontSize: 18, FontFamily: "Microsoft YaHei",
+		PageSize: 7, Horizontal: true, FontSize: 18, FontFamily: "Microsoft YaHei", CandidateStyle: "pink",
 		FuzzyGroups: fuzzyDefault, ShuangpinScheme: "xiaohe", TypoCorrection: true,
 		ShiftToggle: "both", PageKeys: pageKeyMinus, SelectKeys: "off", PickChar: true, NumpadDot: true,
 		FullwidthPunct: true, AutoPair: true, Autospace: true, AutospaceLetters: true, AutospaceDigits: true,
@@ -178,11 +180,12 @@ var (
 		{"xiaohe", "小鹤双拼"}, {"ziranma", "自然码"}, {"microsoft", "微软双拼"}, {"sogou", "搜狗双拼"},
 		{"abc", "智能 ABC"}, {"ziguang", "紫光双拼"}, {"pinyinjiajia", "拼音加加"},
 	}
-	shiftToggles = []choice{{"both", "左右 Shift 都可以"}, {"left", "只用左 Shift"}, {"right", "只用右 Shift"}, {"off", "不用 Shift 切换"}}
-	selectKeys   = []choice{{"off", "不用"}, {"semicolon", "分号选第 2 个"}, {"quote", "分号、引号选第 2、3 个"}}
-	modes        = []choice{{"chinese", "中文"}, {"english", "英文"}}
-	modeScopes   = []choice{{"global", "所有应用一致"}, {"app", "每个应用分别记住"}}
-	positions    = []choice{
+	candidateStyleChoices = []choice{{"pink", "粉色（默认）"}, {"blue", "蓝色"}, {"green", "微信绿"}, {"sogou", "搜狗样式（无底色块）"}}
+	shiftToggles          = []choice{{"both", "左右 Shift 都可以"}, {"left", "只用左 Shift"}, {"right", "只用右 Shift"}, {"off", "不用 Shift 切换"}}
+	selectKeys            = []choice{{"off", "不用"}, {"semicolon", "分号选第 2 个"}, {"quote", "分号、引号选第 2、3 个"}}
+	modes                 = []choice{{"chinese", "中文"}, {"english", "英文"}}
+	modeScopes            = []choice{{"global", "所有应用一致"}, {"app", "每个应用分别记住"}}
+	positions             = []choice{
 		{"top-left", "左上方"}, {"top", "正上方"}, {"top-right", "右上方"},
 		{"bottom-left", "左下方"}, {"bottom", "正下方"}, {"bottom-right", "右下方"},
 	}

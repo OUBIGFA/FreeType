@@ -423,6 +423,7 @@ impl Host {
         frame.traditional = self.config.traditional;
         frame.font_size = self.config.font_size;
         frame.font_family = self.config.font_family.clone();
+        frame.candidate_style = self.config.candidate_style.clone();
         frame.vertical = !self.config.horizontal;
         frame.hint_position = self.config.hint_position.clone();
         frame.want_before = self.config.autospace;

@@ -205,10 +205,12 @@ func (s *settings) candidatesPage(c *ui.Context) {
 	section(c, "外观", func() {
 		row(c, "字体", "候选窗、提示使用的字体，默认是 Microsoft YaHei（微软雅黑）", func() {
 			family := s.config.FontFamily
-			if ui.Combobox(c, &family, s.fontList(fontNames)).Label("字体").Width(240).Changed() && family != "" {
-				s.config.FontFamily = family
-				changed = true
-			}
+			grayed(c).Children(func() {
+				if ui.Combobox(c, &family, s.fontList(fontNames)).Label("字体").Width(240).Changed() && family != "" {
+					s.config.FontFamily = family
+					changed = true
+				}
+			})
 			if s.config.FontFamily != "Microsoft YaHei" && ui.Button(c, "恢复默认").Clicked() {
 				s.config.FontFamily = "Microsoft YaHei"
 				changed = true
@@ -216,10 +218,15 @@ func (s *settings) candidatesPage(c *ui.Context) {
 		})
 		row(c, "字号", "按 100% 缩放计的像素，12 到 36", func() {
 			size := float64(s.config.FontSize)
-			if ui.NumberInput(c, &size, 12, 36, 1).Label("字号").Width(120).Changed() {
-				s.config.FontSize = int(size)
-				changed = true
-			}
+			grayed(c).Children(func() {
+				if ui.NumberInput(c, &size, 12, 36, 1).Label("字号").Width(120).Changed() {
+					s.config.FontSize = int(size)
+					changed = true
+				}
+			})
+		})
+		row(c, "候选强调色", "选中的候选怎么标出来；搜狗样式不画底色块，只把字换成蓝色", func() {
+			changed = choose(c, "候选强调色", candidateStyleChoices, &s.config.CandidateStyle, 220) || changed
 		})
 		row(c, "每页候选个数", "", func() {
 			size := fmt.Sprint(s.config.PageSize)
@@ -244,7 +251,34 @@ func (s *settings) candidatesPage(c *ui.Context) {
 	}
 }
 
-// candidatePreview 按现在的字体、字号、排列画一个候选窗的样子。
+// selectedLook 是候选窗里选中候选的样子。
+type selectedLook struct {
+	block bool     // 画底色块；搜狗样式不画
+	fill  ui.Color // 底色块的颜色
+	text  ui.Color // 选中候选的字（和序号）
+}
+
+// candidateStyle 和候选窗（windows/tsf/src/ui.rs 的 theme）用一样的颜色，改一边要改另一边。
+func candidateStyle(id string, dark bool) selectedLook {
+	switch id {
+	case "blue":
+		if dark {
+			return selectedLook{true, ui.Hex("#3d7ff0"), ui.Hex("#ffffff")}
+		}
+		return selectedLook{true, ui.Hex("#2b6ce6"), ui.Hex("#ffffff")}
+	case "green":
+		return selectedLook{true, ui.Hex("#07c160"), ui.Hex("#ffffff")}
+	case "sogou":
+		if dark {
+			return selectedLook{false, ui.Color{}, ui.Hex("#6c9eff")}
+		}
+		return selectedLook{false, ui.Color{}, ui.Hex("#1e6fff")}
+	default:
+		return selectedLook{true, brandPink, ui.Hex("#18181b")}
+	}
+}
+
+// candidatePreview 按现在的字体、字号、排列和强调色画一个候选窗的样子。
 func (s *settings) candidatePreview(c *ui.Context) {
 	p := colors(c)
 	t := c.Theme()
@@ -269,12 +303,15 @@ func (s *settings) candidatePreview(c *ui.Context) {
 						ui.Text(c, "›").Font(family).FontSize(size).TextColor(t.Text)
 					})
 				}()
+				style := candidateStyle(s.config.CandidateStyle, t.Dark)
 				for i, w := range words {
 					item := ui.Row(c).Gap(4).Padding(3, 6).Radius(6).AlignItems(ui.Center)
 					label, text := p.muted, t.Text
 					if i == 0 {
-						item.Background(t.Accent)
-						label, text = t.AccentText, t.AccentText
+						if style.block {
+							item.Background(style.fill)
+						}
+						label, text = style.text, style.text
 					}
 					item.Children(func() {
 						ui.Text(c, fmt.Sprint(i+1)).Font(family).FontSize(size * 0.78).TextColor(label)
@@ -346,7 +383,7 @@ func (s *settings) typingPage(c *ui.Context) {
 		changed = switchRow(c, "小键盘的点输入「.」", "小键盘的点总是半角；打字途中按它进入网址、邮箱输入", &s.config.NumpadDot) || changed
 	})
 	section(c, "中英文混排", func() {
-		changed = switchRow(c, "中英文之间自动加空格", "你好Linux → 你好 Linux；终端等读不到光标前文字的应用里不生效", &s.config.Autospace) || changed
+		changed = switchRow(c, "中英文之间自动加空格", "自由输入法FreeType → 自由输入法 FreeType；终端等读不到光标前文字的应用里不生效", &s.config.Autospace) || changed
 		if s.config.Autospace {
 			changed = switchLine(c, "汉字和字母之间", "", &s.config.AutospaceLetters, true) || changed
 			changed = switchLine(c, "汉字和数字之间", "", &s.config.AutospaceDigits, true) || changed
@@ -497,11 +534,14 @@ func (s *settings) phrasesPage(c *ui.Context) {
 	pageHeader(c, "快捷短语", "编码（只能是英文字母）正好打完时，短语排在候选第一个；也能在 v + 空格的「常用语」里选")
 	section(c, "添加", func() {
 		ui.Column(c).Padding(16, 18).Gap(12).Children(func() {
-			ui.Form(c, func() {
-				ui.Field(c, "编码", func() { ui.TextInput(c, &s.newCode).Placeholder("例如 dz").Width(220) })
-				ui.Field(c, "短语", func() { ui.TextArea(c, &s.newText).Height(72) }).Error(s.formError)
-				ui.Field(c, "权重", func() { ui.TextInput(c, &s.newWeight).Placeholder("10").Width(100) }).
-					Description("同一编码有多条时，权重大的在前。")
+			// 表单里只有输入框，整个用深灰强调色
+			grayed(c).Children(func() {
+				ui.Form(c, func() {
+					ui.Field(c, "编码", func() { ui.TextInput(c, &s.newCode).Placeholder("例如 dz").Width(220) })
+					ui.Field(c, "短语", func() { ui.TextArea(c, &s.newText).Height(72) }).Error(s.formError)
+					ui.Field(c, "权重", func() { ui.TextInput(c, &s.newWeight).Placeholder("10").Width(100) }).
+						Description("同一编码有多条时，权重大的在前。")
+				})
 			})
 			ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
 				if ui.PrimaryButton(c, "添加").Clicked() {
@@ -568,8 +608,12 @@ func (s *settings) learnedPage(c *ui.Context) {
 		ui.Column(c).Padding(16, 18).Gap(10).Children(func() {
 			ui.Text(c, "加进去的词马上能打出来，排在前面。拼音可以不填，按常用读音自动注音（多音字请自己填）").FontSize(12.5).TextColor(colors(c).muted).Wrap()
 			ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-				ui.TextInput(c, &s.newWord).Placeholder("词语，例如 霜频阁").Label("词语").Width(200)
-				ui.TextInput(c, &s.newPinyin).Placeholder("拼音，例如 shuang pin ge").Label("拼音").Grow(1)
+				grayed(c).Children(func() {
+					ui.TextInput(c, &s.newWord).Placeholder("词语，例如 霜频阁").Label("词语").Width(200)
+				})
+				grayed(c).Grow(1).Children(func() {
+					ui.TextInput(c, &s.newPinyin).Placeholder("拼音，例如 shuang pin ge").Label("拼音").FillWidth()
+				})
 				if ui.PrimaryButton(c, "添加").Label("添加词").Clicked() {
 					s.addWord()
 				}

@@ -6,7 +6,8 @@ import (
 
 // 设置窗口的样子照 Windows 11「设置」：浅灰底、白色圆角卡片，卡片里一行一项，
 // 左边是名字和一句说明，右边是开关或下拉框；少用的选项在打开开关后才出现在下面。
-// 开关、按钮这些强调色用品牌 logo 的粉色；左边的导航不用强调色，选中项是浅灰底。
+// 按钮、单选这些强调色用品牌 logo 的粉色，开关和输入框用深灰（见 grayed）；
+// 左边的导航不用强调色，选中项是浅灰底。
 
 // brandPink 是 logo 的粉色。
 var brandPink = ui.Hex("#ffb3fa")
@@ -15,6 +16,16 @@ var brandPink = ui.Hex("#ffb3fa")
 func branded(c *ui.Context) *ui.Theme {
 	t := *c.Theme().WithAccent(brandPink)
 	return &t
+}
+
+// grayed 是一列透明的容器，里面的控件用深灰色强调色（开关、输入框用它），
+// 别的按钮、单选、下拉框照旧是粉色。深色模式下用浅一些的灰，深灰在深色卡片上看不出来。
+func grayed(c *ui.Context) ui.Element {
+	gray := ui.Hex("#3c3c3c")
+	if c.Theme().Dark {
+		gray = ui.Hex("#b4b4b4")
+	}
+	return ui.Themed(c, c.Theme().WithAccent(gray)).Background(ui.Transparent)
 }
 
 // palette 是界面用的几种颜色，跟随系统浅色 / 深色。
@@ -149,9 +160,11 @@ func switchLine(c *ui.Context, title, desc string, value *bool, sub bool) bool {
 				state = "开"
 			}
 			ui.Text(c, state).TextColor(colors(c).muted).FontSize(13)
-			if ui.Switch(c, value).Label(title).Changed() {
-				changed = true
-			}
+			grayed(c).Children(func() {
+				if ui.Switch(c, value).Label(title).Changed() {
+					changed = true
+				}
+			})
 		})
 	})
 	return changed

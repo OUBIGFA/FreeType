@@ -64,6 +64,7 @@ fn letters_compose_and_space_commits() {
     assert_eq!(frame.candidates[0], "你好");
     assert!(frame.forgettable);
     assert_eq!(frame.font_family, freetype_protocol::DEFAULT_FONT);
+    assert_eq!(frame.candidate_style, "pink", "候选窗拿到设置里的强调色，默认粉色");
     let frame = press(&mut host, 0x20);
     assert_eq!(frame.commit.as_deref(), Some("你好"));
     assert!(frame.preedit.is_empty());

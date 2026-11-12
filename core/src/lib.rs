@@ -809,6 +809,10 @@ impl Engine {
         if self.config.more_candidates {
             self.append_more_candidates(raw, display, &normalized, &mut result)?;
         }
+        // 双拼每个音节两个键，没有 yuan / yu'an 这种切法歧义
+        if raw_display.is_none() {
+            promote_split_reading(&mut result, raw.len());
+        }
         Ok(result)
     }
 
@@ -1487,6 +1491,55 @@ const NNLM_FLOOR: f64 = 20.0;
 /// 至少两个字（这时只和「前面的词一样、只有最后一个词不同」的候选比）；每个词的词频不低于 [`EXACT_PROTECT_MIN_FREQ`]，或者是用户选过的。
 /// 最后是个单字的精确结果（`zhonggu` 拆成「中 | 骨」）不算，用户多半还没打完，
 /// 补全照常可以排第一。
+/// 拆开读法的词排在前几个以内就不用再提。
+const SPLIT_READING_FIRST_PAGE: usize = 5;
+/// 拆开读法的词频至少是第一个候选的 1/这么多，才算真歧义（西安 对 先）而不是罕见重码（激昂 对 将）。
+const SPLIT_READING_RATIO: f64 = 100.0;
+/// 第一个候选超过这么多音节就不管：长输入的别种切法几乎都是凑出来的。
+const SPLIT_READING_MAX_SYLLABLES: usize = 4;
+
+/// 同一串字母还能切成别的音节时（yuan 也是 yu'an、xian 也是 xi'an），把这种读法里
+/// 最好的整词放到第 2 位，不用翻页或改打隔音符才找得到「预案」「西安」。
+///
+/// 做法参考水杉输入法（msime-windows）的「备选切分保护位」，没有用它的代码：
+/// 主切分（最长音节）照旧排第一；只提精确的单个整词（不是纠错、补全、拼凑的），
+/// 词频要过 [`SPLIT_READING_RATIO`] 的门槛。打了隔音符（yu'an）时整音节读法不存在，
+/// 这里自然不动。
+fn promote_split_reading(candidates: &mut Vec<Candidate>, input_len: usize) {
+    let exact_word = |c: &Candidate| {
+        c.consumed == input_len
+            && !is_raw_candidate(c)
+            && c.features.typo_count == 0.0
+            && c.features.prefix_completion == 0.0
+            && c.words.len() == 1
+            && c.words[0].known
+    };
+    let Some(top) = candidates.first().filter(|c| exact_word(c)) else {
+        return;
+    };
+    if top.pinyin.split_whitespace().count() > SPLIT_READING_MAX_SYLLABLES {
+        return;
+    }
+    let letters = |pinyin: &str| pinyin.split_whitespace().collect::<String>();
+    let (top_pinyin, top_letters, top_freq) = (top.pinyin.clone(), letters(&top.pinyin), top.words[0].freq);
+    // 字母一样、音节边界不一样，就是另一种切法
+    let split = |c: &Candidate| exact_word(c) && c.pinyin != top_pinyin && letters(&c.pinyin) == top_letters;
+    let Some(at) = candidates.iter().position(split) else {
+        return;
+    };
+    if at < SPLIT_READING_FIRST_PAGE || candidates[at].words[0].freq * SPLIT_READING_RATIO < top_freq {
+        return;
+    }
+    let word = candidates.remove(at);
+    candidates.insert(1, word);
+    // 分数改成单调递减，后面再按分数重排（繁体转换）顺序也不变
+    for i in 1..candidates.len() {
+        if candidates[i].score >= candidates[i - 1].score {
+            candidates[i].score = candidates[i - 1].score - 1e-3;
+        }
+    }
+}
+
 fn protect_exact_input(candidates: &mut Vec<Candidate>) {
     let multi = |w: &CandidateWord| w.pinyin.split_whitespace().count() >= 2;
     let is_exact = |c: &Candidate| {
@@ -2218,6 +2271,45 @@ mod tests {
         assert!(at("后续").is_some(), "{texts:?}");
         assert!(at("后续") < at("㕈"), "{texts:?}");
         assert!(at("候选") < at("后续"), "正常切分的词在前：{texts:?}");
+    }
+
+    /// yuan 有很多常用单字，「预案」(yu'an) 本来排到好几页后面。
+    fn split_reading_engine() -> Engine {
+        let mut tsv = String::from("yu an\t预案\t110000\nji ang\t激昂\t2000\n");
+        for (i, c) in "原愿远元袁员圆缘源怨".chars().enumerate() {
+            tsv.push_str(&format!("yuan\t{c}\t{}\n", 1_400_000 - i * 50_000));
+        }
+        for (i, c) in "将江讲奖降姜浆疆蒋酱".chars().enumerate() {
+            tsv.push_str(&format!("jiang\t{c}\t{}\n", 2_600_000 - i * 50_000));
+        }
+        for (i, c) in "与于语雨鱼余".chars().enumerate() {
+            tsv.push_str(&format!("yu\t{c}\t{}\n", 900_000 - i * 50_000));
+        }
+        tsv.push_str("an\t安\t500000\nji\t及\t900000\nang\t昂\t10000\n");
+        let mut e = engine(&tsv);
+        e.set_max_candidates(100);
+        e
+    }
+
+    #[test]
+    fn split_reading_gets_second_slot() {
+        let e = split_reading_engine();
+        let list = e.input("yuan");
+        let texts: Vec<&str> = list.iter().map(|c| c.text.as_str()).collect();
+        assert_eq!(list[0].pinyin, "yuan", "整音节读法照旧排第一：{texts:?}");
+        assert_eq!(texts[1], "预案", "{texts:?}");
+        assert!(list.windows(2).all(|w| w[0].score > w[1].score), "分数单调递减");
+        // 打了隔音符就只有拆开的读法
+        assert_eq!(e.input("yu'an")[0].text, "预案");
+    }
+
+    #[test]
+    fn rare_split_reading_stays_behind() {
+        // 激昂 的词频不到 将 的 1/100，是罕见重码，不提
+        let e = split_reading_engine();
+        let texts: Vec<String> = e.input("jiang").into_iter().map(|c| c.text).collect();
+        let at = texts.iter().position(|t| t == "激昂");
+        assert!(at.map_or(true, |i| i >= SPLIT_READING_FIRST_PAGE), "{texts:?}");
     }
 
     #[test]

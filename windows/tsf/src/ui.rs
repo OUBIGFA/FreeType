@@ -82,8 +82,12 @@ struct Theme {
     text: COLORREF,
     muted: COLORREF,
     hover: COLORREF,
-    accent: COLORREF,
+    /// 选中候选的底色；None 是搜狗那样不画底色块，只把字换成 `accent_text`。
+    accent: Option<COLORREF>,
+    /// 选中候选的字（和序号）的颜色。
     accent_text: COLORREF,
+    /// 切换提示（中 / 英）的字色：强调色在背景上看得清的那一档。
+    emphasis: COLORREF,
 }
 
 fn rgb(r: u8, g: u8, b: u8) -> COLORREF {
@@ -107,16 +111,37 @@ fn light_mode() -> bool {
     value != 0
 }
 
-fn theme() -> Theme {
-    if light_mode() {
+/// 按设置里的候选强调色（`Config::candidate_style`）和系统浅色 / 深色配色。
+/// 设置页的预览（windows/app/pages.go 的 candidateStyles）用同样的颜色，改一边要改另一边。
+fn theme(style: &str) -> Theme {
+    let light = light_mode();
+    let white = rgb(0xff, 0xff, 0xff);
+    // (底色块, 块上的字, 提示字色)
+    let (accent, accent_text, emphasis) = match (style, light) {
+        // 以前的蓝色
+        ("blue", true) => (Some(rgb(0x2b, 0x6c, 0xe6)), white, rgb(0x2b, 0x6c, 0xe6)),
+        ("blue", false) => (Some(rgb(0x3d, 0x7f, 0xf0)), white, rgb(0x6c, 0x9e, 0xff)),
+        // 微信输入法的绿；浅色背景上的提示字用深一档的绿，不然看不清
+        ("green", true) => (Some(rgb(0x07, 0xc1, 0x60)), white, rgb(0x06, 0xa0, 0x50)),
+        ("green", false) => (Some(rgb(0x07, 0xc1, 0x60)), white, rgb(0x07, 0xc1, 0x60)),
+        // 搜狗那样：没有底色块，选中的字是蓝色
+        ("sogou", true) => (None, rgb(0x1e, 0x6f, 0xff), rgb(0x1e, 0x6f, 0xff)),
+        ("sogou", false) => (None, rgb(0x6c, 0x9e, 0xff), rgb(0x6c, 0x9e, 0xff)),
+        // 默认：品牌粉色。粉色很浅，块上用深色字（和设置窗口一样）；提示字用深一档的粉
+        (_, true) => (Some(rgb(0xff, 0xb3, 0xfa)), rgb(0x18, 0x18, 0x1b), rgb(0xc0, 0x3c, 0xb4)),
+        (_, false) => (Some(rgb(0xff, 0xb3, 0xfa)), rgb(0x18, 0x18, 0x1b), rgb(0xff, 0xb3, 0xfa)),
+    };
+    // 鼠标停留的底用中性灰，几种强调色都配得上
+    if light {
         Theme {
-            background: rgb(0xff, 0xff, 0xff),
+            background: white,
             border: rgb(0xd6, 0xd6, 0xd6),
             text: rgb(0x1f, 0x1f, 0x1f),
             muted: rgb(0x80, 0x80, 0x80),
-            hover: rgb(0xee, 0xf2, 0xfb),
-            accent: rgb(0x2b, 0x6c, 0xe6),
-            accent_text: rgb(0xff, 0xff, 0xff),
+            hover: rgb(0xf0, 0xf0, 0xf0),
+            accent,
+            accent_text,
+            emphasis,
         }
     } else {
         Theme {
@@ -124,9 +149,10 @@ fn theme() -> Theme {
             border: rgb(0x48, 0x48, 0x48),
             text: rgb(0xee, 0xee, 0xee),
             muted: rgb(0x9a, 0x9a, 0x9a),
-            hover: rgb(0x3a, 0x3f, 0x4a),
-            accent: rgb(0x3d, 0x7f, 0xf0),
-            accent_text: rgb(0xff, 0xff, 0xff),
+            hover: rgb(0x3a, 0x3a, 0x3a),
+            accent,
+            accent_text,
+            emphasis,
         }
     }
 }
@@ -145,6 +171,8 @@ struct View {
     hint_position: String,
     font_size: u32,
     font_family: String,
+    /// 候选强调色，见 [`theme`]。
+    candidate_style: String,
     vertical: bool,
     panel: Panel,
     columns: usize,
@@ -404,7 +432,7 @@ fn paint(hwnd: HWND, data: &Data) {
         let hdc = CreateCompatibleDC(Some(target));
         let bitmap = CreateCompatibleBitmap(target, w, h);
         let old_bitmap = SelectObject(hdc, bitmap.into());
-        let t = theme();
+        let t = theme(&data.view.candidate_style);
         let fonts = Fonts::new(&data.view, data.scale);
 
         let background = CreateSolidBrush(t.background);
@@ -433,8 +461,8 @@ fn paint(hwnd: HWND, data: &Data) {
             }
             _ => {}
         }
-        if let Some(r) = data.view.cursor.and_then(|i| data.layout.items.get(i)) {
-            fill_round(hdc, r, t.accent, radius);
+        if let (Some(r), Some(accent)) = (data.view.cursor.and_then(|i| data.layout.items.get(i)), t.accent) {
+            fill_round(hdc, r, accent, radius);
         }
         let selected = |i: usize| data.view.cursor == Some(i);
         let draw = |r: &RECT, text: &str, font: HFONT, color: COLORREF, center: bool| {
@@ -447,7 +475,7 @@ fn paint(hwnd: HWND, data: &Data) {
         };
         for (r, part) in &data.layout.parts {
             match *part {
-                Part::Hint => draw(r, &data.view.hint.clone().unwrap_or_default(), fonts.hint, t.accent, false),
+                Part::Hint => draw(r, &data.view.hint.clone().unwrap_or_default(), fonts.hint, t.emphasis, false),
                 Part::Title => draw(r, data.view.title.as_deref().unwrap_or(""), fonts.small, t.muted, false),
                 Part::Preedit => draw(r, &data.view.preedit, fonts.small, t.muted, false),
                 Part::Label(i) => {
@@ -783,6 +811,7 @@ impl CandidateWindow {
             hint_position: frame.hint_position.clone(),
             font_size: frame.font_size,
             font_family: frame.font_family.clone(),
+            candidate_style: frame.candidate_style.clone(),
             vertical: frame.vertical,
             panel: frame.panel,
             columns: frame.columns,
@@ -976,7 +1005,8 @@ mod menu {
             let hdc = CreateCompatibleDC(Some(target));
             let bitmap = CreateCompatibleBitmap(target, w, h);
             let old_bitmap = SelectObject(hdc, bitmap.into());
-            let t = theme();
+            // 菜单只用到背景、边框、文字和停留底色，和强调色无关
+            let t = theme("");
             let bg = CreateSolidBrush(t.background);
             FillRect(hdc, &rect(0, 0, w, h), bg);
             let _ = DeleteObject(bg.into());
