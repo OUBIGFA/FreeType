@@ -30,8 +30,12 @@ pub fn data_dir() -> PathBuf {
         .join("FreeType")
 }
 
-/// 本机缓存目录：`%LOCALAPPDATA%\FreeType`（词库快照、日志）。
+/// 本机缓存目录：`%LOCALAPPDATA%\FreeType`（词库快照、日志）。设了 `FREETYPE_DATA_DIR`
+/// （测试、开发）时放在它下面的 `local`，不写进正在使用的输入法的日志。
 pub fn local_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("FREETYPE_DATA_DIR") {
+        return PathBuf::from(dir).join("local");
+    }
     std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)

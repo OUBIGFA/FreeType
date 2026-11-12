@@ -141,7 +141,11 @@ def check_source_records(texts, blobs, errors):
                         errors.append(f"{manifest_path}: tracked source evidence mismatch")
                 archive = source.get("gitArchive")
                 if archive:
-                    data = git("archive", "--format=tar", source["revision"])
+                    # Pin settings that change the archive bytes, e.g. core.autocrlf on Windows.
+                    data = git(
+                        "-c", "core.autocrlf=false", "-c", "core.eol=lf", "-c", "tar.umask=0002",
+                        "archive", "--format=tar", source["revision"],
+                    )
                     if len(data) != archive["bytes"] or hashlib.sha256(data).hexdigest() != archive["sha256"]:
                         errors.append(f"{manifest_path}: upstream archive mismatch")
         except (KeyError, TypeError, ValueError):
