@@ -48,7 +48,7 @@ CI 在 Windows 和 Linux 上运行同一组检查。它只有仓库读取权限�
 
 ## 来源与许可
 
-- WowType 基线：`1e047f7469f4e2f3da7a8a0cd49dbc8c0b46a0f1`，保留历史，不推送上游标签。
+- WowType 基线：`5656e136e9f5fc32837c87bc1a2242ec159a32d7`（2026-11-12 合入），保留历史，不推送上游标签。
 - mygo 固定版本：`v0.9.0`（`4811a2869b5a66d2b7e21a9eb5993fcff544460b`）。
 - 仓库组织和检查器参考 [Gitowl](https://github.com/OUBIGFA/Gitowl)，不修改该项目。
 

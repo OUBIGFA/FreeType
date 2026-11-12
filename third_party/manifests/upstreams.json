@@ -3,12 +3,12 @@
     {
       "name": "WowType",
       "repository": "https://github.com/Gloridust/WowType",
-      "revision": "1e047f7469f4e2f3da7a8a0cd49dbc8c0b46a0f1",
+      "revision": "5656e136e9f5fc32837c87bc1a2242ec159a32d7",
       "use": "保留的提交历史与 Rust 引擎、C ABI、行为测试基线",
       "license": "仓库未附许可证文本；core/Cargo.toml 声明 MIT OR Apache-2.0；待上游确认",
       "gitArchive": {
-        "bytes": 3420160,
-        "sha256": "dcc2bf2726e67fcf4284d457d20d109f00adaf8404725369e34e1cea125c3ac7"
+        "bytes": 3450880,
+        "sha256": "1d1b843e2a710d22d00a26374b20529483ccf6b9698cac25aabcf82b7bfb28df"
       }
     },
     {

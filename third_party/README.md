@@ -4,7 +4,7 @@
 
 | 来源 | 固定修订 | 用途 | 许可状态 |
 | --- | --- | --- | --- |
-| WowType | `1e047f7469f4e2f3da7a8a0cd49dbc8c0b46a0f1` | 保留历史；Rust 引擎、C ABI 和行为测试 | 仓库未附许可证文本，`core/Cargo.toml` 声明 `MIT OR Apache-2.0`，待上游确认 |
+| WowType | `5656e136e9f5fc32837c87bc1a2242ec159a32d7` | 保留历史；Rust 引擎、C ABI 和行为测试 | 仓库未附许可证文本，`core/Cargo.toml` 声明 `MIT OR Apache-2.0`，待上游确认 |
 | mygo | `v0.9.0`（`4811a2869b5a66d2b7e21a9eb5993fcff544460b`） | Windows 托盘、设置窗口和安装器 | MIT |
 | msime-windows | `26796f3ed646e2ce75ba39bca6f1352caca9fd67` | 只参照词库、快捷短语批量文件格式 | GPL-3.0；未复制代码或数据 |
 | rime-ice | 构建时下载，修订写入安装包内 `data/SOURCE.txt` | 中文词库与英文词表 | GPL-3.0，许可证随数据分发 |
