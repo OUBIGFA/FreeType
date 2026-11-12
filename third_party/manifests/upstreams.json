@@ -1,0 +1,31 @@
+{
+  "sources": [
+    {
+      "name": "WowType",
+      "repository": "https://github.com/Gloridust/WowType",
+      "revision": "1e047f7469f4e2f3da7a8a0cd49dbc8c0b46a0f1",
+      "use": "保留的提交历史与 Rust 引擎、C ABI、行为测试基线",
+      "license": "仓库未附许可证文本；core/Cargo.toml 声明 MIT OR Apache-2.0；待上游确认",
+      "gitArchive": {
+        "bytes": 3481600,
+        "sha256": "86052a167ac85a9b4a1e6801af0edbf374715071c1e890760934fd2c437f7e5a"
+      }
+    },
+    {
+      "name": "mygo",
+      "repository": "https://github.com/egoist/mygo",
+      "version": "v0.9.0",
+      "revision": "4811a2869b5a66d2b7e21a9eb5993fcff544460b",
+      "go": "1.27.3",
+      "use": "Windows 托盘、设置窗口与安装器的 Go 依赖，由 windows/app/go.mod 固定",
+      "license": "MIT"
+    },
+    {
+      "name": "msime-windows",
+      "repository": "https://github.com/metasequoiaime/msime-windows",
+      "revision": "26796f3ed646e2ce75ba39bca6f1352caca9fd67",
+      "use": "只参照词库与快捷短语批量文件的公开格式；不复制代码或词库数据",
+      "license": "GPL-3.0"
+    }
+  ]
+}

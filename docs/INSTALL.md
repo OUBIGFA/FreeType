@@ -236,7 +236,7 @@ fcitx5-diagnose
 | emoji 显示方框 | Debian / Ubuntu 安装 `fonts-noto-color-emoji`；Arch 安装 `noto-fonts-emoji`；Fedora 安装 `google-noto-color-emoji-fonts` |
 
 用户数据优先于系统词库；环境变量优先于设置界面配置。完整变量说明见 [CONFIG.md](CONFIG.md)，语音说明见 [VOICE.md](VOICE.md)。
-[CI](../.github/workflows/ci.yml) 定义了安装与更新回归、Debian / Ubuntu / Arch / Fedora 打包安装、openSUSE 源码安装和 Nix 检查。
+上游 CI（FreeType 未保留该工作流）定义了安装与更新回归、Debian / Ubuntu / Arch / Fedora 打包安装、openSUSE 源码安装和 Nix 检查。
 桌面候选框、真实麦克风和具体应用兼容性需要在对应桌面会话中确认。
 
 ## NixOS / Nix

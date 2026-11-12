@@ -1,0 +1,37 @@
+name: Repository checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  repository:
+    name: Repository hygiene (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, ubuntu-24.04]
+    env:
+      PYTHONUTF8: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+      FREETYPE_TEST_TEMP: _temp/ci-repository
+    steps:
+      - name: Check out source with history (checkout v4)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - name: Set up declared Python version (setup-python v6)
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version-file: .python-version
+      - name: Check staged files and source registrations
+        run: python -X utf8 tools/check_repo.py
+      - name: Test repository boundaries
+        run: python -X utf8 -m unittest discover -s tests/repository -v
+

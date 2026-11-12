@@ -1,7 +1,7 @@
 # 引擎细节、评测与调参
 
 这里是 WowType 拼音引擎的实现说明和实测数字，原先放在 README 里。
-怎么安装、怎么用见 [README](../README.md)；接手开发先看 [HANDOFF.md](HANDOFF.md)。
+上游平台的安装与使用见 [安装说明](INSTALL.md)；Windows 移植的当前范围见 [项目说明](../README.md)。
 
 ## 词库从哪来
 
@@ -225,7 +225,7 @@ cargo run --release -p wowtype-core --bin wowtype-train -- \
 为什么「截断 1 个字母」的 top1 掉了是对的：这组用例把 `zhonggu` 的期望答案定为「中国」，
 可 `zhonggu` 本身就是「中古」。94 例里截断后的字母恰好是另一个词，这些现在一律给精确词，
 补全排第二（top3 从 91.5% 升到 93.6%）；截断后不是词的 206 例 top1 99.5%。详见
-[docs/UX-AUDIT.md](UX-AUDIT.md)。
+[上游候选排序问题记录](https://github.com/Gloridust/WowType/blob/1e047f7469f4e2f3da7a8a0cd49dbc8c0b46a0f1/docs/UX-AUDIT.md)。
 
 ## 按错键与长句
 
@@ -398,5 +398,5 @@ cargo run --release -p wowtype-core --bin wowtype-train -- \
 | `hpmac_base.bin` 超参数 | 已读出浮点值 |
 | 候选排序对照（官方引擎直接给出分数） | 卡在 create_session 的一个空指针 |
 
-详见 [analysis/REPORT.md](../analysis/REPORT.md)、[docs/DATA.md](DATA.md)、
+详见 [上游历史分析](https://github.com/Gloridust/WowType/blob/1e047f7469f4e2f3da7a8a0cd49dbc8c0b46a0f1/analysis/REPORT.md)、[docs/DATA.md](DATA.md)、
 [tools/ref-engine/README.md](../tools/ref-engine/README.md)、[docs/VOICE.md](VOICE.md)。

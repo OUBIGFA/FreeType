@@ -1,0 +1,164 @@
+{
+  "binaries": [
+    {
+      "path": "icons/hicolor/128x128/apps/wowtype.png",
+      "reason": "WowType 上游 Linux 图标与 fcitx5 主题资源，作移植对照保留",
+      "source": "WowType 1e047f7469f4e2f3da7a8a0cd49dbc8c0b46a0f1",
+      "license": "同 WowType（待上游确认许可证文本）",
+      "bytes": 8321,
+      "sha256": "02cef2337597fe52deaf468078b16789c217da4e6dde48b790b31479c5c6c978"
+    },
+    {
+      "path": "icons/hicolor/16x16/apps/wowtype.png",
+      "reason": "WowType 上游 Linux 图标与 fcitx5 主题资源，作移植对照保留",
+      "source": "WowType 1e047f7469f4e2f3da7a8a0cd49dbc8c0b46a0f1",
+      "license": "同 WowType（待上游确认许可证文本）",
+      "bytes": 725,
+      "sha256": "17d1a672ff7b1b0aa0487d17a0c9a49f7f377c06e2f4a01070968a053bc9fc7f"
+    },
+    {
+      "path": "icons/hicolor/22x22/apps/wowtype.png",
+      "reason": "WowType 上游 Linux 图标与 fcitx5 主题资源，作移植对照保留",
+      "source": "WowType 1e047f7469f4e2f3da7a8a0cd49dbc8c0b46a0f1",
+      "license": "同 WowType（待上游确认许可证文本）",
+      "bytes": 1041,
+      "sha256": "2cad34ce2c89a088102717d6b140575e1467e458d3fc5b0162edc159cf723888"
+    },
+    {
+      "path": "icons/hicolor/24x24/apps/wowtype.png",
+      "reason": "WowType 上游 Linux 图标与 fcitx5 主题资源，作移植对照保留",
+      "source": "WowType 1e047f7469f4e2f3da7a8a0cd49dbc8c0b46a0f1",
+      "license": "同 WowType（待上游确认许可证文本）",
+      "bytes": 1111,
+      "sha256": "12a9adfb80092f31b962aa8cdc0991f4e79693d4df6b1ec83d3fa21a4a27852c"
+    },
+    {
+      "path": "icons/hicolor/256x256/apps/wowtype.png",
+      "reason": "WowType 上游 Linux 图标与 fcitx5 主题资源，作移植对照保留",
+      "source": "WowType 1e047f7469f4e2f3da7a8a0cd49dbc8c0b46a0f1",
+      "license": "同 WowType（待上游确认许可证文本）",
+      "bytes": 19900,
+      "sha256": "c7c8b4621318f79a4d5dc73c8f8b8e1f31eea5c209d80a08f2cf6bc9cb428736"
+    },
+    {
+      "path": "icons/hicolor/32x32/apps/wowtype.png",
+      "reason": "WowType 上游 Linux 图标与 fcitx5 主题资源，作移植对照保留",
+      "source": "WowType 1e047f7469f4e2f3da7a8a0cd49dbc8c0b46a0f1",
+      "license": "同 WowType（待上游确认许可证文本）",
+      "bytes": 1427,
+      "sha256": "566305329e05f0e6295817e4847d61119314953873641810e5dafb809ae67fed"
+    },
+    {
+      "path": "icons/hicolor/48x48/apps/wowtype.png",
+      "reason": "WowType 上游 Linux 图标与 fcitx5 主题资源，作移植对照保留",
+      "source": "WowType 1e047f7469f4e2f3da7a8a0cd49dbc8c0b46a0f1",
+      "license": "同 WowType（待上游确认许可证文本）",
+      "bytes": 2291,
+      "sha256": "75ad7f7c8dff19851ea3fde7daa08812b47f7e46a2d2f7e1f8a2e26cf73d2738"
+    },
+    {
+      "path": "icons/hicolor/64x64/apps/wowtype.png",
+      "reason": "WowType 上游 Linux 图标与 fcitx5 主题资源，作移植对照保留",
+      "source": "WowType 1e047f7469f4e2f3da7a8a0cd49dbc8c0b46a0f1",
+      "license": "同 WowType（待上游确认许可证文本）",
+      "bytes": 3320,
+      "sha256": "b2dc4f186f087983f9d47ab523397589bc4858dcad60144b2254069e98b31ff7"
+    },
+    {
+      "path": "themes/fcitx5/wowtype-dark/arrow.png",
+      "reason": "WowType 上游 Linux 图标与 fcitx5 主题资源，作移植对照保留",
+      "source": "WowType 1e047f7469f4e2f3da7a8a0cd49dbc8c0b46a0f1",
+      "license": "同 WowType（待上游确认许可证文本）",
+      "bytes": 289,
+      "sha256": "7efc59e80e55ae6a6389fdc2f7b6b9f8bf8c3a544ba44814993a8b0951089157"
+    },
+    {
+      "path": "themes/fcitx5/wowtype-dark/highlight.png",
+      "reason": "WowType 上游 Linux 图标与 fcitx5 主题资源，作移植对照保留",
+      "source": "WowType 1e047f7469f4e2f3da7a8a0cd49dbc8c0b46a0f1",
+      "license": "同 WowType（待上游确认许可证文本）",
+      "bytes": 357,
+      "sha256": "8a6177b3451d3c515ce1985d4b5d9a636c316cbf90c5ce3b005dc8814efd9f46"
+    },
+    {
+      "path": "themes/fcitx5/wowtype-dark/next.png",
+      "reason": "WowType 上游 Linux 图标与 fcitx5 主题资源，作移植对照保留",
+      "source": "WowType 1e047f7469f4e2f3da7a8a0cd49dbc8c0b46a0f1",
+      "license": "同 WowType（待上游确认许可证文本）",
+      "bytes": 314,
+      "sha256": "06f8b7da2fe711466b3abaa82dbd03e619720defa8a54052e08eb93c5e63bb19"
+    },
+    {
+      "path": "themes/fcitx5/wowtype-dark/panel.png",
+      "reason": "WowType 上游 Linux 图标与 fcitx5 主题资源，作移植对照保留",
+      "source": "WowType 1e047f7469f4e2f3da7a8a0cd49dbc8c0b46a0f1",
+      "license": "同 WowType（待上游确认许可证文本）",
+      "bytes": 1634,
+      "sha256": "e1d85ab6fd15706e527d58d264442e7ac67fc1ee7b47c21bdb29ff6e4cbbe842"
+    },
+    {
+      "path": "themes/fcitx5/wowtype-dark/prev.png",
+      "reason": "WowType 上游 Linux 图标与 fcitx5 主题资源，作移植对照保留",
+      "source": "WowType 1e047f7469f4e2f3da7a8a0cd49dbc8c0b46a0f1",
+      "license": "同 WowType（待上游确认许可证文本）",
+      "bytes": 319,
+      "sha256": "3cd79f174f5ba300a7a4a9200472b32a724de1ba84ef69e460cb4569319c460e"
+    },
+    {
+      "path": "themes/fcitx5/wowtype-dark/radio.png",
+      "reason": "WowType 上游 Linux 图标与 fcitx5 主题资源，作移植对照保留",
+      "source": "WowType 1e047f7469f4e2f3da7a8a0cd49dbc8c0b46a0f1",
+      "license": "同 WowType（待上游确认许可证文本）",
+      "bytes": 196,
+      "sha256": "748c5deb094967c97adbdbd9c463ca6acc4599610c046e1589ed09b1720a9b63"
+    },
+    {
+      "path": "themes/fcitx5/wowtype/arrow.png",
+      "reason": "WowType 上游 Linux 图标与 fcitx5 主题资源，作移植对照保留",
+      "source": "WowType 1e047f7469f4e2f3da7a8a0cd49dbc8c0b46a0f1",
+      "license": "同 WowType（待上游确认许可证文本）",
+      "bytes": 313,
+      "sha256": "a55ce609b100d819bd38f8d561999e0c9d3db5ccb6ab23c41faaee435fe41e99"
+    },
+    {
+      "path": "themes/fcitx5/wowtype/highlight.png",
+      "reason": "WowType 上游 Linux 图标与 fcitx5 主题资源，作移植对照保留",
+      "source": "WowType 1e047f7469f4e2f3da7a8a0cd49dbc8c0b46a0f1",
+      "license": "同 WowType（待上游确认许可证文本）",
+      "bytes": 346,
+      "sha256": "4386da78440ee317d7550d940ec851f69ca3d565542b2b7b7b527f8bd8b5df0f"
+    },
+    {
+      "path": "themes/fcitx5/wowtype/next.png",
+      "reason": "WowType 上游 Linux 图标与 fcitx5 主题资源，作移植对照保留",
+      "source": "WowType 1e047f7469f4e2f3da7a8a0cd49dbc8c0b46a0f1",
+      "license": "同 WowType（待上游确认许可证文本）",
+      "bytes": 307,
+      "sha256": "e40342fdad3f6fa0c6ef27de258d656c3c14cf3e7ac28b75c6161eee25764acd"
+    },
+    {
+      "path": "themes/fcitx5/wowtype/panel.png",
+      "reason": "WowType 上游 Linux 图标与 fcitx5 主题资源，作移植对照保留",
+      "source": "WowType 1e047f7469f4e2f3da7a8a0cd49dbc8c0b46a0f1",
+      "license": "同 WowType（待上游确认许可证文本）",
+      "bytes": 1576,
+      "sha256": "32254265bad3be30caed867d50b36bcb8517ea0c8d7299efc5d1b1cbd872a286"
+    },
+    {
+      "path": "themes/fcitx5/wowtype/prev.png",
+      "reason": "WowType 上游 Linux 图标与 fcitx5 主题资源，作移植对照保留",
+      "source": "WowType 1e047f7469f4e2f3da7a8a0cd49dbc8c0b46a0f1",
+      "license": "同 WowType（待上游确认许可证文本）",
+      "bytes": 305,
+      "sha256": "e8ccc35832e9a13f2440f23f7da260e474e6e20cf70fcdc3bf8fc267024bfe83"
+    },
+    {
+      "path": "themes/fcitx5/wowtype/radio.png",
+      "reason": "WowType 上游 Linux 图标与 fcitx5 主题资源，作移植对照保留",
+      "source": "WowType 1e047f7469f4e2f3da7a8a0cd49dbc8c0b46a0f1",
+      "license": "同 WowType（待上游确认许可证文本）",
+      "bytes": 204,
+      "sha256": "2aa4e67cd46add7bdcfe92fbd494053f363c0f09c8e2e27e20a285ebd5547425"
+    }
+  ]
+}

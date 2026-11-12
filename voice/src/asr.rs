@@ -112,7 +112,7 @@ pub struct ProcessChannel {
 /// 把命令行拆成参数，支持单/双引号和反斜杠转义。
 ///
 /// 不能直接用 split_whitespace：模型路径里常有空格（如
-/// "/home/me/My Models/ggml.bin"，按空格切会把它拆坏。
+/// "/home/user/My Models/ggml.bin"，按空格切会把它拆坏。
 fn split_command(cmdline: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
