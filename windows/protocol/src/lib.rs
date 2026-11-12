@@ -151,7 +151,7 @@ pub struct Config {
     pub fullwidth_punct: bool,
     /// 成对标点自动补全：打（ “ 《 【 时补上另一半，光标放中间。
     pub auto_pair: bool,
-    /// 中英文之间自动加空格（总开关）；字母、数字两种分别控制。
+    /// 中英文之间自动加空格（总开关，默认开）；字母、数字两种分别控制。
     pub autospace: bool,
     pub autospace_letters: bool,
     pub autospace_digits: bool,
@@ -222,7 +222,7 @@ impl Default for Config {
             numpad_dot: true,
             fullwidth_punct: true,
             auto_pair: true,
-            autospace: false,
+            autospace: true,
             autospace_letters: true,
             autospace_digits: true,
             default_mode: Mode::Chinese,
@@ -239,11 +239,11 @@ impl Default for Config {
             hotkey_punct: "off".into(),
             hotkey_traditional: "off".into(),
             hotkey_mode: "off".into(),
-            status_bar: true,
+            status_bar: false,
             status_bar_autohide: false,
             hint_on_toggle: true,
             hint_on_focus: false,
-            hint_position: "bottom-right".into(),
+            hint_position: "top-left".into(),
         }
     }
 }
@@ -413,6 +413,12 @@ pub enum Request {
     ListUserWords,
     /// 忘掉这些学到的词（用户词库和选词习惯都去掉）。
     ForgetWords { words: Vec<String> },
+    /// 自己加一个词（进用户词库，马上能打出来）。拼音空着时按常用读音自动注音。
+    AddUserWord {
+        word: String,
+        #[serde(default)]
+        pinyin: String,
+    },
     /// 清空学到的全部词和输入习惯。
     ClearLearned,
     /// 清空剪贴板历史。
@@ -540,6 +546,9 @@ pub struct ImportReport {
     pub skipped: usize,
     /// 最多前 20 条出错的行：「第 N 行：原因」。
     pub errors: Vec<String>,
+    /// 补充说明（认出的格式、自动注音了几条）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 /// 应答。成功时按请求种类填 `frame`、`status`、`config` 等之一。
@@ -633,7 +642,7 @@ mod tests {
         let config = config.sanitized();
         assert_eq!(config.page_size, 10);
         assert_eq!(config.shuangpin_scheme, "xiaohe");
-        assert_eq!(config.hint_position, "bottom-right");
+        assert_eq!(config.hint_position, "top-left");
         assert_eq!(config.font_family, DEFAULT_FONT);
         assert!(config.fullwidth_punct);
         assert_eq!(config.fuzzy_groups, fuzzy::DEFAULT);

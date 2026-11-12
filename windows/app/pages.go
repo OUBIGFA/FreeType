@@ -31,8 +31,17 @@ func (s *settings) view(c *ui.Context) {
 		s.notice = ""
 	}
 	p := colors(c)
-	ui.Row(c).Fill().Background(p.page).Children(func() {
-		ui.Column(c).Width(236).FillHeight().Padding(18, 10, 12, 10).Gap(14).Children(func() {
+	bar := c.TitleBar()
+	ui.Column(c).Fill().Background(p.page).Children(func() {
+		// 系统标题栏藏起来了：这一条能拖动窗口，右上角是窗口按钮
+		ui.Row(c).Height(max(bar.Height, 32)).Shrink(0).DragWindow()
+		s.body(c, p)
+	})
+}
+
+func (s *settings) body(c *ui.Context, p palette) {
+	ui.Row(c).Grow(1).Children(func() {
+		ui.Column(c).Width(236).FillHeight().Padding(4, 10, 12, 10).Gap(14).Children(func() {
 			ui.Row(c).Gap(10).AlignItems(ui.Center).Padding(0, 8).Children(func() {
 				s.logo(c, 30)
 				ui.Column(c).Children(func() {
@@ -52,7 +61,7 @@ func (s *settings) view(c *ui.Context) {
 				s.loadWords()
 			}
 		})
-		ui.Scroll(c).Grow(1).FillHeight().Padding(26, 36, 40, 28).Children(func() {
+		ui.Scroll(c).Grow(1).FillHeight().Padding(6, 36, 40, 28).Children(func() {
 			ui.Column(c).MaxWidth(860).FillWidth().Gap(6).Children(func() {
 				switch s.page {
 				case "candidates":
@@ -158,7 +167,7 @@ func (s *settings) generalPage(c *ui.Context) {
 	}
 	changed := false
 	section(c, "中英文切换", func() {
-		row(c, "切换键", "单按一下 Shift（不和别的键、鼠标一起按）在中文和英文之间切换", func() {
+		row(c, "切换键", "单按一下 Shift 在中文和英文之间切换", func() {
 			changed = choose(c, "切换键", shiftToggles, &s.config.ShiftToggle, 200) || changed
 		})
 		row(c, "默认状态", "开机后、切到一个新应用时的状态", func() {
@@ -238,9 +247,10 @@ func (s *settings) candidatePreview(c *ui.Context) {
 	p := colors(c)
 	t := c.Theme()
 	family, size := s.config.FontFamily, float32(s.config.FontSize)
-	words := []string{"你好", "拟好", "你", "泥", "妮"}
-	ui.Column(c).Padding(28).Radius(8).Background(p.card).Border(1, p.border).AlignItems(ui.Center).Gap(10).Children(func() {
-		ui.Text(c, "预览").FontSize(12).TextColor(p.muted)
+	all := []string{"你好", "拟好", "你", "泥", "妮", "逆", "呢", "倪", "腻", "溺"}
+	words := all[:min(max(s.config.PageSize, 1), len(all))]
+	ui.Column(c).Padding(24, 28).Radius(8).Background(p.card).Border(1, p.border).AlignItems(ui.Center).Gap(10).Children(func() {
+		ui.Text(c, fmt.Sprintf("预览 · %s · %d 号字 · 每页 %d 个", family, s.config.FontSize, len(words))).FontSize(12).TextColor(p.muted)
 		box := ui.Column(c).Padding(8).Radius(8).Background(t.Background).Border(1, p.border).
 			Shadow(0, 4, 14, 0, ui.RGBA(0, 0, 0, 0.12)).Gap(4)
 		box.Children(func() {
@@ -250,6 +260,13 @@ func (s *settings) candidatePreview(c *ui.Context) {
 				list = ui.Column(c).Gap(2)
 			}
 			list.Children(func() {
+				defer func() {
+					// 和真的候选窗一样，最后是翻页箭头
+					ui.Row(c).Gap(6).Padding(3, 8).Children(func() {
+						ui.Text(c, "‹").Font(family).FontSize(size).TextColor(p.border)
+						ui.Text(c, "›").Font(family).FontSize(size).TextColor(t.Text)
+					})
+				}()
 				for i, w := range words {
 					item := ui.Row(c).Gap(4).Padding(3, 6).Radius(6).AlignItems(ui.Center)
 					label, text := p.muted, t.Text
@@ -451,7 +468,7 @@ func (s *settings) dictsPage(c *ui.Context) {
 	})
 	hint(c, "主词库是「拼音<Tab>词<Tab>词频」一行一条的 lexicon.tsv。万象拼音等 Rime 词库可以用 tools/rime2tsv.py、scripts/make-wanxiang.sh 转出来；换词库要几秒，学到的词不受影响。文件不在时用默认词库。")
 	section(c, "导入词库", func() {
-		row(c, "导入词库", "水杉输入法（msime）格式：每行「词语<Tab>拼音[<Tab>权重]」，拼音写成 ni'hao、ni hao 或 nihao 都行", func() {
+		row(c, "导入词库", "自动识别：搜狗细胞词库（.scel）、搜狗文本词库（'ni'hao 你好）、水杉、Rime、WowType 词库；只有词语的词表（如微信输入法导出的）按常用读音自动注音", func() {
 			if ui.PrimaryButton(c, "导入词库…").Clicked() {
 				s.importDictionary()
 			}
@@ -492,7 +509,7 @@ func (s *settings) phrasesPage(c *ui.Context) {
 		})
 	})
 	section(c, "批量导入、导出", func() {
-		row(c, "水杉格式文件", `每行「编码<Tab>短语[<Tab>权重]」，短语里的换行写成 \n`, func() {
+		row(c, "导入或导出", "导入自动识别：水杉（编码<Tab>短语）、Rime（短语<Tab>编码）、搜狗自定义短语和微信输入法常用语导出（编码,位置=短语）。导出为水杉格式", func() {
 			ui.Checkbox(c, &s.replacePhrases, "替换现有的")
 			if ui.Button(c, "导入…").Clicked() {
 				s.importPhrases()
@@ -514,9 +531,11 @@ func (s *settings) phrasesPage(c *ui.Context) {
 			return
 		}
 		remove := -1
-		for _, i := range shown {
+		// 最多显示 12 行，多出来的在列表里滚动
+		ui.List(c, nil, len(shown), func(k int) {
+			i := shown[k]
 			ph := s.phrases[i]
-			ui.Row(c).Padding(11, 18).Gap(14).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).Height(phraseRow).Padding(0, 18).Gap(14).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(colors(c).border).Children(func() {
 				keyCap(c, ph.Code)
 				ui.Text(c, preview(ph.Text)).Grow(1).Shrink(1).SingleLine()
 				ui.Textf(c, "%d", ph.Weight).TextColor(colors(c).muted).FontSize(12.5)
@@ -524,7 +543,7 @@ func (s *settings) phrasesPage(c *ui.Context) {
 					remove = i
 				}
 			})
-		}
+		}).MaxHeight(phraseRow * maxPhraseRows)
 		if remove >= 0 {
 			s.removePhrase(remove)
 		}
@@ -540,6 +559,21 @@ func (s *settings) learnedPage(c *ui.Context) {
 			}
 			if ui.Button(c, "全部清空…").Clicked() {
 				s.confirmClear = true
+			}
+		})
+	})
+	section(c, "添加词", func() {
+		ui.Column(c).Padding(16, 18).Gap(10).Children(func() {
+			ui.Text(c, "加进去的词马上能打出来，排在前面。拼音可以不填，按常用读音自动注音（多音字请自己填）").FontSize(12.5).TextColor(colors(c).muted).Wrap()
+			ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+				ui.TextInput(c, &s.newWord).Placeholder("词语，例如 霜频阁").Label("词语").Width(200)
+				ui.TextInput(c, &s.newPinyin).Placeholder("拼音，例如 shuang pin ge").Label("拼音").Grow(1)
+				if ui.PrimaryButton(c, "添加").Label("添加词").Clicked() {
+					s.addWord()
+				}
+			})
+			if s.wordError != "" {
+				ui.Text(c, s.wordError).FontSize(12.5).TextColor(c.Theme().Danger).Wrap()
 			}
 		})
 	})
@@ -607,6 +641,12 @@ func (s *settings) aboutPage(c *ui.Context) {
 		row(c, "水杉输入法格式", "词库、快捷短语按 msime-windows 公开的文件格式读写，没有使用它的代码和词库", nil)
 	})
 }
+
+// 快捷短语列表一行多高、最多显示几行（多出来的在列表里滚动）。
+const (
+	phraseRow     = 46
+	maxPhraseRows = 12
+)
 
 // fontNames 是系统里能用的字体（测试里换掉）。
 var fontNames = func() []string {

@@ -59,11 +59,11 @@ func defaultConfig() Config {
 		PageSize: 7, Horizontal: true, FontSize: 18, FontFamily: "Microsoft YaHei",
 		FuzzyGroups: fuzzyDefault, ShuangpinScheme: "xiaohe", TypoCorrection: true,
 		ShiftToggle: "both", PageKeys: pageKeyMinus, SelectKeys: "off", PickChar: true, NumpadDot: true,
-		FullwidthPunct: true, AutoPair: true, AutospaceLetters: true, AutospaceDigits: true,
+		FullwidthPunct: true, AutoPair: true, Autospace: true, AutospaceLetters: true, AutospaceDigits: true,
 		DefaultMode: "chinese", ModeScope: "global",
 		QuickPhrases: true, EmojiSuggest: true, DateTime: true, Calculator: true, Toolbar: true, EmailCompletion: true,
 		HotkeyEmoji: "off", HotkeyPunct: "off", HotkeyTraditional: "off", HotkeyMode: "off",
-		StatusBar: true, HintOnToggle: true, HintPosition: "bottom-right",
+		HintOnToggle: true, HintPosition: "top-left",
 	}
 }
 
@@ -125,6 +125,7 @@ type ImportReport struct {
 	Added   int      `json:"added"`
 	Skipped int      `json:"skipped"`
 	Errors  []string `json:"errors"`
+	Note    string   `json:"note,omitempty"`
 }
 
 // Frame 只取设置程序用到的字段。

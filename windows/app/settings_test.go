@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -80,6 +81,10 @@ func (f *fakeBackend) Call(r Request) (Response, error) {
 	case "clear_learned":
 		f.words = nil
 		return Response{OK: true}, nil
+	case "add_user_word":
+		w := UserWord{Word: r["word"].(string), Pinyin: "shuang pin ge", Freq: 50000}
+		f.words = append([]UserWord{w}, f.words...)
+		return Response{OK: true, UserWords: f.words, Report: &ImportReport{Added: 1, Note: "霜频阁（shuang pin ge）"}}, nil
 	}
 	return Response{OK: true}, nil
 }
@@ -139,16 +144,19 @@ func TestGeneralPageShowsStatusAndSavesWholeConfig(t *testing.T) {
 	if b.last("toggle_mode") == nil || s.status.Mode != "english" {
 		t.Fatalf("没有切到英文：%+v", s.status)
 	}
-	// 关掉状态栏后「自动隐藏」不再显示
-	if !tt.HasText("自动隐藏") {
-		t.Fatal("状态栏开着时应有「自动隐藏」")
+	// 状态栏默认关：打开后才显示「自动隐藏」
+	if tt.HasText("自动隐藏") || b.config.StatusBar {
+		t.Fatal("状态栏默认应关着")
 	}
 	if err := tt.Click("悬浮状态栏"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	if tt.HasText("自动隐藏") || b.config.StatusBar {
-		t.Fatalf("关掉状态栏后还显示子项：%+v", b.config)
+	if !tt.HasText("自动隐藏") || !b.config.StatusBar {
+		t.Fatalf("打开状态栏后应显示子项：%+v", b.config)
+	}
+	if b.config.HintPosition != "top-left" || !b.config.HintOnToggle || !b.config.Autospace || !b.config.AutoPair {
+		t.Fatalf("默认值不对：%+v", b.config)
 	}
 }
 
@@ -187,6 +195,15 @@ func TestCandidatesPagePreviewsFont(t *testing.T) {
 	}
 	if got := s.fontList(fontNames); got[0] != "Microsoft YaHei" || got[1] != "SimSun" {
 		t.Fatalf("常用中文字体应在前：%q", got)
+	}
+	// 预览按每页个数、字体实时变
+	if !tt.HasText("每页 6 个") || !tt.HasText("妮") || tt.HasText("呢") {
+		t.Fatalf("预览没按每页 6 个画：%q", tt.Texts())
+	}
+	s.config.PageSize, s.config.FontFamily = 8, "SimSun"
+	tt.Frame()
+	if !tt.HasText("呢") || !tt.HasText("预览 · SimSun") {
+		t.Fatalf("预览没跟着变：%q", tt.Texts())
 	}
 }
 
@@ -242,6 +259,42 @@ func TestPhrasesAddValidateAndRemove(t *testing.T) {
 	s.removePhrase(0)
 	if len(b.phrases) != 1 || b.phrases[0].Code != "qm" {
 		t.Fatalf("没有删掉：%+v", b.phrases)
+	}
+}
+
+func TestPhraseListShowsAtMostTwelveRows(t *testing.T) {
+	s, b := newTestSettings()
+	for i := 0; i < 30; i++ {
+		b.phrases = append(b.phrases, QuickPhrase{Code: "zz", Text: fmt.Sprintf("短语%02d", i), Weight: 1})
+	}
+	s.refresh()
+	tt := ui.NewTester(s.view, 1000, 3000)
+	if err := tt.Click("快捷短语"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !tt.HasText("短语05") || tt.HasText("短语20") {
+		t.Fatalf("列表应只显示前面几行，其余滚动：%q", tt.Texts())
+	}
+}
+
+func TestAddWordWithAndWithoutPinyin(t *testing.T) {
+	s, b := newTestSettings()
+	tt := open(t, s, "学到的词")
+	s.addWord()
+	if s.wordError == "" {
+		t.Fatal("没填词语应提示")
+	}
+	s.newWord, s.newPinyin = "霜频阁", ""
+	if err := tt.Click("添加"); err != nil {
+		t.Fatal(err)
+	}
+	req := b.last("add_user_word")
+	if req == nil || req["word"] != "霜频阁" || req["pinyin"] != "" {
+		t.Fatalf("请求不对：%v", req)
+	}
+	if s.newWord != "" || s.wordError != "" {
+		t.Fatalf("加完应清空输入：%q %q", s.newWord, s.wordError)
 	}
 }
 

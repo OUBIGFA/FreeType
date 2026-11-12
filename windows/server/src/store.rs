@@ -17,7 +17,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use freetype_protocol::{Config, Dictionary, ImportReport, QuickPhrase};
-use wowtype_core::msime::{self, LineError};
+use wowtype_core::msime::{self, DictEntry, LineError, Parsed};
+
+use crate::dictfmt;
 
 /// 报告里最多列多少条出错的行。
 const MAX_REPORTED_ERRORS: usize = 20;
@@ -52,8 +54,15 @@ fn report(added: usize, errors: &[LineError]) -> ImportReport {
         errors: errors
             .iter()
             .take(MAX_REPORTED_ERRORS)
-            .map(|e| format!("第 {} 行：{}", e.line, e.message))
+            .map(|e| {
+                if e.line == 0 {
+                    e.message.clone()
+                } else {
+                    format!("第 {} 行：{}", e.line, e.message)
+                }
+            })
             .collect(),
+        note: None,
     }
 }
 
@@ -176,9 +185,10 @@ impl Store {
         self.save_quick_phrases(&out).map_err(|e| format!("保存快捷短语失败：{e}"))
     }
 
+    /// 导入快捷短语：水杉、Rime 格式，或搜狗自定义短语、微信输入法常用语导出的 `编码,位置=短语`。
     pub fn import_quick_phrases(&self, path: &Path, replace: bool) -> Result<ImportReport, String> {
-        let text = read_text(path).map_err(|e| format!("读取文件失败：{e}"))?;
-        let parsed = msime::parse_quick_phrases(&text);
+        let bytes = fs::read(path).map_err(|e| format!("读取文件失败：{e}"))?;
+        let parsed = dictfmt::parse_quick_phrases(&bytes);
         let mut phrases = if replace {
             Vec::new()
         } else {
@@ -196,11 +206,28 @@ impl Store {
         Ok(phrases.len())
     }
 
-    /// 导入词库：校验后按水杉格式规整地写进 `dicts\<name>.txt`（同名覆盖）。
-    pub fn import_dictionary(&self, path: &Path, name: &str) -> Result<ImportReport, String> {
+    /// 导入词库（搜狗细胞词库、搜狗文本词库、水杉、Rime、只有词语的词表都认，见 [`dictfmt`]），
+    /// 按水杉格式规整地写进 `dicts\<name>.txt`（同名覆盖）。`reading` 给只有词语的行注音。
+    pub fn import_dictionary(
+        &self,
+        path: &Path,
+        name: &str,
+        reading: &dyn Fn(&[String]) -> Box<dyn dictfmt::Reading>,
+    ) -> Result<ImportReport, String> {
         let name = dictionary_name(name).ok_or("词库名称不能为空，也不能是系统保留名")?;
-        let text = read_text(path).map_err(|e| format!("读取文件失败：{e}"))?;
-        let parsed = msime::parse_dictionary(&text);
+        let bytes = fs::read(path).map_err(|e| format!("读取文件失败：{e}"))?;
+        let imported = dictfmt::parse_dictionary(&bytes, reading);
+        let mut report = self.save_dictionary(&name, imported.parsed)?;
+        let mut note = format!("识别为{}", imported.format.name());
+        if imported.annotated > 0 {
+            note.push_str(&format!("；{} 条只有词语，已按常用读音自动注音（多音字可能不准）", imported.annotated));
+        }
+        report.note = Some(note);
+        Ok(report)
+    }
+
+    /// 把条目写成 `dicts\<name>.txt`。
+    fn save_dictionary(&self, name: &str, parsed: Parsed<DictEntry>) -> Result<ImportReport, String> {
         if parsed.items.is_empty() {
             let mut message = String::from("文件里没有可用的词条");
             if let Some(first) = parsed.errors.first() {
@@ -301,7 +328,7 @@ mod tests {
         fs::create_dir_all(store.dir()).unwrap();
         let file = store.dir().join("src.txt");
         fs::write(&file, "# 人名\n韵酒\tyun jiu\t500\n坏\n").unwrap();
-        let report = store.import_dictionary(&file, "我的词库").unwrap();
+        let report = store.import_dictionary(&file, "我的词库", &|_| Box::new(crate::dictfmt::LexiconReading::default())).unwrap();
         assert_eq!((report.added, report.skipped), (1, 1));
         assert_eq!(
             store.list_dictionaries(),
@@ -310,7 +337,7 @@ mod tests {
                 entries: 1
             }]
         );
-        assert!(store.import_dictionary(&file, "CON").is_err());
+        assert!(store.import_dictionary(&file, "CON", &|_| Box::new(crate::dictfmt::LexiconReading::default())).is_err());
         store.remove_dictionary("我的词库").unwrap();
         assert!(store.list_dictionaries().is_empty());
         let _ = fs::remove_dir_all(store.dir());

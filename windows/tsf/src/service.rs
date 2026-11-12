@@ -5,7 +5,7 @@
 //! 1. `OnTestKeyDown`：把键翻成键码，带 `test` 问服务进程要不要；
 //! 2. `OnKeyDown`：真正按下（没在组字时先读光标前的几个字一起发过去），拿到应答后开一个
 //!    同步编辑会话改文档（上屏、更新编辑区、光标），再按编辑区的位置摆候选窗；
-//! 3. 单按 Shift（按下到松开之间没有别的键、没按 Ctrl/Alt/Win、没点鼠标）在 `OnKeyUp` 里切换中英文。
+//! 3. 单按 Shift（按下到松开之间没有别的键，没和 Ctrl/Alt/Win 一起按）在 `OnKeyUp` 里切换中英文。
 //!
 //! 中英文状态只由 FreeType 自己管（服务进程里），不看系统的「键盘打开 / 关闭」状态：有的应用自己
 //! 建 TSF 线程时这个状态是「关闭」，`Ctrl+空格` 也会把它关掉，以前因此会一声不响地只出字母。
@@ -118,25 +118,16 @@ impl TextService {
     }
 }
 
-fn now_ms() -> u64 {
-    unsafe { windows::Win32::System::SystemInformation::GetTickCount64() }
-}
-
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().collect()
 }
 
-/// 现在的修饰键和鼠标（单按 Shift 的判定用）。
+/// 现在 Ctrl、Alt、Win 有没有按着（单按 Shift 的判定用）。
 fn moment() -> Moment {
     unsafe {
         let down = |vk: i32| GetKeyState(vk) < 0;
-        let toggled = |vk: i32| (GetKeyState(vk) & 1) as u8;
-        // 鼠标按着也不算单按（Shift+拖动选文字）
-        let mouse_down = down(0x01) || down(0x02) || down(0x04);
         Moment {
-            now_ms: now_ms(),
-            other_modifiers: down(0x11) || down(0x12) || down(0x5b) || down(0x5c) || mouse_down,
-            mouse: toggled(0x01) | toggled(0x02) << 1 | toggled(0x04) << 2 | toggled(0x05) << 3 | toggled(0x06) << 4,
+            other_modifiers: down(0x11) || down(0x12) || down(0x5b) || down(0x5c),
         }
     }
 }

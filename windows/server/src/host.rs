@@ -21,6 +21,7 @@ use freetype_protocol::{
 use wowtype_core::msime;
 use wowtype_core::Engine;
 
+use crate::dictfmt::{self, LexiconReading};
 use crate::input::{session_config, ClientState, Env, Out};
 use crate::store::Store;
 use crate::tools::Page;
@@ -31,6 +32,8 @@ pub type ClientId = u64;
 const MAX_CANDIDATES: usize = 1000;
 /// 最近用过的 emoji 记多少个。
 const RECENT_EMOJI: usize = 32;
+/// 自己加的词的词频（学到的词里算高的，排在前面）。
+const ADDED_WORD_FREQ: f64 = 50_000.0;
 
 /// 桌面上的状态栏要显示的。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -714,6 +717,46 @@ impl Host {
         }
     }
 
+    /// 给只有词语的词条注音：读正在用的词库文件，只收要用到的词和字。
+    fn reading(&self, words: &[String]) -> Box<dyn dictfmt::Reading> {
+        let text = std::fs::read_to_string(&self.lexicon_in_use).unwrap_or_default();
+        Box::new(LexiconReading::from_tsv(&text, words))
+    }
+
+    fn add_user_word(&mut self, word: String, pinyin: String) -> Response {
+        let word = word.trim().to_string();
+        if word.is_empty() || word.contains(['\t', '\n', '\r']) {
+            return Response::error("词语不能为空，也不能有换行");
+        }
+        let pinyin = if pinyin.trim().is_empty() {
+            match dictfmt::Reading::pinyin(self.reading(&[word.clone()]).as_ref(), &word) {
+                Some(p) => p,
+                None => return Response::error(format!("认不出「{word}」的读音，请填上拼音")),
+            }
+        } else {
+            pinyin
+        };
+        let Some(pinyin) = msime::normalize_pinyin(&pinyin) else {
+            return Response::error("拼音不对：写成 ni hao、ni'hao 或 nihao");
+        };
+        let Some(engine) = self.engine.as_deref() else {
+            return Response::error("词库还在载入，请稍后再试");
+        };
+        if let Err(e) = engine.add_user_word(&pinyin, &word, ADDED_WORD_FREQ) {
+            return Response::error(format!("加不进去：{e}"));
+        }
+        self.learned_changed();
+        Response {
+            user_words: Some(self.user_words()),
+            report: Some(ImportReport {
+                added: 1,
+                note: Some(format!("{word}（{pinyin}）")),
+                ..ImportReport::default()
+            }),
+            ..Response::ok()
+        }
+    }
+
     fn user_words(&self) -> Vec<UserWord> {
         let Some(engine) = self.engine.as_deref() else {
             return Vec::new();
@@ -820,7 +863,8 @@ impl Host {
                 ..Response::ok()
             },
             Request::ImportDictionary { path, name } => {
-                let response = Self::report(self.store.import_dictionary(Path::new(&path), &name));
+                let reading = |words: &[String]| self.reading(words);
+                let response = Self::report(self.store.import_dictionary(Path::new(&path), &name, &reading));
                 self.apply_user_data();
                 response
             }
@@ -872,6 +916,7 @@ impl Host {
                     ..Response::ok()
                 }
             }
+            Request::AddUserWord { word, pinyin } => self.add_user_word(word, pinyin),
             Request::ClearLearned => {
                 let Some(engine) = self.engine.as_deref() else {
                     return Response::error("词库还在载入，请稍后再试");

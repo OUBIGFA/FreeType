@@ -44,6 +44,9 @@ type settings struct {
 	phraseQuery                 string
 
 	wordQuery    string
+	newWord      string
+	newPinyin    string
+	wordError    string
 	wordsLoaded  bool
 	confirmClear bool
 	confirmWipe  bool
@@ -151,12 +154,15 @@ func describe(r *ImportReport, what string) (string, []string) {
 	if r.Skipped > 0 {
 		msg += fmt.Sprintf("，跳过 %d 行", r.Skipped)
 	}
+	if r.Note != "" {
+		msg += "（" + r.Note + "）"
+	}
 	return msg, r.Errors
 }
 
 func (s *settings) importDictionary() {
 	s.background(func() func() {
-		path := s.openFile("导入词库（水杉格式）")
+		path := s.openFile("导入词库")
 		if path == "" {
 			return nil
 		}
@@ -228,7 +234,7 @@ func (s *settings) export(request, title, name string) {
 func (s *settings) importPhrases() {
 	replace := s.replacePhrases
 	s.background(func() func() {
-		path := s.openFile("导入快捷短语（水杉格式）")
+		path := s.openFile("导入快捷短语")
 		if path == "" {
 			return nil
 		}
@@ -338,6 +344,33 @@ func (s *settings) forgetWords(words []string) {
 			} else {
 				s.notice = fmt.Sprintf("已删除 %d 个词的记忆", len(words))
 			}
+		}
+	})
+}
+
+// addWord 自己加一个词；拼音可以空着，服务进程按常用读音注音。
+func (s *settings) addWord() {
+	word, pinyin := strings.TrimSpace(s.newWord), strings.TrimSpace(s.newPinyin)
+	if word == "" {
+		s.wordError = "请填写词语。"
+		return
+	}
+	s.background(func() func() {
+		resp, err := s.backend.Call(op("add_user_word", "word", word, "pinyin", pinyin))
+		return func() {
+			if err != nil {
+				s.wordError = err.Error()
+				return
+			}
+			s.wordError = ""
+			s.newWord, s.newPinyin = "", ""
+			s.words = resp.UserWords
+			s.wordsLoaded = true
+			added := word
+			if resp.Report != nil && resp.Report.Note != "" {
+				added = resp.Report.Note
+			}
+			s.notice = "已添加 " + added
 		}
 	})
 }

@@ -289,6 +289,7 @@ fn quick_phrases_and_dictionaries_change_candidates() {
 #[test]
 fn select_and_page_and_reset() {
     let mut host = host("select");
+    configure(&mut host, |c| c.autospace = false);
     typing(&mut host, "ni");
     let frame = host.handle(1, Request::Select { index: 0 }).frame.unwrap();
     assert_eq!(frame.commit.as_deref(), Some("你"));
@@ -397,6 +398,7 @@ fn at_sign_offers_mail_domains() {
 #[test]
 fn site_name_then_period_completes_tld() {
     let mut host = host("tld");
+    configure(&mut host, |c| c.autospace = false);
     typing(&mut host, "gmail");
     let frame = press(&mut host, '.' as u32);
     assert_eq!(frame.preedit, "gmail.");
@@ -570,6 +572,7 @@ impl Desktop for Recorder {
 #[test]
 fn status_bar_follows_focus_and_mode() {
     let mut host = host("bar");
+    configure(&mut host, |c| c.status_bar = true);
     let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     host.set_desktop(Box::new(Recorder(log.clone())));
     assert!(!log.borrow().last().unwrap().visible, "没有输入框时不显示");
@@ -601,5 +604,58 @@ fn lexicon_change_is_handed_to_the_loader() {
     let engine = super::load_engine(resources, &host.data_dir(), &path).unwrap();
     assert!(engine.input("ceshi").iter().any(|c| c.text == "测试"));
     let _ = std::fs::remove_file(file);
+    cleanup(&host);
+}
+
+#[test]
+fn import_bare_words_and_add_user_word_use_lexicon_readings() {
+    let mut host = host("readings");
+    let lexicon = host.data_dir().with_extension("readings.tsv");
+    std::fs::write(&lexicon, "shi\t示\t10\nli\t例\t10\nci\t词\t10\nyun\t韵\t10\njiu\t酒\t10\n").unwrap();
+    host.set_lexicon_in_use(lexicon.display().to_string());
+    let file = host.data_dir().with_extension("bare.txt");
+    std::fs::write(&file, "示例词\n'yun'jiu 韵酒\n").unwrap();
+    let response = host.handle(
+        1,
+        Request::ImportDictionary {
+            path: file.display().to_string(),
+            name: "词表".into(),
+        },
+    );
+    let report = response.report.unwrap();
+    assert_eq!(report.added, 2, "{:?}", report.errors);
+    assert!(report.note.unwrap().contains("自动注音"));
+    assert!(typing(&mut host, "shilici").candidates.iter().any(|c| c == "示例词"));
+    press(&mut host, keysym::ESCAPE);
+
+    let response = host.handle(
+        1,
+        Request::AddUserWord {
+            word: "韵例".into(),
+            pinyin: String::new(),
+        },
+    );
+    assert!(response.ok, "{:?}", response.error);
+    assert!(response.user_words.unwrap().iter().any(|w| w.word == "韵例" && w.pinyin == "yun li"));
+    assert_eq!(typing(&mut host, "yunli").candidates[0], "韵例");
+    press(&mut host, keysym::ESCAPE);
+    let bad = host.handle(
+        1,
+        Request::AddUserWord {
+            word: "龘".into(),
+            pinyin: String::new(),
+        },
+    );
+    assert!(!bad.ok && bad.error.unwrap().contains("请填上拼音"));
+    let typed = host.handle(
+        1,
+        Request::AddUserWord {
+            word: "龘".into(),
+            pinyin: "da".into(),
+        },
+    );
+    assert!(typed.ok);
+    let _ = std::fs::remove_file(file);
+    let _ = std::fs::remove_file(lexicon);
     cleanup(&host);
 }

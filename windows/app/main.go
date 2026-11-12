@@ -52,7 +52,7 @@ func (a *app) openSettings() {
 		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
 			Parent:  a.win,
 			Title:   title,
-			Filters: []mygo.FileFilter{{Name: "文本文件", Extensions: []string{"txt", "tsv"}}},
+			Filters: []mygo.FileFilter{{Name: "词库、短语文件", Extensions: []string{"txt", "tsv", "scel", "csv"}}},
 		})
 		if err != nil || len(paths) == 0 {
 			return ""
@@ -72,8 +72,10 @@ func (a *app) openSettings() {
 		Height:    720,
 		MinWidth:  780,
 		MinHeight: 540,
-		StateKey:  "settings",
-		Content:   ui.View(s.view),
+		// 不画系统标题栏的图标和文字，只留右上角的窗口按钮
+		TitleBarStyle: mygo.TitleBarHidden,
+		StateKey:      "settings",
+		Content:       ui.View(s.view),
 	})
 	s.apply = func(fn func()) { win.Update(fn) }
 	win.OnClosed(func() { a.win, a.settings = nil, nil })
