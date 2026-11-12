@@ -9,5 +9,9 @@
   "windows": {
     "displayName": "FreeType",
     "installerInclude": "installer.nsh"
+  },
+  "i18n": {
+    "dir": "locales",
+    "source": "zh-Hans"
   }
 }

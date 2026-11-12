@@ -4,47 +4,55 @@
 //! 先让所有会话放开引用（[`Host::detach`]），改完再接回去（[`Host::attach`]）。
 //! 引擎放在 `Box` 里，地址不会因为 `Host` 移动而变。
 //!
-//! 会话还没挪进核心的输入规则在这里补上（Linux 版在 fcitx5 外壳里）：
+//! 按键规则在 [`crate::input`]；这里管连接、中英文状态（全局或按应用）、快捷键、设置、
+//! 学到的词，以及通知桌面上的状态栏（[`Desktop`]）。
 //!
-//! - 中 / 英两种状态，切换时把编辑区的字母原样上屏；
-//! - 中文状态下的标点：没在组字时按全角规则转换；组字时先上屏光标处的候选，再上屏标点；
-//! - 组字时会话不认的键一律吃掉，不让它漏给应用；
-//! - TSF 先问「要不要这个键」（test）再真正按下：test 在会话副本上算一遍并记下结果，
-//!   紧接着的真按键直接用这份结果，不算两遍。
+//! TSF 先问「要不要这个键」（test）再真正按下：test 在会话副本上算一遍并记下结果，
+//! 紧接着的真按键直接用这份结果，不算两遍。test 说不要的键不会再真按，这时副本直接留下
+//! （交给应用的字记进了上文）。
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use freetype_protocol::{
-    modifier, Config, Frame, ImportReport, Key, Mode, Request, Response, Status, PROTOCOL_VERSION,
+    modifier, Command, Config, Frame, ImportReport, Key, Mode, Request, Response, Status, UserWord,
+    PROTOCOL_VERSION,
 };
 use wowtype_core::msime;
-use wowtype_core::session::{self, KeyAction, Session};
-use wowtype_core::symbols::{self, PunctStyle};
 use wowtype_core::Engine;
 
+use crate::input::{session_config, ClientState, Env, Out};
 use crate::store::Store;
+use crate::tools::Page;
 
 pub type ClientId = u64;
 
-/// 光标前记多少个字当上文（选了开头的词以后给剩下的部分排序用）。
-const CONTEXT_CHARS: usize = 16;
-/// 标点上屏前最多连按几次空格把句首词选完。
-const MAX_HEAD_COMMITS: usize = 32;
 /// 整句候选个数上限（和 Linux 版一样）。
 const MAX_CANDIDATES: usize = 1000;
+/// 最近用过的 emoji 记多少个。
+const RECENT_EMOJI: usize = 32;
 
-#[derive(Clone)]
-struct ClientState {
-    session: Session<'static>,
-    /// 这个输入框里最近上屏的字。
-    context: String,
+/// 桌面上的状态栏要显示的。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BarState {
+    /// 有输入框在用 FreeType，且设置里开着状态栏。
+    pub visible: bool,
+    pub autohide: bool,
+    pub mode: Mode,
+    pub chinese_punct: bool,
+    pub traditional: bool,
+}
+
+/// 服务进程的桌面部分（状态栏、打开设置程序）。测试里没有。
+pub trait Desktop {
+    fn update(&self, state: &BarState);
+    fn open_settings(&self);
 }
 
 struct Client {
     state: ClientState,
     /// test 算出来的结果：(键, 按下以后的状态, 应答)。
-    pending: Option<(Key, ClientState, Frame)>,
+    pending: Option<(Key, ClientState, Out)>,
 }
 
 pub struct Host {
@@ -54,7 +62,21 @@ pub struct Host {
     engine_error: Option<String>,
     store: Store,
     config: Config,
+    /// 全局的中英文状态（mode_scope 是 global 时用）。
     mode: Mode,
+    /// 按应用记的中英文状态（mode_scope 是 app 时用）。
+    app_modes: HashMap<String, Mode>,
+    /// 常用语（工具栏用）：(编码, 文字)。
+    phrases: Vec<(String, String)>,
+    recent_emoji: Vec<String>,
+    /// 正在用的输入框（状态栏按它显示）。
+    focused: Option<ClientId>,
+    desktop: Option<Box<dyn Desktop>>,
+    last_bar: Option<BarState>,
+    /// 正在用的主词库文件。
+    lexicon_in_use: String,
+    /// 设置里换了词库，等主循环在后台重新载入。
+    lexicon_change: Option<String>,
     /// 学到了新东西，还没存盘。
     dirty: bool,
 }
@@ -66,190 +88,32 @@ impl Drop for Host {
     }
 }
 
-fn shown_text(text: &str) -> String {
-    text.replace('\n', "⏎").replace('\t', "⇥")
-}
-
-fn utf16_len(text: &str) -> usize {
-    text.encode_utf16().count()
-}
-
-/// 可见的 ASCII 标点（字母、数字以外）。
-fn punct_char(key: &Key) -> Option<char> {
-    if key.modifiers & (modifier::CTRL | modifier::ALT | modifier::SUPER) != 0 {
-        return None;
-    }
-    let c = char::from_u32(key.keysym)?;
-    (c.is_ascii_graphic() && !c.is_ascii_alphanumeric()).then_some(c)
-}
-
-fn is_letter(key: &Key) -> bool {
-    char::from_u32(key.keysym).is_some_and(|c| c.is_ascii_alphabetic())
-}
-
-fn core_key(key: &Key, prev: Option<char>) -> session::Key {
-    session::Key {
-        keysym: key.keysym,
-        modifiers: key.modifiers,
-        release: false,
-        prev_char: prev,
-        action: KeyAction::None,
-    }
-}
-
-impl ClientState {
-    fn new(engine: Option<&'static Engine>, config: session::Config) -> Self {
-        let mut session = Session::new();
-        session.set_engine(engine);
-        session.configure(config);
-        Self {
-            session,
-            context: String::new(),
-        }
-    }
-
-    fn remember(&mut self, text: &str) {
-        self.context.push_str(text);
-        let n = self.context.chars().count();
-        if n > CONTEXT_CHARS {
-            self.context = self.context.chars().skip(n - CONTEXT_CHARS).collect();
-        }
-        self.session.set_context(&self.context.clone());
-    }
-
-    /// 核心的结果翻成应答，顺便记下上屏的字。
-    fn frame(&mut self, core: session::Frame, mode: Mode) -> Frame {
-        if let Some(text) = &core.commit {
-            self.remember(text);
-        }
-        let candidates = if core.cand_count > 0 {
-            self.session.candidates()[core.cand_start..core.cand_start + core.cand_count]
-                .iter()
-                .map(|c| shown_text(&c.text))
-                .collect()
-        } else {
-            Vec::new()
-        };
-        Frame {
-            handled: core.handled,
-            commit: core.commit,
-            preedit_cursor: utf16_len(&core.preedit[..core.preedit_cursor.min(core.preedit.len())]),
-            preedit: core.preedit,
-            candidates,
-            cursor: core.cand_cursor,
-            has_prev: core.has_prev,
-            has_next: core.has_next,
-            mode,
-            ..Frame::default()
-        }
-    }
-
-    /// 只看当前状态，不按键。
-    fn current(&mut self, handled: bool, mode: Mode) -> Frame {
-        let core = self.session.frame(handled);
-        self.frame(core, mode)
-    }
-
-    fn key(&mut self, key: &Key, mode: Mode, fullwidth: bool) -> Frame {
-        let composing = self.session.composing();
-        if mode == Mode::English {
-            return self.current(false, mode);
-        }
-        if key.modifiers & modifier::CAPS != 0 && !composing && is_letter(key) {
-            // 大写锁定：字母原样交给应用
-            return self.current(false, mode);
-        }
-        let prev = self.context.chars().last();
-        let core = self.session.key(&core_key(key, prev));
-        if core.handled || !composing {
-            if core.handled {
-                return self.frame(core, mode);
-            }
-            // 没在组字：中文标点
-            let style = if fullwidth {
-                PunctStyle::Fullwidth
-            } else {
-                PunctStyle::Halfwidth
-            };
-            if let Some(text) = punct_char(key).and_then(|c| symbols::punct(c, style, prev)) {
-                let mut frame = self.frame(core, mode);
-                frame.handled = true;
-                frame.commit = Some(text.to_string());
-                self.remember(text);
-                return frame;
-            }
-            return self.frame(core, mode);
-        }
-        // 组字时会话不认的键
-        let Some(c) = punct_char(key) else {
-            // 方向键以外的功能键、Ctrl 组合键：吃掉，不漏给应用
-            let mut frame = self.frame(core, mode);
-            frame.handled = true;
-            return frame;
-        };
-        // 标点：先把候选选完上屏，再上屏标点
-        let mut text = String::new();
-        for _ in 0..MAX_HEAD_COMMITS {
-            if !self.session.composing() {
-                break;
-            }
-            let space = self.session.key(&session::Key::press(session::keysym::SPACE));
-            if let Some(commit) = space.commit {
-                text.push_str(&commit);
-            }
-            if !space.handled {
-                break;
-            }
-        }
-        if self.session.composing() {
-            // 没有候选可选：原样上屏字母
-            if let Some(commit) = self.session.commit_input().commit {
-                text.push_str(&commit);
-            }
-        }
-        let style = if fullwidth {
-            PunctStyle::Fullwidth
-        } else {
-            PunctStyle::Halfwidth
-        };
-        let prev = text.chars().last().or(prev);
-        match symbols::punct(c, style, prev) {
-            Some(p) => text.push_str(p),
-            None => text.push(c),
-        }
-        let mut frame = self.current(true, mode);
-        self.remember(&text);
-        frame.commit = Some(text);
-        frame
-    }
-}
-
-fn session_config(config: &Config) -> session::Config {
-    session::Config {
-        page_size: config.page_size as usize,
-        calculator: config.calculator,
-        date_time: config.date_time,
-        emoji_suggest: config.emoji_suggest,
-        horizontal: config.horizontal,
-        ..session::Config::default()
-    }
-}
-
 /// 改设置里引擎的部分。
 fn configure_engine(engine: &mut Engine, config: &Config) {
     engine.set_max_candidates(MAX_CANDIDATES);
     engine.set_fuzzy(config.fuzzy);
+    engine.set_fuzzy_groups(config.fuzzy_groups);
     engine.set_shuangpin(config.shuangpin);
     if let Some(scheme) = wowtype_core::shuangpin::Scheme::from_name(&config.shuangpin_scheme) {
         engine.set_shuangpin_scheme(scheme);
     }
     engine.set_typo_correction(config.typo_correction);
     engine.set_traditional(config.traditional);
+    engine.set_rare_ext_chars(config.rare_chars);
 }
 
-/// 从安装目录的 `data` 载入引擎（慢：几秒），在后台线程里调。
-pub fn load_engine(resources: &Path, store_dir: &Path) -> Result<Engine, String> {
-    let lexicon_path = resources.join("lexicon.tsv");
+/// 主词库文件：设置里指定的（文件在的话），否则安装目录 `data` 里的。
+pub fn lexicon_path(resources: &Path, configured: &str) -> PathBuf {
+    let configured = Path::new(configured);
+    if !configured.as_os_str().is_empty() && configured.is_file() {
+        return configured.to_path_buf();
+    }
+    resources.join("lexicon.tsv")
+}
+
+/// 载入引擎（慢：几秒），在后台线程里调。`lexicon` 是设置里的词库路径（空串用默认的）。
+pub fn load_engine(resources: &Path, store_dir: &Path, lexicon: &str) -> Result<Engine, String> {
+    let lexicon_path = lexicon_path(resources, lexicon);
     let lexicon = wowtype_core::MemoryLexicon::from_tsv_path_cached(&lexicon_path)
         .map_err(|e| format!("词库载入失败（{}）：{e:#}", lexicon_path.display()))?;
     let lm: std::sync::Arc<dyn wowtype_core::LanguageModel> =
@@ -267,25 +131,71 @@ pub fn load_engine(resources: &Path, store_dir: &Path) -> Result<Engine, String>
     if store.history_path().exists() {
         let _ = engine.load_history(store.history_path());
     }
+    // 可选：微信输入法的神经语言模型（用户自己放进来，不随安装包分发）
+    let nnlm = store.dir().join("wetype").join("nlrgpt2_nnlm.bin");
+    if nnlm.exists() {
+        let _ = engine.load_nnlm(&nnlm);
+    }
     Ok(engine)
+}
+
+fn mode_hint(mode: Mode) -> String {
+    if mode == Mode::Chinese { "中" } else { "英" }.to_string()
+}
+
+/// 键是不是设置里选的快捷键（`name` 是 [`Config`] 里的写法）。
+fn is_hotkey(key: &Key, name: &str) -> bool {
+    let m = key.modifiers & (modifier::SHIFT | modifier::CTRL | modifier::ALT | modifier::SUPER);
+    let c = char::from_u32(key.keysym).map(|c| c.to_ascii_lowercase());
+    let (want_mods, want) = match name {
+        "ctrl+shift+e" => (modifier::CTRL | modifier::SHIFT, 'e'),
+        "ctrl+alt+e" => (modifier::CTRL | modifier::ALT, 'e'),
+        "ctrl+period" => (modifier::CTRL, '.'),
+        "ctrl+shift+f" => (modifier::CTRL | modifier::SHIFT, 'f'),
+        "ctrl+shift+t" => (modifier::CTRL | modifier::SHIFT, 't'),
+        "ctrl+space" => (modifier::CTRL, ' '),
+        _ => return false,
+    };
+    m == want_mods && c == Some(want)
 }
 
 impl Host {
     pub fn new(store: Store) -> Self {
         let config = store.load_config();
-        Self {
+        let recent_emoji = store.load_recent_emoji();
+        let mut host = Self {
             clients: HashMap::new(),
             engine: None,
             engine_error: None,
-            store,
+            mode: config.default_mode,
             config,
-            mode: Mode::Chinese,
+            store,
+            app_modes: HashMap::new(),
+            phrases: Vec::new(),
+            recent_emoji,
+            focused: None,
+            desktop: None,
+            last_bar: None,
+            lexicon_in_use: String::new(),
+            lexicon_change: None,
             dirty: false,
-        }
+        };
+        host.load_phrases();
+        host
+    }
+
+    pub fn set_desktop(&mut self, desktop: Box<dyn Desktop>) {
+        self.desktop = Some(desktop);
+        self.last_bar = None;
+        self.notify_bar();
     }
 
     pub fn data_dir(&self) -> PathBuf {
         self.store.dir().to_path_buf()
+    }
+
+    pub fn config(&self) -> &Config {
+        &self.config
     }
 
     /// 会话用的引擎引用。
@@ -313,6 +223,20 @@ impl Host {
         }
     }
 
+    /// 设置里换了词库：返回新路径（主循环在后台载入，载好了交给 [`Host::install_engine`]）。
+    /// 先把学到的词存盘，新引擎会从文件读回来。
+    pub fn take_lexicon_change(&mut self) -> Option<String> {
+        let change = self.lexicon_change.take()?;
+        self.dirty = true;
+        self.save_if_dirty();
+        Some(change)
+    }
+
+    /// 记下正在用的词库文件（状态里显示）。
+    pub fn set_lexicon_in_use(&mut self, path: String) {
+        self.lexicon_in_use = path;
+    }
+
     /// 后台载入好了：装上引擎，套用设置和用户数据。
     pub fn install_engine(&mut self, result: Result<Engine, String>) {
         self.detach();
@@ -328,8 +252,18 @@ impl Host {
         self.attach();
     }
 
+    fn load_phrases(&mut self) {
+        self.phrases = self
+            .store
+            .load_quick_phrases()
+            .into_iter()
+            .map(|p| (p.code, p.text))
+            .collect();
+    }
+
     /// 快捷短语、导入的词库交给引擎（不用 &mut）。
-    fn apply_user_data(&self) {
+    fn apply_user_data(&mut self) {
+        self.load_phrases();
         let Some(engine) = self.engine.as_deref() else {
             return;
         };
@@ -350,22 +284,43 @@ impl Host {
     }
 
     fn set_config(&mut self, config: Config) {
+        let old_scope = self.config.mode_scope.clone();
+        let old_lexicon = self.config.lexicon.clone();
         self.config = config.sanitized();
+        if self.config.lexicon != old_lexicon {
+            self.lexicon_change = Some(self.config.lexicon.clone());
+        }
+        if self.config.mode_scope != old_scope {
+            self.app_modes.clear();
+        }
         self.detach();
         if let Some(engine) = self.engine.as_deref_mut() {
             configure_engine(engine, &self.config);
         }
         self.attach();
         self.apply_user_data();
+        self.notify_bar();
     }
 
-    pub fn connect(&mut self, id: ClientId) {
-        let state = ClientState::new(self.engine_ref(), session_config(&self.config));
+    /// 改一项设置并存盘（快捷键、状态栏切换的）。
+    fn change_config(&mut self, change: impl FnOnce(&mut Config)) {
+        let mut config = self.config.clone();
+        change(&mut config);
+        let _ = self.store.save_config(&config.clone().sanitized());
+        self.set_config(config);
+    }
+
+    pub fn connect(&mut self, id: ClientId, app: String) {
+        let state = ClientState::new(self.engine_ref(), &self.config, app);
         self.clients.insert(id, Client { state, pending: None });
     }
 
     pub fn disconnect(&mut self, id: ClientId) {
         self.clients.remove(&id);
+        if self.focused == Some(id) {
+            self.focused = None;
+            self.notify_bar();
+        }
     }
 
     /// 存用户词库和输入习惯（有新东西时）。
@@ -384,86 +339,359 @@ impl Host {
         }
     }
 
+    fn mode_of(&self, app: &str) -> Mode {
+        if self.config.mode_scope == "app" {
+            self.app_modes.get(app).copied().unwrap_or(self.config.default_mode)
+        } else {
+            self.mode
+        }
+    }
+
+    fn set_mode(&mut self, app: &str, mode: Mode) {
+        if self.config.mode_scope == "app" {
+            self.app_modes.insert(app.to_string(), mode);
+        } else {
+            self.mode = mode;
+        }
+    }
+
+    fn app_of(&self, id: ClientId) -> String {
+        self.clients.get(&id).map(|c| c.state.app.clone()).unwrap_or_default()
+    }
+
+    /// 状态栏、托盘看的状态：正在用的输入框所在应用的。
+    fn current_mode(&self) -> Mode {
+        let app = self.focused.map(|id| self.app_of(id)).unwrap_or_default();
+        self.mode_of(&app)
+    }
+
+    fn notify_bar(&mut self) {
+        let state = BarState {
+            visible: self.config.status_bar && self.focused.is_some(),
+            autohide: self.config.status_bar_autohide,
+            mode: self.current_mode(),
+            chinese_punct: self.config.fullwidth_punct,
+            traditional: self.config.traditional,
+        };
+        if self.last_bar.as_ref() == Some(&state) {
+            return;
+        }
+        if let Some(desktop) = &self.desktop {
+            desktop.update(&state);
+        }
+        self.last_bar = Some(state);
+    }
+
     fn status(&self) -> Status {
         Status {
             protocol: PROTOCOL_VERSION,
             version: env!("CARGO_PKG_VERSION").to_string(),
             ready: self.engine.is_some(),
-            mode: self.mode,
+            mode: self.current_mode(),
+            chinese_punct: self.config.fullwidth_punct,
+            traditional: self.config.traditional,
             data_dir: self.store.dir().display().to_string(),
+            log_dir: crate::local_dir().join("logs").display().to_string(),
+            lexicon: self.lexicon_in_use.clone(),
             error: self.engine_error.clone(),
         }
     }
 
-    /// 记下有没有学到东西，补上候选窗的样式。
-    fn finish(&mut self, mut frame: Frame) -> Response {
+    /// 补上候选窗的样式和状态；记下有没有学到东西。
+    fn finish(&mut self, mode: Mode, out: Out) -> Response {
+        if let Some(emoji) = out.emoji {
+            self.remember_emoji(&emoji);
+        }
+        let mut frame = out.frame;
         if frame.commit.is_some() {
             self.dirty = true;
         }
-        frame.font_size = self.config.font_size;
-        frame.vertical = !self.config.horizontal;
+        if out.forgot {
+            self.dirty = true;
+            self.save_if_dirty();
+        }
+        self.style(&mut frame, mode);
         Response::with_frame(frame)
     }
 
-    fn with_client(&mut self, id: ClientId, f: impl FnOnce(&mut ClientState, Mode, &Config) -> Frame) -> Response {
-        let mode = self.mode;
-        let config = self.config.clone();
+    fn style(&self, frame: &mut Frame, mode: Mode) {
+        frame.mode = mode;
+        frame.chinese_punct = self.config.fullwidth_punct;
+        frame.traditional = self.config.traditional;
+        frame.font_size = self.config.font_size;
+        frame.font_family = self.config.font_family.clone();
+        frame.vertical = !self.config.horizontal;
+        frame.hint_position = self.config.hint_position.clone();
+        frame.want_before = self.config.autospace;
+    }
+
+    fn remember_emoji(&mut self, emoji: &str) {
+        self.recent_emoji.retain(|e| e != emoji);
+        self.recent_emoji.insert(0, emoji.to_string());
+        self.recent_emoji.truncate(RECENT_EMOJI);
+        let _ = self.store.save_recent_emoji(&self.recent_emoji);
+    }
+
+    /// 对一个连接的输入状态做点事。
+    fn with_client(&mut self, id: ClientId, f: impl FnOnce(&mut ClientState, &Env) -> Out) -> Response {
+        let app = self.app_of(id);
+        let mode = self.mode_of(&app);
+        let engine = self.engine_ref();
         let Some(client) = self.clients.get_mut(&id) else {
             return Response::error("这个连接没有输入会话（先发 hello，session 为 true）");
         };
         client.pending = None;
-        let frame = f(&mut client.state, mode, &config);
-        self.finish(frame)
+        let env = Env {
+            config: &self.config,
+            mode,
+            engine,
+            phrases: &self.phrases,
+            recent_emoji: &self.recent_emoji,
+        };
+        let out = f(&mut client.state, &env);
+        self.finish(mode, out)
     }
 
-    fn key(&mut self, id: ClientId, key: Key) -> Response {
-        let mode = self.mode;
-        let fullwidth = self.config.fullwidth_punct;
+    /// 只带提示的应答（快捷键、命令）。
+    fn hint_frame(&mut self, id: ClientId, hint: Option<String>) -> Response {
+        let enabled = self.config.hint_on_toggle;
+        let mut response = self.with_client(id, |state, env| state.current(true, env));
+        if !response.ok {
+            let mode = self.current_mode();
+            let mut frame = Frame {
+                handled: true,
+                ..Frame::default()
+            };
+            self.style(&mut frame, mode);
+            response = Response::with_frame(frame);
+        }
+        if let Some(frame) = response.frame.as_mut() {
+            frame.hint = hint.filter(|_| enabled);
+        }
+        self.notify_bar();
+        response
+    }
+
+    fn toggle_punct(&mut self, id: ClientId) -> Response {
+        self.change_config(|c| c.fullwidth_punct = !c.fullwidth_punct);
+        let hint = if self.config.fullwidth_punct { "中文标点" } else { "英文标点" };
+        self.hint_frame(id, Some(hint.into()))
+    }
+
+    fn toggle_traditional(&mut self, id: ClientId) -> Response {
+        self.change_config(|c| c.traditional = !c.traditional);
+        let hint = if self.config.traditional { "繁體" } else { "简体" };
+        self.hint_frame(id, Some(hint.into()))
+    }
+
+    /// 设置里选的快捷键：处理了返回应答。test 只回答「要这个键」，不动状态。
+    fn hotkey(&mut self, id: ClientId, key: &Key) -> Option<Response> {
+        let hit = |name: &str| is_hotkey(key, name);
+        let action = if hit(&self.config.hotkey_punct) {
+            1
+        } else if hit(&self.config.hotkey_traditional) {
+            2
+        } else if hit(&self.config.hotkey_emoji) {
+            3
+        } else if hit(&self.config.hotkey_mode) {
+            4
+        } else {
+            return None;
+        };
+        if key.test {
+            let mode = self.mode_of(&self.app_of(id));
+            let mut frame = Frame {
+                handled: true,
+                ..Frame::default()
+            };
+            self.style(&mut frame, mode);
+            return Some(Response::with_frame(frame));
+        }
+        Some(match action {
+            1 => self.toggle_punct(id),
+            2 => self.toggle_traditional(id),
+            3 => self.with_client(id, |state, env| state.open_tool(Page::Emoji, env)),
+            _ => self.toggle_mode(id, None),
+        })
+    }
+
+    fn key(&mut self, id: ClientId, key: Key, before: Option<String>) -> Response {
+        if let Some(response) = self.hotkey(id, &key) {
+            if let Some(client) = self.clients.get_mut(&id) {
+                client.pending = None;
+            }
+            return response;
+        }
+        let app = self.app_of(id);
+        let mode = self.mode_of(&app);
+        let engine = self.engine_ref();
         let Some(client) = self.clients.get_mut(&id) else {
             return Response::error("这个连接没有输入会话（先发 hello，session 为 true）");
+        };
+        let env = Env {
+            config: &self.config,
+            mode,
+            engine,
+            phrases: &self.phrases,
+            recent_emoji: &self.recent_emoji,
         };
         let real = Key { test: false, ..key };
         if key.test {
             let mut state = client.state.clone();
-            let frame = state.key(&real, mode, fullwidth);
-            client.pending = Some((real, state, frame.clone()));
-            return self.finish(frame);
-        }
-        let frame = match client.pending.take() {
-            Some((pending, state, frame)) if pending == real => {
-                client.state = state;
-                frame
+            if let Some(before) = &before {
+                state.set_before(before);
             }
-            _ => client.state.key(&real, mode, fullwidth),
+            let out = state.key(&real, &env);
+            let frame = out.frame.clone();
+            if frame.handled {
+                client.pending = Some((real, state, out));
+                return self.finish(mode, Out { frame, ..Out::default() });
+            }
+            // 不要的键不会再真按：交给应用的字记进上文
+            client.pending = None;
+            client.state = state;
+            return self.finish(mode, Out { frame, ..Out::default() });
+        }
+        let out = match client.pending.take() {
+            Some((pending, state, out)) if pending == real && before.is_none() => {
+                client.state = state;
+                out
+            }
+            _ => {
+                if let Some(before) = &before {
+                    client.state.set_before(before);
+                }
+                client.state.key(&real, &env)
+            }
         };
-        self.finish(frame)
+        self.finish(mode, out)
     }
 
-    fn toggle_mode(&mut self, id: ClientId) -> Response {
-        self.mode = match self.mode {
+    fn toggle_mode(&mut self, id: ClientId, shift: Option<String>) -> Response {
+        if let Some(side) = shift.as_deref() {
+            let allowed = match self.config.shift_toggle.as_str() {
+                "both" => true,
+                "left" => side == "left",
+                "right" => side == "right",
+                _ => false,
+            };
+            if !allowed {
+                let mode = self.mode_of(&self.app_of(id));
+                let mut frame = Frame::default();
+                self.style(&mut frame, mode);
+                return Response::with_frame(frame);
+            }
+        }
+        let app = match self.clients.get(&id) {
+            Some(client) => client.state.app.clone(),
+            None => self.focused.map(|f| self.app_of(f)).unwrap_or_default(),
+        };
+        let mode = match self.mode_of(&app) {
             Mode::Chinese => Mode::English,
             Mode::English => Mode::Chinese,
         };
-        let mode = self.mode;
-        let hint = Some(if mode == Mode::Chinese { "中" } else { "英" }.to_string());
-        let frame = match self.clients.get_mut(&id) {
+        self.set_mode(&app, mode);
+        let hint = self.config.hint_on_toggle.then(|| mode_hint(mode));
+        let engine = self.engine_ref();
+        let out = match self.clients.get_mut(&id) {
             Some(client) => {
                 client.pending = None;
-                let state = &mut client.state;
-                let core = if mode == Mode::English && state.session.composing() {
-                    state.session.commit_input()
-                } else {
-                    state.session.frame(true)
+                let env = Env {
+                    config: &self.config,
+                    mode,
+                    engine,
+                    phrases: &self.phrases,
+                    recent_emoji: &self.recent_emoji,
                 };
-                state.frame(core, mode)
+                let state = &mut client.state;
+                // 切到英文：打到一半的字母原样上屏，面板关掉
+                if mode == Mode::English && state.busy() {
+                    state.reset(true, &env)
+                } else {
+                    state.current(true, &env)
+                }
             }
-            None => Frame {
-                handled: true,
-                mode,
-                ..Frame::default()
+            None => Out {
+                frame: Frame {
+                    handled: true,
+                    ..Frame::default()
+                },
+                ..Out::default()
             },
         };
-        self.finish(Frame { hint, ..frame })
+        let mut response = self.finish(mode, out);
+        if let Some(frame) = response.frame.as_mut() {
+            frame.hint = hint;
+        }
+        self.notify_bar();
+        response
+    }
+
+    fn focus(&mut self, id: ClientId, active: bool, before: Option<String>) -> Response {
+        if active {
+            self.focused = Some(id);
+        } else if self.focused == Some(id) {
+            self.focused = None;
+        }
+        let hint_on_focus = self.config.hint_on_focus;
+        let mut response = self.with_client(id, |state, env| {
+            if let Some(before) = &before {
+                state.set_before(before);
+            }
+            state.current(false, env)
+        });
+        if let Some(frame) = response.frame.as_mut() {
+            if active && hint_on_focus {
+                frame.hint = Some(mode_hint(frame.mode));
+            }
+        }
+        self.notify_bar();
+        response
+    }
+
+    fn forget(&mut self, id: ClientId, index: usize) -> Response {
+        let mut forgot = None;
+        let mut word = String::new();
+        let mut response = self.with_client(id, |state, env| {
+            if state.tool.is_none() && state.raw.is_none() {
+                let shown = state.current(true, env);
+                word = shown.frame.candidates.get(index).cloned().unwrap_or_default();
+                forgot = state.session.forget(index);
+            }
+            let mut out = state.current(true, env);
+            out.forgot = forgot.is_some();
+            out
+        });
+        if let Some(frame) = response.frame.as_mut() {
+            frame.hint = Some(match &forgot {
+                Some(w) => format!("已删除「{w}」的记忆"),
+                None if word.is_empty() => "这里没有能删的词".to_string(),
+                None => format!("「{word}」不是学来的，删不掉"),
+            });
+        }
+        response
+    }
+
+    fn command(&mut self, id: ClientId, command: Command) -> Response {
+        match command {
+            Command::TogglePunct => self.toggle_punct(id),
+            Command::ToggleTraditional => self.toggle_traditional(id),
+            Command::EmojiPanel => self.with_client(id, |state, env| state.open_tool(Page::Emoji, env)),
+            Command::Toolbar => self.with_client(id, |state, env| state.open_tool(Page::Menu, env)),
+            Command::OpenSettings => {
+                if let Some(desktop) = &self.desktop {
+                    desktop.open_settings();
+                }
+                Response::ok()
+            }
+            Command::ToggleStatusBar => {
+                self.change_config(|c| c.status_bar = !c.status_bar);
+                Response {
+                    config: Some(self.config.clone()),
+                    ..Response::ok()
+                }
+            }
+        }
     }
 
     fn report(result: Result<ImportReport, String>) -> Response {
@@ -476,7 +704,7 @@ impl Host {
         }
     }
 
-    fn done(&self, result: Result<(), String>) -> Response {
+    fn done(&mut self, result: Result<(), String>) -> Response {
         match result {
             Ok(()) => {
                 self.apply_user_data();
@@ -486,41 +714,66 @@ impl Host {
         }
     }
 
-    /// 处理一条请求。
+    fn user_words(&self) -> Vec<UserWord> {
+        let Some(engine) = self.engine.as_deref() else {
+            return Vec::new();
+        };
+        let mut words: Vec<UserWord> = engine
+            .user_words()
+            .into_iter()
+            .map(|(pinyin, word, freq)| UserWord { word, pinyin, freq })
+            .collect();
+        words.sort_by(|a, b| b.freq.total_cmp(&a.freq).then_with(|| a.pinyin.cmp(&b.pinyin)));
+        words
+    }
+
+    /// 改了引擎学到的东西：各输入框的候选作废，马上存盘。
+    fn learned_changed(&mut self) {
+        for client in self.clients.values_mut() {
+            client.pending = None;
+            client.state.clear();
+        }
+        self.dirty = true;
+        self.save_if_dirty();
+    }
+
+    /// 处理一条请求；里面出了 panic 时记日志、丢掉这个连接的输入状态，不让服务进程退出。
     pub fn handle(&mut self, id: ClientId, request: Request) -> Response {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.handle_inner(id, request)));
+        match result {
+            Ok(response) => response,
+            Err(_) => {
+                crate::log(&format!("处理请求时出错（连接 {id}），已重置这个输入框"));
+                let engine = self.engine_ref();
+                if let Some(client) = self.clients.get_mut(&id) {
+                    let app = client.state.app.clone();
+                    client.pending = None;
+                    client.state = ClientState::new(engine, &self.config, app);
+                }
+                Response::error("服务进程内部出错，已重置这个输入框")
+            }
+        }
+    }
+
+    fn handle_inner(&mut self, id: ClientId, request: Request) -> Response {
         match request {
-            Request::Hello { session } => {
+            Request::Hello { session, app } => {
                 if session && !self.clients.contains_key(&id) {
-                    self.connect(id);
+                    self.connect(id, app.to_ascii_lowercase());
                 }
                 Response {
                     status: Some(self.status()),
                     ..Response::ok()
                 }
             }
-            Request::Key { key } => self.key(id, key),
-            Request::Select { index } => self.with_client(id, |state, mode, _| {
-                let core = state.session.select(index);
-                state.frame(core, mode)
-            }),
-            Request::Page { next } => self.with_client(id, |state, mode, _| {
-                let action = if next {
-                    KeyAction::NextPage
-                } else {
-                    KeyAction::PrevPage
-                };
-                let core = state.session.key(&session::Key::action(action));
-                state.frame(core, mode)
-            }),
-            Request::Reset { commit } => self.with_client(id, |state, mode, _| {
-                let core = if commit && state.session.composing() {
-                    state.session.commit_input()
-                } else {
-                    state.session.reset(false)
-                };
-                state.frame(core, mode)
-            }),
-            Request::ToggleMode => self.toggle_mode(id),
+            Request::Key { key, before } => self.key(id, key, before),
+            Request::Select { index } => self.with_client(id, |state, env| state.select(index, env)),
+            Request::Page { next } => self.with_client(id, |state, env| state.page(next, env)),
+            Request::Forget { index } => self.forget(id, index),
+            Request::Reset { commit } => self.with_client(id, |state, env| state.reset(commit, env)),
+            Request::Focus { active, before } => self.focus(id, active, before),
+            Request::ToggleMode { shift } => self.toggle_mode(id, shift),
+            Request::Command { command } => self.command(id, command),
             Request::Status => Response {
                 status: Some(self.status()),
                 ..Response::ok()
@@ -600,6 +853,40 @@ impl Host {
                     Err(e) => Response::error(format!("写入文件失败：{e}")),
                 }
             }
+            Request::ListUserWords => Response {
+                user_words: Some(self.user_words()),
+                ..Response::ok()
+            },
+            Request::ForgetWords { words } => {
+                let Some(engine) = self.engine.as_deref() else {
+                    return Response::error("词库还在载入，请稍后再试");
+                };
+                let removed = words.iter().filter(|w| engine.forget_word(w)).count();
+                self.learned_changed();
+                Response {
+                    report: Some(ImportReport {
+                        added: removed,
+                        ..ImportReport::default()
+                    }),
+                    user_words: Some(self.user_words()),
+                    ..Response::ok()
+                }
+            }
+            Request::ClearLearned => {
+                let Some(engine) = self.engine.as_deref() else {
+                    return Response::error("词库还在载入，请稍后再试");
+                };
+                engine.clear_learned();
+                self.learned_changed();
+                Response {
+                    user_words: Some(Vec::new()),
+                    ..Response::ok()
+                }
+            }
+            Request::ClearClipboard => {
+                wowtype_core::clipboard::clear();
+                Response::ok()
+            }
             Request::Shutdown => {
                 self.save_if_dirty();
                 Response::ok()
@@ -617,203 +904,4 @@ impl Host {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn host(name: &str) -> Host {
-        let dir = std::env::temp_dir().join(format!("freetype-host-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let mut host = Host::new(Store::new(dir));
-        let lexicon = wowtype_core::MemoryLexicon::from_tsv_str(
-            "ni hao\t你好\t1000\nni\t你\t900\nhao\t好\t800\nshi jie\t世界\t700\nyun\t韵\t10\n",
-        )
-        .unwrap();
-        let engine = Engine::new(
-            std::sync::Arc::new(lexicon),
-            std::sync::Arc::new(wowtype_core::BigramLm::default()),
-        );
-        host.install_engine(Ok(engine));
-        host.handle(1, Request::Hello { session: true });
-        host
-    }
-
-    fn press(host: &mut Host, sym: u32) -> Frame {
-        let key = Key {
-            keysym: sym,
-            modifiers: 0,
-            test: false,
-        };
-        host.handle(1, Request::Key { key }).frame.unwrap()
-    }
-
-    fn typing(host: &mut Host, text: &str) -> Frame {
-        let mut frame = Frame::default();
-        for c in text.chars() {
-            frame = press(host, c as u32);
-        }
-        frame
-    }
-
-    #[test]
-    fn letters_compose_and_space_commits() {
-        let mut host = host("compose");
-        let frame = typing(&mut host, "nihao");
-        assert!(frame.handled);
-        assert_eq!(frame.candidates[0], "你好");
-        assert!(!frame.preedit.is_empty());
-        let frame = press(&mut host, 0x20);
-        assert_eq!(frame.commit.as_deref(), Some("你好"));
-        assert!(frame.preedit.is_empty());
-        assert!(frame.candidates.is_empty());
-    }
-
-    #[test]
-    fn punctuation_commits_candidate_then_fullwidth_mark() {
-        let mut host = host("punct");
-        typing(&mut host, "nihao");
-        let frame = press(&mut host, ',' as u32);
-        assert!(frame.handled);
-        assert_eq!(frame.commit.as_deref(), Some("你好，"));
-        let frame = press(&mut host, '.' as u32);
-        assert_eq!(frame.commit.as_deref(), Some("。"));
-        let frame = press(&mut host, '1' as u32);
-        assert!(!frame.handled, "没在组字时数字交给应用");
-    }
-
-    #[test]
-    fn test_then_real_key_uses_one_result() {
-        let mut host = host("test-key");
-        let key = Key {
-            keysym: 'n' as u32,
-            modifiers: 0,
-            test: true,
-        };
-        let tested = host.handle(1, Request::Key { key }).frame.unwrap();
-        assert!(tested.handled);
-        let real = host
-            .handle(1, Request::Key { key: Key { test: false, ..key } })
-            .frame
-            .unwrap();
-        assert_eq!(real, tested);
-        let frame = press(&mut host, 'i' as u32);
-        assert_eq!(frame.candidates[0], "你");
-    }
-
-    #[test]
-    fn test_alone_does_not_change_state() {
-        let mut host = host("test-only");
-        let key = Key {
-            keysym: 'n' as u32,
-            modifiers: 0,
-            test: true,
-        };
-        host.handle(1, Request::Key { key });
-        let frame = host.handle(1, Request::Status);
-        assert!(frame.ok);
-        let frame = press(&mut host, 0xff1b);
-        assert!(!frame.handled, "没有真的进编辑区，Esc 交给应用");
-    }
-
-    #[test]
-    fn english_mode_passes_keys_and_toggle_commits_letters() {
-        let mut host = host("mode");
-        typing(&mut host, "nih");
-        let frame = host.handle(1, Request::ToggleMode).frame.unwrap();
-        assert_eq!(frame.mode, Mode::English);
-        assert_eq!(frame.hint.as_deref(), Some("英"));
-        assert_eq!(frame.commit.as_deref(), Some("nih"));
-        let frame = press(&mut host, 'a' as u32);
-        assert!(!frame.handled);
-        let frame = host.handle(1, Request::ToggleMode).frame.unwrap();
-        assert_eq!(frame.mode, Mode::Chinese);
-        assert!(press(&mut host, 'a' as u32).handled);
-    }
-
-    #[test]
-    fn caps_lock_letters_go_to_app() {
-        let mut host = host("caps");
-        let key = Key {
-            keysym: 'A' as u32,
-            modifiers: modifier::CAPS,
-            test: false,
-        };
-        assert!(!host.handle(1, Request::Key { key }).frame.unwrap().handled);
-    }
-
-    #[test]
-    fn composing_swallows_ctrl_combinations() {
-        let mut host = host("ctrl");
-        typing(&mut host, "ni");
-        let key = Key {
-            keysym: 'c' as u32,
-            modifiers: modifier::CTRL,
-            test: false,
-        };
-        let frame = host.handle(1, Request::Key { key }).frame.unwrap();
-        assert!(frame.handled);
-        assert!(frame.commit.is_none());
-    }
-
-    #[test]
-    fn quick_phrases_and_dictionaries_change_candidates() {
-        let mut host = host("user-data");
-        let file = host.data_dir().with_extension("qp.txt");
-        std::fs::write(&file, "yyjq\t韵酒\n").unwrap();
-        let response = host.handle(
-            1,
-            Request::ImportQuickPhrases {
-                path: file.display().to_string(),
-                replace: false,
-            },
-        );
-        assert_eq!(response.report.unwrap().added, 1);
-        assert_eq!(typing(&mut host, "yyjq").candidates[0], "韵酒");
-        press(&mut host, 0xff1b);
-
-        std::fs::write(&file, "示例词\tshi li ci\t5000\n").unwrap();
-        let response = host.handle(
-            1,
-            Request::ImportDictionary {
-                path: file.display().to_string(),
-                name: "示例".into(),
-            },
-        );
-        assert!(response.ok, "{:?}", response.error);
-        assert!(typing(&mut host, "shilici").candidates.iter().any(|c| c == "示例词"));
-
-        let mut config = host.handle(1, Request::GetConfig).config.unwrap();
-        config.quick_phrases = false;
-        host.handle(1, Request::SetConfig { config });
-        press(&mut host, 0xff1b);
-        assert!(!typing(&mut host, "yyjq").candidates.iter().any(|c| c == "韵酒"));
-        let _ = std::fs::remove_file(file);
-        let _ = std::fs::remove_dir_all(host.data_dir());
-    }
-
-    #[test]
-    fn select_and_page_and_reset() {
-        let mut host = host("select");
-        typing(&mut host, "ni");
-        let frame = host.handle(1, Request::Select { index: 0 }).frame.unwrap();
-        assert_eq!(frame.commit.as_deref(), Some("你"));
-        typing(&mut host, "hao");
-        let frame = host.handle(1, Request::Reset { commit: true }).frame.unwrap();
-        assert_eq!(frame.commit.as_deref(), Some("hao"));
-        assert!(host.handle(1, Request::Page { next: true }).ok);
-    }
-
-    #[test]
-    fn keys_before_engine_loads_still_compose() {
-        let dir = std::env::temp_dir().join(format!("freetype-host-noengine-{}", std::process::id()));
-        let mut host = Host::new(Store::new(dir));
-        host.handle(7, Request::Hello { session: true });
-        let key = Key {
-            keysym: 'n' as u32,
-            modifiers: 0,
-            test: false,
-        };
-        let frame = host.handle(7, Request::Key { key }).frame.unwrap();
-        assert!(frame.handled);
-        assert!(!host.handle(7, Request::Status).status.unwrap().ready);
-    }
-}
+mod tests;

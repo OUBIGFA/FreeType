@@ -8,6 +8,10 @@ pub mod keys;
 #[cfg(windows)]
 mod client;
 #[cfg(windows)]
+mod langbar;
+#[cfg(windows)]
+mod log;
+#[cfg(windows)]
 mod register;
 #[cfg(windows)]
 mod service;

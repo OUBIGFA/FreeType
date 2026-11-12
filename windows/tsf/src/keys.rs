@@ -73,41 +73,83 @@ pub fn char_keysym(c: char) -> Option<u32> {
 /// 单按 Shift 切换中英文：Shift 按下到松开之间没有别的键，且不超过这么久。
 pub const SHIFT_TAP_MS: u64 = 600;
 
+/// 按下 Shift 那一刻的情况。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Moment {
+    pub now_ms: u64,
+    /// Ctrl、Alt、Win 有没有按着（Ctrl+Shift 是切换键盘布局，不算单按）。
+    pub other_modifiers: bool,
+    /// 鼠标按键的计数（GetKeyState 的翻转位）：按下到松开之间点过鼠标就变了，
+    /// Shift+点击是选文字，不算单按。
+    pub mouse: u8,
+}
+
+/// 左边还是右边的 Shift。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Side {
+    Left,
+    Right,
+}
+
+impl Side {
+    pub fn name(self) -> &'static str {
+        match self {
+            Side::Left => "left",
+            Side::Right => "right",
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct ShiftTap {
-    down_at: Option<u64>,
+    down: Option<Moment>,
 }
 
 impl ShiftTap {
     /// 有键按下（`repeat`：按住不放的自动重复）。
-    pub fn key_down(&mut self, vk: u16, now_ms: u64, repeat: bool) {
+    pub fn key_down(&mut self, vk: u16, at: Moment, repeat: bool) {
         if is_shift(vk) {
-            if !repeat && self.down_at.is_none() {
-                self.down_at = Some(now_ms);
+            if repeat || self.down.is_some() {
+                return;
             }
+            self.down = (!at.other_modifiers).then_some(at);
         } else {
-            self.down_at = None;
+            self.down = None;
         }
     }
 
     /// 有键松开：是一次干净的单按 Shift 返回 true。
-    pub fn key_up(&mut self, vk: u16, now_ms: u64) -> bool {
+    pub fn key_up(&mut self, vk: u16, at: Moment) -> bool {
         if !is_shift(vk) {
             return false;
         }
-        match self.down_at.take() {
-            Some(at) => now_ms.saturating_sub(at) <= SHIFT_TAP_MS,
+        match self.down.take() {
+            Some(down) => {
+                at.now_ms.saturating_sub(down.now_ms) <= SHIFT_TAP_MS
+                    && !at.other_modifiers
+                    && at.mouse == down.mouse
+            }
             None => false,
         }
     }
 
     pub fn cancel(&mut self) {
-        self.down_at = None;
+        self.down = None;
     }
 }
 
 fn is_shift(vk: u16) -> bool {
     matches!(vk, 0x10 | 0xa0 | 0xa1)
+}
+
+/// 哪边的 Shift：虚拟键分得出就用它，分不出（0x10）看扫描码（右 Shift 是 0x36）。
+pub fn shift_side(vk: u16, scan: u32) -> Side {
+    match vk {
+        0xa1 => Side::Right,
+        0xa0 => Side::Left,
+        _ if scan == 0x36 => Side::Right,
+        _ => Side::Left,
+    }
 }
 
 #[cfg(test)]
@@ -131,18 +173,50 @@ mod tests {
         assert_eq!(m, modifier::SHIFT | modifier::CAPS);
     }
 
+    fn at(now_ms: u64) -> Moment {
+        Moment {
+            now_ms,
+            ..Moment::default()
+        }
+    }
+
     #[test]
     fn shift_tap_rules() {
         let mut tap = ShiftTap::default();
-        tap.key_down(0x10, 0, false);
-        tap.key_down(0x10, 30, true);
-        assert!(tap.key_up(0x10, 100), "干净的单按");
-        tap.key_down(0x10, 0, false);
-        tap.key_down(0x41, 10, false);
-        assert!(!tap.key_up(0x10, 50), "中间按了 A：是 Shift+A");
-        tap.key_down(0x10, 0, false);
-        assert!(!tap.key_up(0x10, 2000), "按太久不算");
-        assert!(!tap.key_up(0x10, 10), "没按下过");
+        tap.key_down(0x10, at(0), false);
+        tap.key_down(0x10, at(30), true);
+        assert!(tap.key_up(0x10, at(100)), "干净的单按");
+        tap.key_down(0x10, at(0), false);
+        tap.key_down(0x41, at(10), false);
+        assert!(!tap.key_up(0x10, at(50)), "中间按了 A：是 Shift+A");
+        tap.key_down(0x10, at(0), false);
+        assert!(!tap.key_up(0x10, at(2000)), "按太久不算");
+        assert!(!tap.key_up(0x10, at(10)), "没按下过");
+    }
+
+    #[test]
+    fn shift_with_ctrl_or_mouse_is_not_a_tap() {
+        let mut tap = ShiftTap::default();
+        let ctrl = Moment {
+            other_modifiers: true,
+            ..at(0)
+        };
+        tap.key_down(0x10, ctrl, false);
+        assert!(!tap.key_up(0x10, at(50)), "Ctrl 先按着：Ctrl+Shift");
+        tap.key_down(0x10, at(0), false);
+        assert!(!tap.key_up(0x10, Moment { other_modifiers: true, ..at(50) }), "松开前按了 Ctrl");
+        tap.key_down(0x10, at(0), false);
+        assert!(!tap.key_up(0x10, Moment { mouse: 1, ..at(80) }), "Shift+点击选文字");
+        tap.key_down(0x10, Moment { mouse: 3, ..at(0) }, false);
+        assert!(tap.key_up(0x10, Moment { mouse: 3, ..at(80) }), "鼠标没动过");
+    }
+
+    #[test]
+    fn shift_sides() {
+        assert_eq!(shift_side(0x10, 0x36), Side::Right);
+        assert_eq!(shift_side(0x10, 0x2a), Side::Left);
+        assert_eq!(shift_side(0xa1, 0), Side::Right);
+        assert_eq!(Side::Left.name(), "left");
     }
 
     #[test]

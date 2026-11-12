@@ -83,7 +83,7 @@ impl Connection {
             modifiers: 0,
             test: false,
         };
-        self.call(&Request::Key { key }).frame.unwrap()
+        self.call(&Request::Key { key, before: None }).frame.unwrap()
     }
 }
 
@@ -93,7 +93,7 @@ fn typing_through_the_pipe() {
     let mut conn = server.connect();
     let started = Instant::now();
     loop {
-        let status = conn.call(&Request::Hello { session: true }).status.unwrap();
+        let status = conn.call(&Request::Hello { session: true, app: "test.exe".into() }).status.unwrap();
         if status.ready {
             break;
         }
@@ -124,7 +124,7 @@ fn typing_through_the_pipe() {
 
     // 第二条连接是另一个输入框：互不影响
     let mut other = server.connect();
-    other.call(&Request::Hello { session: true });
+    other.call(&Request::Hello { session: true, app: "test.exe".into() });
     other.key('n');
     assert!(conn.key('h').preedit.starts_with('h'));
 

@@ -600,6 +600,20 @@ impl Engine {
         forgot
     }
 
+    /// 忘掉学到的全部东西：用户词库、选词热度和搭配（自定义词不动）。
+    pub fn clear_learned(&self) {
+        self.lexicon.clear();
+        if let Ok(mut history) = self.history.write() {
+            history.clear();
+        }
+        if let Ok(mut pairs) = self.pairs.write() {
+            *pairs = UserPairs::default();
+        }
+        if let Ok(mut last) = self.last_word.write() {
+            last.clear();
+        }
+    }
+
     pub fn user_words(&self) -> Vec<(String, String, f64)> {
         self.lexicon.words()
     }

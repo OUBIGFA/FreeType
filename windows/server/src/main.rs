@@ -18,10 +18,12 @@ fn main() {
 #[cfg(windows)]
 mod app {
     use std::path::PathBuf;
-    use std::sync::mpsc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{mpsc, Arc};
     use std::time::Duration;
 
-    use freetype_protocol::{pipe_name, Request};
+    use freetype_protocol::{pipe_name, Command, Request};
+    use freetype_server::desktop::{self, BarEvent};
     use freetype_server::host::{load_engine, Host};
     use freetype_server::pipe::{self, Message};
     use freetype_server::store::Store;
@@ -32,8 +34,29 @@ mod app {
 
     enum Event {
         Pipe(Message),
-        Loaded(Result<wowtype_core::Engine, String>),
+        /// 第几次载入（换了词库会再载入；旧的晚到了不要）、结果。
+        Loaded(u64, Result<wowtype_core::Engine, String>),
+        Bar(BarEvent),
     }
+
+    /// 在后台载入引擎。
+    fn spawn_loader(events: mpsc::Sender<Event>, generation: u64, lexicon: String) {
+        let resources = resource_dir();
+        let store_dir = data_dir();
+        std::thread::spawn(move || {
+            let started = std::time::Instant::now();
+            let result = load_engine(&resources, &store_dir, &lexicon);
+            let path = freetype_server::host::lexicon_path(&resources, &lexicon);
+            match &result {
+                Ok(_) => log(&format!("词库载入完成（{}），用时 {} ms", path.display(), started.elapsed().as_millis())),
+                Err(e) => log(e),
+            }
+            let _ = events.send(Event::Loaded(generation, result));
+        });
+    }
+
+    /// 状态栏、剪贴板这些不属于哪个输入框的请求用的连接号。
+    const DESKTOP: u64 = 0;
 
     fn report(result: Result<(), String>, what: &str) -> i32 {
         match result {
@@ -103,6 +126,8 @@ mod app {
         if !pipe::single_instance() {
             return 0;
         }
+        // panic 的原因写进日志（没有控制台，不然看不到）
+        std::panic::set_hook(Box::new(|info| log(&format!("内部错误：{info}"))));
         // 词库快照写不进安装目录时放到 %LOCALAPPDATA%\FreeType\cache
         if std::env::var_os("XDG_CACHE_HOME").is_none() {
             std::env::set_var("XDG_CACHE_HOME", local_dir().join("cache"));
@@ -115,20 +140,7 @@ mod app {
             }
         };
         let data = data_dir();
-        let resources = resource_dir();
         let (events, inbox) = mpsc::channel::<Event>();
-
-        let loader = events.clone();
-        let store_dir = data.clone();
-        std::thread::spawn(move || {
-            let started = std::time::Instant::now();
-            let result = load_engine(&resources, &store_dir);
-            match &result {
-                Ok(_) => log(&format!("词库载入完成，用时 {} ms", started.elapsed().as_millis())),
-                Err(e) => log(e),
-            }
-            let _ = loader.send(Event::Loaded(result));
-        });
 
         let (pipe_tx, pipe_rx) = mpsc::channel::<Message>();
         let forward = events.clone();
@@ -149,15 +161,59 @@ mod app {
         });
 
         let mut host = Host::new(Store::new(data));
+        let mut generation = 0u64;
+        let lexicon = host.config().lexicon.clone();
+        host.set_lexicon_in_use(freetype_server::host::lexicon_path(&resource_dir(), &lexicon).display().to_string());
+        spawn_loader(events.clone(), generation, lexicon);
+        // 状态栏和剪贴板（测试用的实例不要桌面上的东西）
+        let clipboard_on = Arc::new(AtomicBool::new(host.config().clipboard_history));
+        if instance_suffix().is_empty() {
+            let (bar_tx, bar_rx) = mpsc::channel::<BarEvent>();
+            let forward = events.clone();
+            std::thread::spawn(move || {
+                while let Ok(event) = bar_rx.recv() {
+                    if forward.send(Event::Bar(event)).is_err() {
+                        break;
+                    }
+                }
+            });
+            host.set_desktop(Box::new(desktop::start(bar_tx, clipboard_on.clone())));
+        }
         loop {
+            clipboard_on.store(host.config().clipboard_history, Ordering::Relaxed);
             match inbox.recv_timeout(SAVE_INTERVAL) {
-                Ok(Event::Loaded(result)) => host.install_engine(result),
+                Ok(Event::Bar(event)) => {
+                    let request = match event {
+                        BarEvent::ToggleMode => Request::ToggleMode { shift: None },
+                        BarEvent::TogglePunct => Request::Command { command: Command::TogglePunct },
+                        BarEvent::ToggleTraditional => Request::Command {
+                            command: Command::ToggleTraditional,
+                        },
+                        BarEvent::OpenSettings => Request::Command { command: Command::OpenSettings },
+                        BarEvent::HideBar => Request::Command {
+                            command: Command::ToggleStatusBar,
+                        },
+                    };
+                    host.handle(DESKTOP, request);
+                }
+                Ok(Event::Loaded(gen, result)) => {
+                    if gen == generation {
+                        host.install_engine(result);
+                    }
+                }
                 Ok(Event::Pipe(Message::Connected(_))) => {}
                 Ok(Event::Pipe(Message::Disconnected(id))) => host.disconnect(id),
                 Ok(Event::Pipe(Message::Request(id, request, reply))) => {
                     let shutdown = request == Request::Shutdown;
                     let response = host.handle(id, request);
                     let _ = reply.send(response);
+                    if let Some(lexicon) = host.take_lexicon_change() {
+                        generation += 1;
+                        host.set_lexicon_in_use(
+                            freetype_server::host::lexicon_path(&resource_dir(), &lexicon).display().to_string(),
+                        );
+                        spawn_loader(events.clone(), generation, lexicon);
+                    }
                     if shutdown {
                         host.save_if_dirty();
                         log("收到退出请求");

@@ -2,6 +2,8 @@
 //!
 //! 每次请求最多等 [`TIMEOUT_MS`]：服务进程没应答就断开，这个键交还给应用，不让应用卡住。
 //! 连不上时按 `HKLM\SOFTWARE\FreeType\ServerPath` 拉起服务进程（隔 [`SPAWN_INTERVAL_MS`] 才再试）。
+//! 连接断了（服务进程重启过）时马上重连、把这条请求再发一次，不让这个键漏给应用。
+//! 出错都记进 `tsf.log`（见 [`crate::log`]）。
 
 use std::ffi::c_void;
 
@@ -94,23 +96,32 @@ fn server_path() -> Option<String> {
     }
 }
 
+/// 一次请求为什么没成。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Fail {
+    /// 服务进程没在规定时间里应答（忙、卡住）。
+    Timeout,
+    /// 连接断了（服务进程退出、重启）。
+    Broken,
+}
+
 /// 等一个重叠操作完成；超时就取消。返回传输的字节数。
-fn finish(conn: &Connection, overlapped: &mut OVERLAPPED, started: windows::core::Result<()>) -> Option<u32> {
+fn finish(conn: &Connection, overlapped: &mut OVERLAPPED, started: windows::core::Result<()>) -> Result<u32, Fail> {
     unsafe {
         if let Err(e) = started {
             if e.code() != ERROR_IO_PENDING.to_hresult() {
-                return None;
+                return Err(Fail::Broken);
             }
             if WaitForSingleObject(conn.event, TIMEOUT_MS) != WAIT_OBJECT_0 {
                 let _ = CancelIoEx(conn.pipe, Some(overlapped));
                 let mut n = 0;
                 let _ = GetOverlappedResult(conn.pipe, overlapped, &mut n, true);
-                return None;
+                return Err(Fail::Timeout);
             }
         }
         let mut n = 0u32;
-        GetOverlappedResult(conn.pipe, overlapped, &mut n, false).ok()?;
-        Some(n)
+        GetOverlappedResult(conn.pipe, overlapped, &mut n, false).map_err(|_| Fail::Broken)?;
+        Ok(n)
     }
 }
 
@@ -155,7 +166,7 @@ impl Connection {
         }
     }
 
-    fn write(&self, mut data: &[u8]) -> Option<()> {
+    fn write(&self, mut data: &[u8]) -> Result<(), Fail> {
         while !data.is_empty() {
             let mut overlapped = OVERLAPPED {
                 hEvent: self.event,
@@ -164,19 +175,19 @@ impl Connection {
             let started = unsafe { WriteFile(self.pipe, Some(data), None, Some(&mut overlapped)) };
             let n = finish(self, &mut overlapped, started)?;
             if n == 0 {
-                return None;
+                return Err(Fail::Broken);
             }
             data = &data[n as usize..];
         }
-        Some(())
+        Ok(())
     }
 
-    fn read_line(&mut self) -> Option<Vec<u8>> {
+    fn read_line(&mut self) -> Result<Vec<u8>, Fail> {
         loop {
             if let Some(pos) = self.buf.iter().position(|&b| b == b'\n') {
                 let line = self.buf[..pos].to_vec();
                 self.buf.drain(..=pos);
-                return Some(line);
+                return Ok(line);
             }
             let mut chunk = [0u8; 8192];
             let mut overlapped = OVERLAPPED {
@@ -186,16 +197,16 @@ impl Connection {
             let started = unsafe { ReadFile(self.pipe, Some(&mut chunk), None, Some(&mut overlapped)) };
             let n = finish(self, &mut overlapped, started)?;
             if n == 0 {
-                return None;
+                return Err(Fail::Broken);
             }
             self.buf.extend_from_slice(&chunk[..n as usize]);
         }
     }
 
-    fn call(&mut self, request: &Request) -> Option<Response> {
+    fn call(&mut self, request: &Request) -> Result<Response, Fail> {
         self.write(&encode(request))?;
         let line = self.read_line()?;
-        decode(&line).ok()
+        decode(&line).map_err(|_| Fail::Broken)
     }
 }
 
@@ -237,19 +248,28 @@ impl Client {
             return true;
         }
         let Some(name) = self.name.clone() else {
+            crate::log::write("读不到当前用户", "管道名无法确定");
             return false;
         };
         match Connection::open(&name) {
             Ok(mut conn) => {
-                let hello = conn.call(&Request::Hello { session: true });
-                if hello.is_some_and(|r| r.ok) {
-                    self.connection = Some(conn);
-                    true
-                } else {
-                    false
+                let hello = conn.call(&Request::Hello {
+                    session: true,
+                    app: crate::log::app_name(),
+                });
+                match hello {
+                    Ok(r) if r.ok => {
+                        self.connection = Some(conn);
+                        true
+                    }
+                    other => {
+                        crate::log::write("连接服务进程失败", &format!("hello 没有成功：{other:?}"));
+                        false
+                    }
                 }
             }
-            Err(_) => {
+            Err(e) => {
+                crate::log::write("连不上服务进程", &format!("{e}；尝试启动服务进程"));
                 self.spawn_server();
                 false
             }
@@ -258,15 +278,35 @@ impl Client {
 
     /// 发一条请求。连不上、超时、出错都返回 None（调用方把键交还给应用）。
     pub fn call(&mut self, request: &Request) -> Option<Response> {
-        if !self.ensure() {
-            return None;
+        for attempt in 0..2 {
+            if !self.ensure() {
+                return None;
+            }
+            let result = self.connection.as_mut()?.call(request);
+            match result {
+                Ok(response) => {
+                    if !response.ok {
+                        crate::log::write("服务进程报错", response.error.as_deref().unwrap_or(""));
+                        return None;
+                    }
+                    return Some(response);
+                }
+                Err(fail) => {
+                    // 连接坏了：丢掉（服务进程那边的会话也随之丢掉）
+                    self.connection = None;
+                    if fail == Fail::Timeout {
+                        crate::log::write("服务进程没有应答", &format!("{TIMEOUT_MS} ms 内没有应答，这个键交给应用"));
+                        return None;
+                    }
+                    if attempt == 0 {
+                        // 服务进程可能刚重启过：重连再发一次
+                        continue;
+                    }
+                    crate::log::write("连接断开", "重连后仍然失败，这个键交给应用");
+                }
+            }
         }
-        let response = self.connection.as_mut()?.call(request);
-        if response.is_none() {
-            // 连接坏了：丢掉，下次重连（服务进程那边的会话也随之丢掉）
-            self.connection = None;
-        }
-        response.filter(|r| r.ok)
+        None
     }
 
     pub fn disconnect(&mut self) {

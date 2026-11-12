@@ -7,12 +7,16 @@ package main
 import (
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+
+	// 语言目录：安装器和 mygo 自己的控件文字按系统语言显示（简体中文、繁体中文、英文）
+	_ "github.com/oubigfa/freetype/windows/app/locales"
 )
 
 type app struct {
@@ -31,6 +35,19 @@ func (a *app) openSettings() {
 		return
 	}
 	s := newSettings(a.client, mygo.App.Version())
+	s.resources = a.resources
+	s.openFolder = func(path string) { _ = exec.Command("explorer.exe", path).Start() }
+	s.openTable = func(title string) string {
+		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
+			Parent:  a.win,
+			Title:   title,
+			Filters: []mygo.FileFilter{{Name: "词库文件", Extensions: []string{"tsv", "txt"}}},
+		})
+		if err != nil || len(paths) == 0 {
+			return ""
+		}
+		return paths[0]
+	}
 	s.openFile = func(title string) string {
 		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
 			Parent:  a.win,
@@ -51,10 +68,10 @@ func (a *app) openSettings() {
 	}
 	win := mygo.NewWindow(mygo.WindowOptions{
 		Title:     "FreeType 设置",
-		Width:     780,
-		Height:    600,
-		MinWidth:  640,
-		MinHeight: 480,
+		Width:     1000,
+		Height:    720,
+		MinWidth:  780,
+		MinHeight: 540,
 		StateKey:  "settings",
 		Content:   ui.View(s.view),
 	})
@@ -74,6 +91,16 @@ func (a *app) makeTray() {
 		{Label: "切换中文 / 英文", Click: func(*mygo.MenuItem, *mygo.Window) {
 			go a.client.Call(op("toggle_mode"))
 		}},
+		{Label: "中文 / 英文标点", Click: func(*mygo.MenuItem, *mygo.Window) {
+			go a.client.Call(command("toggle_punct"))
+		}},
+		{Label: "简体 / 繁体", Click: func(*mygo.MenuItem, *mygo.Window) {
+			go a.client.Call(command("toggle_traditional"))
+		}},
+		{Label: "显示 / 隐藏悬浮状态栏", Click: func(*mygo.MenuItem, *mygo.Window) {
+			go a.client.Call(command("toggle_status_bar"))
+		}},
+		mygo.Separator(),
 		{Label: "重新载入设置和词库", Click: func(*mygo.MenuItem, *mygo.Window) {
 			go a.client.Call(op("reload"))
 		}},

@@ -98,7 +98,7 @@ New-Item -ItemType Directory -Force -Path (Join-Path $Bin 'x86'), (Join-Path $Re
 $Icons = Join-Path $Root "_temp\build-$BuildNumber\icons"
 Invoke-Native python @('-X', 'utf8', 'windows\tools\make_icons.py', 'windows\assets\freetype-logo.png', $Icons)
 Copy-Item (Join-Path $Icons 'icon.png') (Join-Path $Resources 'icon.png')
-Copy-Item (Join-Path $Icons 'tray.png'), (Join-Path $Icons 'tray-16.png'), (Join-Path $Icons 'freetype.ico') (Join-Path $Resources 'icons')
+Copy-Item (Join-Path $Icons 'tray.png'), (Join-Path $Icons 'tray-16.png'), (Join-Path $Icons 'logo.png'), (Join-Path $Icons 'freetype.ico') (Join-Path $Resources 'icons')
 Copy-Item (Join-Path $Icons 'freetype.ico') $Bin
 Copy-Item 'target\release\FreeTypeServer.exe', 'target\release\freetype_tsf.dll' $Bin
 Copy-Item 'target\i686-pc-windows-msvc\release\freetype_tsf.dll' (Join-Path $Bin 'x86')

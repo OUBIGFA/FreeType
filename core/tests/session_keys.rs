@@ -1341,6 +1341,29 @@ fn ctrl_delete_keeps_custom_words_and_idle_is_not_ours() {
     assert!(!idle.key(&ctrl(keysym::BACKSPACE)).handled);
 }
 
+/// 鼠标长按候选忘词：按显示的序号忘，不看光标；没学过的、序号越界的返回 None。
+#[test]
+fn forget_by_shown_index() {
+    let engine = forget_engine();
+    for _ in 0..3 {
+        let mut session = with(engine);
+        type_keys(&mut session, "pin");
+        choose_text(&mut session, "频");
+    }
+    let mut session = with(engine);
+    type_keys(&mut session, "pin");
+    assert_eq!(texts(&mut session)[0], "频");
+    let at = texts(&mut session).iter().position(|t| t == "拼").unwrap();
+    assert_eq!(session.forget(at), None, "没学过的词不动");
+    assert_eq!(session.forget(99), None);
+    assert_eq!(session.forget(0).as_deref(), Some("频"));
+    assert_eq!(session.input(), "pin", "编辑区不动");
+    assert_eq!(texts(&mut session)[0], "拼");
+    let frame = session.frame(true);
+    assert!(frame.forgot, "要告诉外壳存盘");
+    assert_eq!(frame.commit, None);
+}
+
 #[test]
 fn brackets_pick_first_or_last_char() {
     // 以词定字（#83）：[ 取光标处候选的第一个字，] 取最后一个字

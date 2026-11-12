@@ -839,6 +839,31 @@ impl<'e> Session<'e> {
         self.grid_cursor = grid_cursor.min(n - 1);
     }
 
+    /// 忘掉候选框里显示的第 index 个（一页，或展开面板的一屏），和 Ctrl+Delete 一样，
+    /// 只是不看光标（鼠标长按候选时用）。忘掉了返回那个词；没学过、不是引擎的词返回 None。
+    pub fn forget(&mut self, index: usize) -> Option<String> {
+        let shown = self.frame(false);
+        self.pending = shown.commit;
+        self.forgot = shown.forgot;
+        if index >= shown.cand_count {
+            return None;
+        }
+        let global = shown.cand_start + index;
+        let word = self.candidates[global].text.clone();
+        // 光标挪到这个候选上再按 Ctrl+Delete 的规则忘
+        if self.expanded {
+            self.grid_cursor = global;
+        } else {
+            self.cursor = global;
+            self.page = global / self.page_size();
+        }
+        let carried = std::mem::take(&mut self.forgot);
+        self.forget_current();
+        let done = self.forgot;
+        self.forgot |= carried;
+        done.then_some(word)
+    }
+
     /// 以词定字的键：`[` 是 Some(false)（第一个字），`]` 是 Some(true)（最后一个字）。
     fn pick_char_key(&self, sym: u32) -> Option<bool> {
         if !self.config.pick_char || self.config.page_keys & page_keys::BRACKET != 0 {

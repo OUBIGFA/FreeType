@@ -6,6 +6,7 @@ Writes:
   freetype.ico   16-256 px, for the input method list, the executable and shortcuts
   tray.png       32 px, for the notification area (16 pt at 200% scale)
   tray-16.png    16 px
+  logo.png       128 px, shown in the settings window
   icon.png       1024 px, the app icon mygo builds the executable icon from
 """
 
@@ -37,6 +38,7 @@ def main(source, out_dir):
     )
     resized(image, 32).save(out / "tray.png")
     resized(image, 16).save(out / "tray-16.png")
+    resized(image, 128).save(out / "logo.png")
     resized(image, 1024).save(out / "icon.png")
     with Image.open(out / "freetype.ico") as ico:
         stored = sorted(ico.info.get("sizes", ()))

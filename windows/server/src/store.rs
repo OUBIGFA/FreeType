@@ -8,6 +8,9 @@
 //! | `quick_phrases.txt` | 快捷短语，水杉格式 `编码<Tab>短语<Tab>权重` |
 //! | `dicts\*.txt` | 导入的词库，水杉格式 `词语<Tab>拼音<Tab>权重` |
 //! | `user.tsv`、`history.tsv` | 引擎学到的词和输入习惯 |
+//! | `emoji-recent.txt` | 最近用过的表情，一行一个 |
+//!
+//! 悬浮状态栏的位置 `statusbar.txt` 由 [`crate::desktop`] 读写。
 
 use std::fs;
 use std::io;
@@ -110,6 +113,27 @@ impl Store {
     pub fn save_config(&self, config: &Config) -> io::Result<()> {
         let text = serde_json::to_string_pretty(config).map_err(io::Error::other)?;
         write_atomic(&self.config_path(), &(text + "\n"))
+    }
+
+    fn recent_emoji_path(&self) -> PathBuf {
+        self.dir.join("emoji-recent.txt")
+    }
+
+    /// 最近用过的 emoji，最近的在前（一行一个）。
+    pub fn load_recent_emoji(&self) -> Vec<String> {
+        read_text(&self.recent_emoji_path())
+            .map(|text| {
+                text.lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn save_recent_emoji(&self, emoji: &[String]) -> io::Result<()> {
+        write_atomic(&self.recent_emoji_path(), &(emoji.join("\n") + "\n"))
     }
 
     pub fn load_quick_phrases(&self) -> Vec<msime::QuickPhrase> {
