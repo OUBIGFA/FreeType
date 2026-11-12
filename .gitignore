@@ -21,6 +21,9 @@ onetake/
 # Reusable local inputs and generated artifacts
 .local/
 **/output/
+/windows/app/build/
+/windows/app/resources/
+/windows/app/.mygo/
 
 # Removed upstream investigations, screenshots and obsolete reports
 /analysis/

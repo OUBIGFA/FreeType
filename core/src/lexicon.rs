@@ -758,6 +758,8 @@ pub struct UserLexicon {
     codes: RwLock<Vec<(String, String)>>,
     /// 全部自定义词按文件里的顺序（编码、词，词保留转义），给工具栏的「常用语」列表用。
     phrases: RwLock<Vec<(String, String)>>,
+    /// 导入的词库（比如水杉格式的批量文件）：只读，整份替换，不写回用户词库，也不提前排。
+    extra: RwLock<Vec<(String, String, f64)>>,
     snapshot: RwLock<Arc<MemoryLexicon>>,
 }
 
@@ -772,6 +774,7 @@ impl UserLexicon {
             custom: RwLock::new(Vec::new()),
             codes: RwLock::new(Vec::new()),
             phrases: RwLock::new(Vec::new()),
+            extra: RwLock::new(Vec::new()),
             snapshot: RwLock::new(Arc::new(MemoryLexicon::new())),
         }
     }
@@ -961,9 +964,28 @@ impl UserLexicon {
         self.custom.read().map(|w| w.clone()).unwrap_or_default()
     }
 
+    /// 整份替换导入的词库：(空格分音节的拼音, 词, 频次)。拼音不合法的跳过，返回收下的条数。
+    pub fn set_extra_words(&self, words: Vec<(String, String, f64)>) -> usize {
+        let words: Vec<_> = words
+            .into_iter()
+            .filter(|(pinyin, word, _)| !word.is_empty() && parse_pinyin_keys(pinyin).is_ok())
+            .collect();
+        let count = words.len();
+        if let Ok(mut slot) = self.extra.write() {
+            *slot = words;
+        }
+        self.rebuild();
+        count
+    }
+
+    pub fn extra_words(&self) -> Vec<(String, String, f64)> {
+        self.extra.read().map(|w| w.clone()).unwrap_or_default()
+    }
+
     fn rebuild(&self) {
         let mut words = self.words.read().map(|w| w.clone()).unwrap_or_default();
         words.extend(self.custom_words());
+        words.extend(self.extra_words());
         let mut tsv = String::new();
         for (pinyin, word, freq) in &words {
             tsv.push_str(&format!("{}\t{}\t{}\n", pinyin, word, freq));

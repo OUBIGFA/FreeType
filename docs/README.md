@@ -11,5 +11,5 @@
 - [使用说明](USAGE.md) 和 [配置说明](CONFIG.md)：功能对照，不是 Windows 操作指南。
 - [上游安装说明](INSTALL.md)：保留构建信息，不在本轮执行安装。
 
-Windows 移植的当前范围、固定测试包和验证入口见 [项目说明](../README.md)。
+Windows 版的结构、按键行为、水杉格式兼容、构建与验证范围见 [Windows 版说明](WINDOWS.md)；固定测试包约定见 [项目说明](../README.md)。
 

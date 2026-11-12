@@ -1,0 +1,11 @@
+[package]
+name = "freetype-protocol"
+version = "0.0.1"
+edition = "2021"
+description = "FreeType 输入法 DLL、设置程序和服务进程之间的命名管道消息"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

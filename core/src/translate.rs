@@ -823,6 +823,7 @@ fn run_job(
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[test]
     fn local_model_end_to_end() {
         if !std::process::Command::new("python3")

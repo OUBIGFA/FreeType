@@ -1,0 +1,301 @@
+//! 用户数据目录里的文件：配置、快捷短语、导入的词库、用户词库和输入习惯。
+//!
+//! 目录固定为 `%APPDATA%\FreeType`（测试和开发用 `FREETYPE_DATA_DIR` 换掉）：
+//!
+//! | 文件 | 内容 |
+//! | --- | --- |
+//! | `config.json` | 设置 |
+//! | `quick_phrases.txt` | 快捷短语，水杉格式 `编码<Tab>短语<Tab>权重` |
+//! | `dicts\*.txt` | 导入的词库，水杉格式 `词语<Tab>拼音<Tab>权重` |
+//! | `user.tsv`、`history.tsv` | 引擎学到的词和输入习惯 |
+
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+
+use freetype_protocol::{Config, Dictionary, ImportReport, QuickPhrase};
+use wowtype_core::msime::{self, LineError};
+
+/// 报告里最多列多少条出错的行。
+const MAX_REPORTED_ERRORS: usize = 20;
+
+pub struct Store {
+    dir: PathBuf,
+}
+
+/// 词库名：去掉路径和扩展名，只留能做文件名的字符。
+pub fn dictionary_name(name: &str) -> Option<String> {
+    let name: String = name
+        .trim()
+        .chars()
+        .filter(|c| !matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') && !c.is_control())
+        .collect();
+    let name = name.trim_end_matches(['.', ' ']).to_string();
+    let reserved = {
+        let upper = name.to_ascii_uppercase();
+        let stem = upper.split('.').next().unwrap_or("");
+        matches!(stem, "CON" | "PRN" | "AUX" | "NUL")
+            || (stem.len() == 4
+                && (stem.starts_with("COM") || stem.starts_with("LPT"))
+                && stem.as_bytes()[3].is_ascii_digit())
+    };
+    (!name.is_empty() && name.chars().count() <= 64 && !reserved).then_some(name)
+}
+
+fn report(added: usize, errors: &[LineError]) -> ImportReport {
+    ImportReport {
+        added,
+        skipped: errors.len(),
+        errors: errors
+            .iter()
+            .take(MAX_REPORTED_ERRORS)
+            .map(|e| format!("第 {} 行：{}", e.line, e.message))
+            .collect(),
+    }
+}
+
+/// 写到临时文件再改名，写一半断电不会留下坏文件。
+fn write_atomic(path: &Path, data: &str) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let tmp = path.with_extension("tmp");
+    fs::write(&tmp, data)?;
+    fs::rename(&tmp, path)
+}
+
+fn read_text(path: &Path) -> io::Result<String> {
+    let bytes = fs::read(path)?;
+    String::from_utf8(bytes).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "文件不是 UTF-8 编码"))
+}
+
+impl Store {
+    pub fn new(dir: PathBuf) -> Self {
+        Self { dir }
+    }
+
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    pub fn user_dict_path(&self) -> PathBuf {
+        self.dir.join("user.tsv")
+    }
+
+    pub fn history_path(&self) -> PathBuf {
+        self.dir.join("history.tsv")
+    }
+
+    fn config_path(&self) -> PathBuf {
+        self.dir.join("config.json")
+    }
+
+    fn quick_phrase_path(&self) -> PathBuf {
+        self.dir.join("quick_phrases.txt")
+    }
+
+    fn dict_dir(&self) -> PathBuf {
+        self.dir.join("dicts")
+    }
+
+    /// 读设置；没有文件或坏了用默认值（坏文件不覆盖，等用户在设置里保存）。
+    pub fn load_config(&self) -> Config {
+        fs::read_to_string(self.config_path())
+            .ok()
+            .and_then(|text| serde_json::from_str::<Config>(&text).ok())
+            .unwrap_or_default()
+            .sanitized()
+    }
+
+    pub fn save_config(&self, config: &Config) -> io::Result<()> {
+        let text = serde_json::to_string_pretty(config).map_err(io::Error::other)?;
+        write_atomic(&self.config_path(), &(text + "\n"))
+    }
+
+    pub fn load_quick_phrases(&self) -> Vec<msime::QuickPhrase> {
+        read_text(&self.quick_phrase_path())
+            .map(|text| msime::parse_quick_phrases(&text).items)
+            .unwrap_or_default()
+    }
+
+    pub fn save_quick_phrases(&self, phrases: &[msime::QuickPhrase]) -> io::Result<()> {
+        write_atomic(&self.quick_phrase_path(), &msime::format_quick_phrases(phrases))
+    }
+
+    pub fn list_quick_phrases(&self) -> Vec<QuickPhrase> {
+        self.load_quick_phrases()
+            .into_iter()
+            .map(|p| QuickPhrase {
+                code: p.code,
+                text: p.text,
+                weight: p.weight,
+            })
+            .collect()
+    }
+
+    /// 整份替换；编码不合法或短语为空的条目报错，一条都不写。
+    pub fn set_quick_phrases(&self, phrases: &[QuickPhrase]) -> Result<(), String> {
+        let mut out = Vec::new();
+        for (i, p) in phrases.iter().enumerate() {
+            let Some(code) = msime::normalize_code(&p.code) else {
+                return Err(format!("第 {} 条：编码只能包含英文字母", i + 1));
+            };
+            if p.text.trim().is_empty() {
+                return Err(format!("第 {} 条：短语不能为空", i + 1));
+            }
+            out.push(msime::QuickPhrase {
+                code,
+                text: p.text.replace("\r\n", "\n"),
+                weight: p.weight,
+            });
+        }
+        self.save_quick_phrases(&out).map_err(|e| format!("保存快捷短语失败：{e}"))
+    }
+
+    pub fn import_quick_phrases(&self, path: &Path, replace: bool) -> Result<ImportReport, String> {
+        let text = read_text(path).map_err(|e| format!("读取文件失败：{e}"))?;
+        let parsed = msime::parse_quick_phrases(&text);
+        let mut phrases = if replace {
+            Vec::new()
+        } else {
+            self.load_quick_phrases()
+        };
+        let added = msime::merge_quick_phrases(&mut phrases, parsed.items);
+        self.save_quick_phrases(&phrases)
+            .map_err(|e| format!("保存快捷短语失败：{e}"))?;
+        Ok(report(added, &parsed.errors))
+    }
+
+    pub fn export_quick_phrases(&self, path: &Path) -> Result<usize, String> {
+        let phrases = self.load_quick_phrases();
+        fs::write(path, msime::format_quick_phrases(&phrases)).map_err(|e| format!("写入文件失败：{e}"))?;
+        Ok(phrases.len())
+    }
+
+    /// 导入词库：校验后按水杉格式规整地写进 `dicts\<name>.txt`（同名覆盖）。
+    pub fn import_dictionary(&self, path: &Path, name: &str) -> Result<ImportReport, String> {
+        let name = dictionary_name(name).ok_or("词库名称不能为空，也不能是系统保留名")?;
+        let text = read_text(path).map_err(|e| format!("读取文件失败：{e}"))?;
+        let parsed = msime::parse_dictionary(&text);
+        if parsed.items.is_empty() {
+            let mut message = String::from("文件里没有可用的词条");
+            if let Some(first) = parsed.errors.first() {
+                message.push_str(&format!("（第 {} 行：{}）", first.line, first.message));
+            }
+            return Err(message);
+        }
+        write_atomic(
+            &self.dict_dir().join(format!("{name}.txt")),
+            &msime::format_dictionary(&parsed.items),
+        )
+        .map_err(|e| format!("保存词库失败：{e}"))?;
+        Ok(report(parsed.items.len(), &parsed.errors))
+    }
+
+    pub fn remove_dictionary(&self, name: &str) -> Result<(), String> {
+        let name = dictionary_name(name).ok_or("词库名称无效")?;
+        fs::remove_file(self.dict_dir().join(format!("{name}.txt"))).map_err(|e| format!("删除词库失败：{e}"))
+    }
+
+    /// 全部导入的词库，按名字排。
+    pub fn load_dictionaries(&self) -> Vec<(String, Vec<msime::DictEntry>)> {
+        let Ok(dir) = fs::read_dir(self.dict_dir()) else {
+            return Vec::new();
+        };
+        let mut out: Vec<(String, Vec<msime::DictEntry>)> = dir
+            .filter_map(Result::ok)
+            .filter_map(|entry| {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("txt") {
+                    return None;
+                }
+                let name = path.file_stem()?.to_str()?.to_string();
+                let text = read_text(&path).ok()?;
+                Some((name, msime::parse_dictionary(&text).items))
+            })
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
+    pub fn list_dictionaries(&self) -> Vec<Dictionary> {
+        self.load_dictionaries()
+            .into_iter()
+            .map(|(name, entries)| Dictionary {
+                name,
+                entries: entries.len(),
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_store(name: &str) -> Store {
+        let dir = std::env::temp_dir().join(format!("freetype-store-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        Store::new(dir)
+    }
+
+    #[test]
+    fn config_defaults_and_round_trip() {
+        let store = temp_store("config");
+        assert_eq!(store.load_config(), Config::default());
+        let mut config = Config::default();
+        config.page_size = 9;
+        store.save_config(&config).unwrap();
+        assert_eq!(store.load_config().page_size, 9);
+        let _ = fs::remove_dir_all(store.dir());
+    }
+
+    #[test]
+    fn quick_phrase_import_merges_and_exports_msime_format() {
+        let store = temp_store("qp");
+        let file = store.dir().with_extension("in.txt");
+        fs::create_dir_all(store.dir()).unwrap();
+        fs::write(&file, "\u{feff}dz\t四川省\\n宜宾市\t20\r\nbad1\tx\r\n").unwrap();
+        let report = store.import_quick_phrases(&file, false).unwrap();
+        assert_eq!((report.added, report.skipped), (1, 1));
+        assert_eq!(report.errors, vec!["第 2 行：编码只能包含英文字母，短语不能为空"]);
+        assert_eq!(store.list_quick_phrases()[0].text, "四川省\n宜宾市");
+        let again = store.import_quick_phrases(&file, false).unwrap();
+        assert_eq!(again.added, 0, "同一条不重复加");
+        let out = store.dir().with_extension("out.txt");
+        assert_eq!(store.export_quick_phrases(&out).unwrap(), 1);
+        assert_eq!(fs::read_to_string(&out).unwrap(), "dz\t四川省\\n宜宾市\t20\n");
+        for path in [file, out] {
+            let _ = fs::remove_file(path);
+        }
+        let _ = fs::remove_dir_all(store.dir());
+    }
+
+    #[test]
+    fn dictionary_import_list_remove() {
+        let store = temp_store("dict");
+        fs::create_dir_all(store.dir()).unwrap();
+        let file = store.dir().join("src.txt");
+        fs::write(&file, "# 人名\n韵酒\tyun jiu\t500\n坏\n").unwrap();
+        let report = store.import_dictionary(&file, "我的词库").unwrap();
+        assert_eq!((report.added, report.skipped), (1, 1));
+        assert_eq!(
+            store.list_dictionaries(),
+            vec![Dictionary {
+                name: "我的词库".into(),
+                entries: 1
+            }]
+        );
+        assert!(store.import_dictionary(&file, "CON").is_err());
+        store.remove_dictionary("我的词库").unwrap();
+        assert!(store.list_dictionaries().is_empty());
+        let _ = fs::remove_dir_all(store.dir());
+    }
+
+    #[test]
+    fn dictionary_names_are_safe_file_names() {
+        assert_eq!(dictionary_name(" a/b:c. ").as_deref(), Some("abc"));
+        assert_eq!(dictionary_name("com1"), None);
+        assert_eq!(dictionary_name(""), None);
+    }
+}

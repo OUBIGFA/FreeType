@@ -9,6 +9,9 @@
 | msime-windows | `26796f3ed646e2ce75ba39bca6f1352caca9fd67` | 只参照词库、快捷短语批量文件格式 | GPL-3.0；未复制代码或数据 |
 | rime-ice | 构建时下载，修订写入安装包内 `data/SOURCE.txt` | 中文词库与英文词表 | GPL-3.0，许可证随数据分发 |
 | WowType 词级语言模型 `words.lm` | 构建时下载并校验 SHA-256 | 整句排序 | CC BY-SA 4.0（见 `data/SOURCE.txt`） |
+| Rust 依赖（含 `windows` 0.62.2、`serde`） | `Cargo.lock`，清单见 [cargo-lock.json](manifests/cargo-lock.json) | 引擎、服务进程、输入法 DLL | 各包声明的许可证，多为 MIT 或 Apache-2.0 |
+| Go 依赖 | `windows/app/go.mod`、`go.sum` | mygo 及其传递依赖、`golang.org/x/sys` | 各模块声明的许可证 |
+| NSIS 3.13 | mygo 构建时下载并校验 SHA-256，不入库 | 生成安装器 | zlib/libpng 许可 |
 
 ## 待核项
 

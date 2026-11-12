@@ -17,6 +17,7 @@ pub mod learn;
 pub mod lexicon;
 pub mod llama;
 pub mod lm;
+pub mod msime;
 pub mod nnlm;
 pub mod preedit;
 pub mod rank;

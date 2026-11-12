@@ -159,6 +159,14 @@
       "license": "同 WowType（待上游确认许可证文本）",
       "bytes": 204,
       "sha256": "2aa4e67cd46add7bdcfe92fbd494053f363c0f09c8e2e27e20a285ebd5547425"
+    },
+    {
+      "path": "windows/assets/freetype-logo.png",
+      "reason": "FreeType logo 源图；构建时生成多尺寸 ico、托盘 PNG 和应用图标",
+      "source": "仓库所有者提供（2026-11-12）",
+      "license": "FreeType 项目品牌资源，随项目使用",
+      "bytes": 37884,
+      "sha256": "edb1aa0ddfade65c407145a9b73fe4a29fb568c5b6951dc413c525fd4ac608c4"
     }
   ]
 }

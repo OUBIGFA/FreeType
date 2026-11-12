@@ -52,7 +52,7 @@ impl LocalConfig {
         } else {
             self.server.trim()
         };
-        if name.contains('/') {
+        if name.contains('/') || name.contains('\\') {
             let path = PathBuf::from(name);
             return is_executable(&path).then_some(path);
         }
@@ -63,11 +63,17 @@ impl LocalConfig {
     }
 }
 
+#[cfg(unix)]
 fn is_executable(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     path.metadata()
         .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
         .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_executable(path: &Path) -> bool {
+    path.is_file()
 }
 
 struct Running {
@@ -315,8 +321,8 @@ fn spawn_watchdog(state: Arc<(Mutex<State>, Condvar)>, generation: u64, idle: Du
         .ok();
 }
 
-/// 测试用的假 llama-server（translate 的测试也用）。
-#[cfg(test)]
+/// 测试用的假 llama-server（translate 的测试也用）；脚本靠 shebang 运行，只在 Unix 上测。
+#[cfg(all(test, unix))]
 pub(crate) mod test_support {
     use std::path::{Path, PathBuf};
 
@@ -355,7 +361,7 @@ http.server.HTTPServer(("127.0.0.1", port), H).serve_forever()
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

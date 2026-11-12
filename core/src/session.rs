@@ -1384,7 +1384,29 @@ pub fn system_time() -> Option<LocalTime> {
     })
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+pub fn system_time() -> Option<LocalTime> {
+    let mut now: libc::time_t = 0;
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    // SAFETY: time 和 localtime_s 只写我们给的两个变量
+    unsafe {
+        libc::time(&mut now);
+        if libc::localtime_s(&mut tm, &now) != 0 {
+            return None;
+        }
+    }
+    Some(LocalTime {
+        year: tm.tm_year + 1900,
+        month: (tm.tm_mon + 1).max(0) as u32,
+        day: tm.tm_mday.max(0) as u32,
+        hour: tm.tm_hour.max(0) as u32,
+        minute: tm.tm_min.max(0) as u32,
+        second: tm.tm_sec.max(0) as u32,
+        weekday: tm.tm_wday.max(0) as u32,
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
 pub fn system_time() -> Option<LocalTime> {
     None
 }

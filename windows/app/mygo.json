@@ -1,0 +1,13 @@
+{
+  "name": "FreeType",
+  "slug": "freetype",
+  "identifier": "io.github.oubigfa.freetype",
+  "version": "0.0.1",
+  "publisher": "FreeType",
+  "copyright": "FreeType contributors",
+  "out": "build",
+  "windows": {
+    "displayName": "FreeType",
+    "installerInclude": "installer.nsh"
+  }
+}

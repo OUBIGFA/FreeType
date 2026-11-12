@@ -1,0 +1,4 @@
+# Windows 版的服务进程和输入法 DLL 会被装到任意机器、载入任意应用：
+# 静态链接 C 运行库，不依赖目标机器装没装 VC 运行库。
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]
