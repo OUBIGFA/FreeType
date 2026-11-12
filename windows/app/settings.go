@@ -24,6 +24,8 @@ type settings struct {
 	openFolder func(path string)
 	// 安装目录里的资源（图标），测试里为空。
 	resources string
+	// 托盘图标开关改了（托盘程序跟着建或拿掉图标）。
+	onTray func(show bool)
 
 	page      string
 	loaded    bool
@@ -111,6 +113,9 @@ func (s *settings) refresh() {
 // saveConfig 把整份设置交给服务进程（立即生效）。
 func (s *settings) saveConfig() {
 	c := s.config
+	if s.onTray != nil {
+		s.onTray(c.TrayIcon)
+	}
 	s.background(func() func() {
 		resp, err := s.backend.Call(op("set_config", "config", c))
 		return func() {

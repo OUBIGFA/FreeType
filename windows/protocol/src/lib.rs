@@ -189,6 +189,8 @@ pub struct Config {
     pub hotkey_mode: String,
 
     // —— 状态提示 ——
+    /// 通知区域（托盘）里的 FreeType 图标。
+    pub tray_icon: bool,
     /// 桌面上的悬浮状态栏。
     pub status_bar: bool,
     /// 状态栏一会儿不用就隐藏，切换状态时再出来。
@@ -239,6 +241,7 @@ impl Default for Config {
             hotkey_punct: "off".into(),
             hotkey_traditional: "off".into(),
             hotkey_mode: "off".into(),
+            tray_icon: true,
             status_bar: false,
             status_bar_autohide: false,
             hint_on_toggle: true,

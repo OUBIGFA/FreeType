@@ -46,6 +46,7 @@ type Config struct {
 	HotkeyTraditional string `json:"hotkey_traditional"`
 	HotkeyMode        string `json:"hotkey_mode"`
 
+	TrayIcon          bool   `json:"tray_icon"`
 	StatusBar         bool   `json:"status_bar"`
 	StatusBarAutohide bool   `json:"status_bar_autohide"`
 	HintOnToggle      bool   `json:"hint_on_toggle"`
@@ -63,7 +64,7 @@ func defaultConfig() Config {
 		DefaultMode: "chinese", ModeScope: "global",
 		QuickPhrases: true, EmojiSuggest: true, DateTime: true, Calculator: true, Toolbar: true, EmailCompletion: true,
 		HotkeyEmoji: "off", HotkeyPunct: "off", HotkeyTraditional: "off", HotkeyMode: "off",
-		HintOnToggle: true, HintPosition: "top-left",
+		TrayIcon: true, HintOnToggle: true, HintPosition: "top-left",
 	}
 }
 

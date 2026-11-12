@@ -23,7 +23,10 @@ use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::MapWindowPoints;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::System::Variant::{VARIANT, VT_I4};
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, GetKeyboardState, ToUnicode};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetKeyState, GetKeyboardState, SendInput, ToUnicode, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
+    KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, VK_LEFT,
+};
 use windows::Win32::UI::TextServices::{
     ITfCompartmentMgr, ITfComposition, ITfCompositionSink, ITfCompositionSink_Impl, ITfContext,
     ITfContextComposition, ITfDocumentMgr, ITfEditSession, ITfEditSession_Impl, ITfInsertAtSelection,
@@ -353,13 +356,6 @@ fn apply_document(state: &Rc<RefCell<State>>, context: &ITfContext, frame: &Fram
                     range.Collapse(ec, TF_ANCHOR_END)?;
                     range
                 };
-                if frame.caret_back > 0 && frame.preedit.is_empty() {
-                    // 成对标点：光标停在两半中间
-                    let back = -(frame.caret_back as i32);
-                    let mut moved = 0;
-                    range.ShiftStart(ec, back, &mut moved, std::ptr::null())?;
-                    range.Collapse(ec, TF_ANCHOR_START)?;
-                }
                 set_selection(context, ec, &range)?;
             }
             if !frame.preedit.is_empty() {
@@ -456,14 +452,38 @@ fn apply(state: &Rc<RefCell<State>>, context: Option<&ITfContext>, frame: Frame,
         let (state2, context2, frame2) = (state.clone(), context.clone(), shared.clone());
         edit(context, client_id, true, move |ec| apply_document(&state2, &context2, &frame2, ec));
         show_window(state, &shared);
+        caret_back(&shared);
     } else {
         // 异步：编辑会话里改完文档再摆候选窗
         let (state2, context2, frame2) = (state.clone(), context.clone(), shared.clone());
         edit(context, client_id, false, move |ec| {
             let result = apply_document(&state2, &context2, &frame2, ec);
             show_window(&state2, &frame2);
+            caret_back(&frame2);
             result
         });
+    }
+}
+
+/// 成对标点：上屏以后让应用收到几下 ←，光标停在两半中间（和搜狗一样；
+/// 直接改选区的话，有的应用会在编辑结束时把光标挪回末尾）。
+fn caret_back(frame: &Frame) {
+    if frame.commit.is_none() || frame.caret_back == 0 || !frame.preedit.is_empty() {
+        return;
+    }
+    let key = |up: bool| INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: VK_LEFT,
+                dwFlags: if up { KEYEVENTF_KEYUP | KEYEVENTF_EXTENDEDKEY } else { KEYEVENTF_EXTENDEDKEY },
+                ..Default::default()
+            },
+        },
+    };
+    let inputs: Vec<INPUT> = (0..frame.caret_back.min(4)).flat_map(|_| [key(false), key(true)]).collect();
+    unsafe {
+        SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
     }
 }
 

@@ -6,22 +6,32 @@ import (
 
 // 设置窗口的样子照 Windows 11「设置」：浅灰底、白色圆角卡片，卡片里一行一项，
 // 左边是名字和一句说明，右边是开关或下拉框；少用的选项在打开开关后才出现在下面。
+// 开关、按钮这些强调色用品牌 logo 的粉色；左边的导航不用强调色，选中项是浅灰底。
+
+// brandPink 是 logo 的粉色。
+var brandPink = ui.Hex("#ffb3fa")
+
+// branded 是加了品牌粉色强调色的主题（跟着系统的浅色 / 深色）。
+func branded(c *ui.Context) *ui.Theme {
+	t := *c.Theme().WithAccent(brandPink)
+	return &t
+}
 
 // palette 是界面用的几种颜色，跟随系统浅色 / 深色。
 type palette struct {
-	page, card, cardHover, border, muted, subtle ui.Color
+	page, card, cardHover, border, muted, subtle, chosen ui.Color
 }
 
 func colors(c *ui.Context) palette {
 	if c.Theme().Dark {
 		return palette{
 			page: ui.Hex("#202020"), card: ui.Hex("#2b2b2b"), cardHover: ui.Hex("#323232"),
-			border: ui.Hex("#383838"), muted: ui.Hex("#a0a0a0"), subtle: ui.Hex("#262626"),
+			border: ui.Hex("#383838"), muted: ui.Hex("#a0a0a0"), subtle: ui.Hex("#262626"), chosen: ui.Hex("#2d2d2d"),
 		}
 	}
 	return palette{
 		page: ui.Hex("#f3f3f3"), card: ui.Hex("#fbfbfb"), cardHover: ui.Hex("#f6f6f6"),
-		border: ui.Hex("#e5e5e5"), muted: ui.Hex("#616161"), subtle: ui.Hex("#f9f9f9"),
+		border: ui.Hex("#e5e5e5"), muted: ui.Hex("#616161"), subtle: ui.Hex("#f9f9f9"), chosen: ui.Hex("#e8e8e8"),
 	}
 }
 
@@ -43,6 +53,22 @@ var icons = struct {
 	phrases:    stroked(`<path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12h5"/>`),
 	learned:    stroked(`<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/>`),
 	about:      stroked(`<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5h.01"/>`),
+}
+
+// navItem 是左边导航的一项：图标和名字；选中时浅灰底。点了返回 true。
+func navItem(c *ui.Context, icon *ui.SVG, name string, chosen bool) bool {
+	p := colors(c)
+	item := ui.Row(c).Height(36).Padding(0, 12).Gap(12).Radius(6).AlignItems(ui.Center).Cursor(ui.CursorPointer).Label(name)
+	if chosen {
+		item.Background(p.chosen)
+	} else if item.Hovered() {
+		item.Background(p.cardHover)
+	}
+	item.Children(func() {
+		ui.Icon(c, icon).FontSize(16).TextColor(p.muted)
+		ui.Text(c, name).SingleLine()
+	})
+	return item.Clicked()
 }
 
 // pageHeader 是页面顶上的标题和一句说明。

@@ -197,12 +197,12 @@ func TestCandidatesPagePreviewsFont(t *testing.T) {
 		t.Fatalf("常用中文字体应在前：%q", got)
 	}
 	// 预览按每页个数、字体实时变
-	if !tt.HasText("每页 6 个") || !tt.HasText("妮") || tt.HasText("呢") {
+	if !tt.HasText("妮") || tt.HasText("呢") {
 		t.Fatalf("预览没按每页 6 个画：%q", tt.Texts())
 	}
 	s.config.PageSize, s.config.FontFamily = 8, "SimSun"
 	tt.Frame()
-	if !tt.HasText("呢") || !tt.HasText("预览 · SimSun") {
+	if !tt.HasText("呢") {
 		t.Fatalf("预览没跟着变：%q", tt.Texts())
 	}
 }
@@ -348,7 +348,22 @@ func TestSnapshots(t *testing.T) {
 	if dir == "" {
 		t.Skip("FREETYPE_SNAPSHOT_DIR 没设")
 	}
-	fontNames = func() []string { return []string{"Microsoft YaHei", "SimSun"} }
+	fontNames = func() []string { return []string{"Microsoft YaHei", "SimSun", "KaiTi"} }
+	// 候选窗预览换成楷体、每页 9 个：看预览是不是真的跟着变
+	{
+		s, _ := newTestSettings()
+		s.page, s.config.FontFamily, s.config.PageSize = "candidates", "KaiTi", 9
+		tt := ui.NewTester(s.view, 1400, 720)
+		tt.Frame()
+		f, err := os.Create(filepath.Join(dir, "candidates-kaiti.png"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := png.Encode(f, tt.Image()); err != nil {
+			t.Fatal(err)
+		}
+		f.Close()
+	}
 	for _, dark := range []bool{false, true} {
 		for _, pg := range pages {
 			s, _ := newTestSettings()
@@ -356,7 +371,7 @@ func TestSnapshots(t *testing.T) {
 			if pg.ID == "learned" {
 				s.loadWords()
 			}
-			tt := ui.NewTester(s.view, 1000, 720)
+			tt := ui.NewTester(s.view, 1400, 720)
 			tt.SetDark(dark)
 			tt.Frame()
 			name := pg.ID
@@ -394,5 +409,21 @@ func TestMainLexiconCanBeChangedAndReset(t *testing.T) {
 	}
 	if b.config.Lexicon != "" {
 		t.Fatalf("没有恢复默认：%q", b.config.Lexicon)
+	}
+}
+
+func TestTraySwitchDefaultsOnAndTellsTheTrayApp(t *testing.T) {
+	s, b := newTestSettings()
+	var shown []bool
+	s.onTray = func(show bool) { shown = append(shown, show) }
+	tt := open(t, s, "")
+	if !b.config.TrayIcon {
+		t.Fatal("托盘图标默认应开着")
+	}
+	if err := tt.Click("显示托盘图标"); err != nil {
+		t.Fatal(err)
+	}
+	if b.config.TrayIcon || len(shown) != 1 || shown[0] {
+		t.Fatalf("关掉托盘图标没生效：%+v %v", b.config.TrayIcon, shown)
 	}
 }

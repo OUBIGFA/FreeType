@@ -30,6 +30,7 @@ func (s *settings) view(c *ui.Context) {
 		c.Toast(s.notice)
 		s.notice = ""
 	}
+	c.SetTheme(branded(c))
 	p := colors(c)
 	bar := c.TitleBar()
 	ui.Column(c).Fill().Background(p.page).Children(func() {
@@ -49,20 +50,20 @@ func (s *settings) body(c *ui.Context, p palette) {
 					ui.Text(c, "输入法设置").FontSize(12).TextColor(p.muted)
 				})
 			})
-			before := s.page
-			ui.Sidebar(c, &s.page, func() {
-				ui.SidebarSection(c, "", nil, func() {
-					for _, pg := range pages {
-						ui.SidebarItem(c, pg.ID, *pg.Icon, pg.Name)
+			ui.Column(c).Gap(2).Grow(1).Children(func() {
+				for _, pg := range pages {
+					if navItem(c, *pg.Icon, pg.Name, s.page == pg.ID) && s.page != pg.ID {
+						s.page = pg.ID
+						if pg.ID == "learned" && !s.wordsLoaded {
+							s.loadWords()
+						}
 					}
-				})
-			}).Grow(1).Background(p.page)
-			if s.page != before && s.page == "learned" && !s.wordsLoaded {
-				s.loadWords()
-			}
+				}
+			})
 		})
-		ui.Scroll(c).Grow(1).FillHeight().Padding(6, 36, 40, 28).Children(func() {
-			ui.Column(c).MaxWidth(860).FillWidth().Gap(6).Children(func() {
+		ui.Scroll(c).Grow(1).FillHeight().Padding(6, 32, 40, 32).Children(func() {
+			// 宽度不变，窗口宽了左右留出一样的空
+			ui.Column(c).MaxWidth(860).FillWidth().Margin(0, ui.Auto).Gap(6).Children(func() {
 				switch s.page {
 				case "candidates":
 					s.candidatesPage(c)
@@ -178,6 +179,7 @@ func (s *settings) generalPage(c *ui.Context) {
 		})
 	})
 	section(c, "状态提示", func() {
+		changed = switchRow(c, "显示托盘图标", "在任务栏通知区域显示 FreeType 图标，右键可切换状态、打开设置；关掉后可从开始菜单打开设置", &s.config.TrayIcon) || changed
 		changed = switchRow(c, "悬浮状态栏", "在桌面上显示中 / 英、标点、简繁按钮，可拖动；右键可以隐藏", &s.config.StatusBar) || changed
 		if s.config.StatusBar {
 			changed = switchLine(c, "自动隐藏", "一会儿不用就收起，状态改变时再出现", &s.config.StatusBarAutohide, true) || changed
@@ -250,7 +252,7 @@ func (s *settings) candidatePreview(c *ui.Context) {
 	all := []string{"你好", "拟好", "你", "泥", "妮", "逆", "呢", "倪", "腻", "溺"}
 	words := all[:min(max(s.config.PageSize, 1), len(all))]
 	ui.Column(c).Padding(24, 28).Radius(8).Background(p.card).Border(1, p.border).AlignItems(ui.Center).Gap(10).Children(func() {
-		ui.Text(c, fmt.Sprintf("预览 · %s · %d 号字 · 每页 %d 个", family, s.config.FontSize, len(words))).FontSize(12).TextColor(p.muted)
+		ui.Text(c, "预览").FontSize(12).TextColor(p.muted)
 		box := ui.Column(c).Padding(8).Radius(8).Background(t.Background).Border(1, p.border).
 			Shadow(0, 4, 14, 0, ui.RGBA(0, 0, 0, 0.12)).Gap(4)
 		box.Children(func() {

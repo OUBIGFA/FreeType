@@ -24,6 +24,7 @@ type app struct {
 	resources string
 	win       *mygo.Window
 	settings  *settings
+	tray      *mygo.Tray
 }
 
 func (a *app) openSettings() {
@@ -36,6 +37,7 @@ func (a *app) openSettings() {
 	}
 	s := newSettings(a.client, mygo.App.Version())
 	s.resources = a.resources
+	s.onTray = a.showTray
 	s.openFolder = func(path string) { _ = exec.Command("explorer.exe", path).Start() }
 	s.openTable = func(title string) string {
 		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
@@ -83,6 +85,16 @@ func (a *app) openSettings() {
 	s.refresh()
 }
 
+// showTray 按设置建或拿掉托盘图标（在主线程上）。
+func (a *app) showTray(show bool) {
+	if show && a.tray == nil {
+		a.makeTray()
+	} else if !show && a.tray != nil {
+		a.tray.Destroy()
+		a.tray = nil
+	}
+}
+
 func (a *app) makeTray() {
 	icon, err := os.ReadFile(filepath.Join(a.resources, "icons", "tray.png"))
 	if err != nil {
@@ -109,14 +121,17 @@ func (a *app) makeTray() {
 		mygo.Separator(),
 		{Label: "关闭托盘图标", Click: func(*mygo.MenuItem, *mygo.Window) { mygo.App.Quit() }},
 	})
-	if _, err := mygo.NewTray(mygo.TrayOptions{
+	tray, err := mygo.NewTray(mygo.TrayOptions{
 		ID:      "freetype",
 		Icon:    icon,
 		ToolTip: "FreeType 输入法",
 		Menu:    menu,
-	}); err != nil {
+	})
+	if err != nil {
 		log.Println("tray:", err)
+		return
 	}
+	a.tray = tray
 }
 
 func main() {
@@ -139,7 +154,14 @@ func main() {
 				log.Println(err)
 			}
 		}()
+		// 先放托盘图标；读到设置里关掉了再拿掉
 		a.makeTray()
+		go func() {
+			if resp, err := a.client.Call(op("get_config")); err == nil && resp.Config != nil && !resp.Config.TrayIcon {
+				show := resp.Config.TrayIcon
+				mygo.RunOnMain(func() { a.showTray(show) })
+			}
+		}()
 		if !background {
 			a.openSettings()
 		}
