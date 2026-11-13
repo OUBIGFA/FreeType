@@ -16,7 +16,7 @@
 ## 待核项
 
 - WowType 许可证文本缺失。正式对外分发前需上游补齐或书面确认。
-- `voice/src/wtlocal` 经原作者同意引入，见其 `NOTICE.md`；Windows 版本暂不启用语音。
+- `voice/src/wtlocal` 经原作者同意引入，见其 `NOTICE.md`。
 - rime-ice 为 GPL-3.0。固定测试安装器随附其许可证；正式发布前需复核整体分发许可。
 
 ## mygo 版本约定

@@ -1,7 +1,8 @@
 # Build output and dependency caches
 target/
 debug/
-dist/
+dist/*
+!dist/FreeType_logo.png
 node_modules/
 .cargo-home/
 fcitx5-addon/build/

@@ -167,6 +167,78 @@
       "license": "FreeType 项目品牌资源，随项目使用",
       "bytes": 37884,
       "sha256": "edb1aa0ddfade65c407145a9b73fe4a29fb568c5b6951dc413c525fd4ac608c4"
+    },
+    {
+      "path": "dist/FreeType_logo.png",
+      "reason": "README 品牌图；与 windows/assets/freetype-logo.png 使用相同图像",
+      "source": "仓库所有者提供（2026-11-12）",
+      "license": "FreeType 项目品牌资源，随项目使用",
+      "bytes": 37884,
+      "sha256": "edb1aa0ddfade65c407145a9b73fe4a29fb568c5b6951dc413c525fd4ac608c4"
+    },
+    {
+      "path": "windows/assets/readme/settings-general-installed.png",
+      "reason": "README 设置页实机截图；来自本机安装版 FreeType",
+      "source": "本机安装版 FreeType（2026-11-13）",
+      "license": "FreeType 项目文档截图，随项目使用",
+      "bytes": 87631,
+      "sha256": "ea331f7c0f9fc78640f80ce648fe4e25dce8fc9d8eef8560d9db9f3987180e38"
+    },
+    {
+      "path": "windows/assets/readme/settings-typing-installed.png",
+      "reason": "README 设置页实机截图；来自本机安装版 FreeType",
+      "source": "本机安装版 FreeType（2026-11-13）",
+      "license": "FreeType 项目文档截图，随项目使用",
+      "bytes": 86415,
+      "sha256": "42d4b77f92675ae7ec8e6b1d62157766ae60ba0f7186c17461e43488fc0bb07a"
+    },
+    {
+      "path": "windows/assets/readme/settings-features-installed.png",
+      "reason": "README 设置页实机截图；来自本机安装版 FreeType",
+      "source": "本机安装版 FreeType（2026-11-13）",
+      "license": "FreeType 项目文档截图，随项目使用",
+      "bytes": 66267,
+      "sha256": "267df50545e55333470a4aaacb74f374e44bd8ba9568e27417f0e88cc3f5d598"
+    },
+    {
+      "path": "windows/assets/readme/settings-dicts-installed.png",
+      "reason": "README 设置页实机截图；来自本机安装版 FreeType",
+      "source": "本机安装版 FreeType（2026-11-13）",
+      "license": "FreeType 项目文档截图，随项目使用",
+      "bytes": 50653,
+      "sha256": "4d467fdf082876955ba70b3467585cd832934de5a83c04d9fc8dcb13128af1d5"
+    },
+    {
+      "path": "windows/assets/readme/candidate-pink.png",
+      "reason": "README 候选窗样式预览；来自 FreeType 生产界面渲染",
+      "source": "FreeType Windows 界面（2026-11-13）",
+      "license": "FreeType 项目文档截图，随项目使用",
+      "bytes": 5035,
+      "sha256": "c4aa9fa4abaa289346300acef7075979f50b720e5ff61b81b826e50db4c906a4"
+    },
+    {
+      "path": "windows/assets/readme/candidate-blue.png",
+      "reason": "README 候选窗样式预览；来自 FreeType 生产界面渲染",
+      "source": "FreeType Windows 界面（2026-11-13）",
+      "license": "FreeType 项目文档截图，随项目使用",
+      "bytes": 5118,
+      "sha256": "2ceed6c9b26bf816cda05073ed1a839fa963e4ec847b49720c89a8f86a88e6f5"
+    },
+    {
+      "path": "windows/assets/readme/candidate-green.png",
+      "reason": "README 候选窗样式预览；来自 FreeType 生产界面渲染",
+      "source": "FreeType Windows 界面（2026-11-13）",
+      "license": "FreeType 项目文档截图，随项目使用",
+      "bytes": 5100,
+      "sha256": "8323fdd3bba4e5112b0f349499eada9a65ad11b21a263239f0c623bf50534cb6"
+    },
+    {
+      "path": "windows/assets/readme/candidate-sogou.png",
+      "reason": "README 候选窗样式预览；来自 FreeType 生产界面渲染",
+      "source": "FreeType Windows 界面（2026-11-13）",
+      "license": "FreeType 项目文档截图，随项目使用",
+      "bytes": 4764,
+      "sha256": "56d96243393fbdafe637629f34a43fa55e574892f450fd314db2ea48648c513c"
     }
   ]
 }
