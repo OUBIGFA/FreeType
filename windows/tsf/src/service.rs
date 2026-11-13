@@ -5,7 +5,8 @@
 //! 1. `OnTestKeyDown`：把键翻成键码，带 `test` 问服务进程要不要；
 //! 2. `OnKeyDown`：真正按下（没在组字时先读光标前的几个字一起发过去），拿到应答后开一个
 //!    同步编辑会话改文档（上屏、更新编辑区、光标），再按编辑区的位置摆候选窗；
-//! 3. 单按 Shift（按下到松开之间没有别的键，没和 Ctrl/Alt/Win 一起按）在 `OnKeyUp` 里切换中英文。
+//! 3. 单按 Shift（按下到松开之间没有别的键，没和 Ctrl/Alt/Win 一起按）切换中英文：系统第一次
+//!    报这次松开时就切换（`OnTestKeyUp` 或 `OnKeyUp`，见 [`key_released`]），不吃这个键。
 //!
 //! 中英文状态只由 FreeType 自己管（服务进程里），不看系统的「键盘打开 / 关闭」状态：有的应用自己
 //! 建 TSF 线程时这个状态是「关闭」，`Ctrl+空格` 也会把它关掉，以前因此会一声不响地只出字母。
@@ -21,11 +22,12 @@ use freetype_protocol::{Command, Frame, Key, Mode, Request};
 use windows::core::{implement, IUnknownImpl, Interface, Ref, Result, BOOL, GUID};
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::MapWindowPoints;
+use windows::Win32::System::SystemInformation::GetTickCount64;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::System::Variant::{VARIANT, VT_I4};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, GetKeyboardState, SendInput, ToUnicode, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
-    KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, VK_LEFT,
+    GetAsyncKeyState, GetKeyState, GetKeyboardState, SendInput, ToUnicode, INPUT, INPUT_0, INPUT_KEYBOARD,
+    KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, VK_LEFT,
 };
 use windows::Win32::UI::TextServices::{
     ITfCompartmentMgr, ITfComposition, ITfCompositionSink, ITfCompositionSink_Impl, ITfContext,
@@ -39,12 +41,12 @@ use windows::Win32::UI::TextServices::{
     TF_IAS_QUERYONLY, TF_SELECTION, TF_SELECTIONSTYLE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, DestroyMenu, GetGUIThreadInfo, GetWindowRect, SetForegroundWindow,
-    TrackPopupMenu, GUITHREADINFO, MF_SEPARATOR, MF_STRING, TPM_RETURNCMD, TPM_RIGHTBUTTON,
+    AppendMenuW, CreatePopupMenu, DestroyMenu, GetGUIThreadInfo, GetMessageExtraInfo, GetWindowRect,
+    SetForegroundWindow, TrackPopupMenu, GUITHREADINFO, MF_SEPARATOR, MF_STRING, TPM_RETURNCMD, TPM_RIGHTBUTTON,
 };
 
 use crate::client::Client;
-use crate::keys::{self, Moment, ShiftTap, Side};
+use crate::keys::{self, Moment, ShiftTap};
 use crate::langbar::{self, ButtonClick, ButtonHandle};
 use crate::ui::{self, CandidateWindow, Click};
 use crate::DllRef;
@@ -65,8 +67,8 @@ struct State {
     context: Option<ITfContext>,
     client: Client,
     shift: ShiftTap,
-    /// OnTestKeyUp 认出来的单按 Shift，等 OnKeyUp 去切换。
-    shift_tapped: Option<Side>,
+    /// 成对标点上屏后还没挪的光标（等用户松开 Shift）。
+    caret_move: Option<keys::CaretMove>,
     window: Option<CandidateWindow>,
     caret: Option<RECT>,
     /// 上一次拿到的光标位置（应用一时给不出位置时用）。
@@ -106,7 +108,7 @@ impl TextService {
                 context: None,
                 client: Client::new(),
                 shift: ShiftTap::default(),
-                shift_tapped: None,
+                caret_move: None,
                 window: None,
                 caret: None,
                 last_caret: None,
@@ -126,9 +128,13 @@ fn wide(text: &str) -> Vec<u16> {
 }
 
 /// 现在 Ctrl、Alt、Win 有没有按着（单按 Shift 的判定用）。
+///
+/// 看此刻键盘上的状态（GetAsyncKeyState），不看「处理到这条按键消息时」的状态（GetKeyState）：
+/// 有的程序（Word）不在取消息的时候把按键报给输入法，那时消息里记的还是上一个键的状态，
+/// 刚按过 Ctrl+S 再单按 Shift 就会被当成 Ctrl 还按着，切换不了。
 fn moment() -> Moment {
     unsafe {
-        let down = |vk: i32| GetKeyState(vk) < 0;
+        let down = |vk: i32| GetAsyncKeyState(vk) < 0;
         Moment {
             other_modifiers: down(0x11) || down(0x12) || down(0x5b) || down(0x5c),
         }
@@ -452,14 +458,14 @@ fn apply(state: &Rc<RefCell<State>>, context: Option<&ITfContext>, frame: Frame,
         let (state2, context2, frame2) = (state.clone(), context.clone(), shared.clone());
         edit(context, client_id, true, move |ec| apply_document(&state2, &context2, &frame2, ec));
         show_window(state, &shared);
-        caret_back(&shared);
+        caret_back(state, &shared);
     } else {
         // 异步：编辑会话里改完文档再摆候选窗
         let (state2, context2, frame2) = (state.clone(), context.clone(), shared.clone());
         edit(context, client_id, false, move |ec| {
             let result = apply_document(&state2, &context2, &frame2, ec);
             show_window(&state2, &frame2);
-            caret_back(&frame2);
+            caret_back(&state2, &frame2);
             result
         });
     }
@@ -467,24 +473,74 @@ fn apply(state: &Rc<RefCell<State>>, context: Option<&ITfContext>, frame: Frame,
 
 /// 成对标点：上屏以后让应用收到几下 ←，光标停在两半中间（和搜狗一样；
 /// 直接改选区的话，有的应用会在编辑结束时把光标挪回末尾）。
-fn caret_back(frame: &Frame) {
+///
+/// 这里只记下来、请候选窗回到消息循环以后叫 [`caret_tick`]，不当场发：见 [`keys::CaretMove`]。
+fn caret_back(state: &Rc<RefCell<State>>, frame: &Frame) {
     if frame.commit.is_none() || frame.caret_back == 0 || !frame.preedit.is_empty() {
         return;
     }
+    let mut s = state.borrow_mut();
+    s.caret_move = Some(keys::CaretMove::new(frame.caret_back, now_ms()));
+    if let Some(window) = &s.window {
+        window.request_caret_tick();
+    }
+}
+
+/// 等着的 [`keys::CaretMove`]：能挪就挪。返回 true 表示修饰键还按着，过一会儿再来。
+///
+/// 两处会叫它：候选窗的消息和定时器（[`ui::set_caret_handler`]），以及修饰键松开的时候
+/// （[`key_released`]：用户一松开 Shift 就发，赶在下一个字前面）。
+fn caret_tick(state: &Rc<RefCell<State>>) -> bool {
+    let mut s = state.borrow_mut();
+    let Some(pending) = s.caret_move else {
+        return false;
+    };
+    // 焦点不在这个线程了：← 会落到别的程序里，不能发
+    let focused = s
+        .thread_mgr
+        .as_ref()
+        .is_some_and(|mgr| unsafe { mgr.IsThreadFocus() }.is_ok_and(|focus| focus.as_bool()));
+    // 此刻键盘上的状态：消息里记的状态这时已经过时了
+    let held = [0x10, 0x11, 0x12, 0x5b, 0x5c]
+        .into_iter()
+        .any(|vk| unsafe { GetAsyncKeyState(vk) } < 0);
+    let steps = match pending.step(now_ms(), focused, held) {
+        keys::CaretStep::Wait => return true,
+        keys::CaretStep::Drop => {
+            s.caret_move = None;
+            return false;
+        }
+        keys::CaretStep::Send(steps) => steps,
+    };
+    s.caret_move = None;
+    drop(s);
     let key = |up: bool| INPUT {
         r#type: INPUT_KEYBOARD,
         Anonymous: INPUT_0 {
             ki: KEYBDINPUT {
                 wVk: VK_LEFT,
+                // 带真键盘的扫描码：浏览器内核的程序按它认键（网页拿到的 `code`）
+                wScan: 0x4b,
                 dwFlags: if up { KEYEVENTF_KEYUP | KEYEVENTF_EXTENDEDKEY } else { KEYEVENTF_EXTENDEDKEY },
+                dwExtraInfo: keys::OWN_INPUT_TAG,
                 ..Default::default()
             },
         },
     };
-    let inputs: Vec<INPUT> = (0..frame.caret_back.min(4)).flat_map(|_| [key(false), key(true)]).collect();
+    let inputs: Vec<INPUT> = (0..steps).flat_map(|_| [key(false), key(true)]).collect();
     unsafe {
         SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
     }
+    false
+}
+
+/// 正在处理的按键是不是 FreeType 自己发的（[`caret_tick`] 发的 ←）。
+fn own_input() -> bool {
+    unsafe { GetMessageExtraInfo() }.0 as usize == keys::OWN_INPUT_TAG
+}
+
+fn now_ms() -> u64 {
+    unsafe { GetTickCount64() }
 }
 
 /// 只读一下光标前的字（同步）。
@@ -617,6 +673,7 @@ fn on_focus(state: &Rc<RefCell<State>>, focus: Option<&ITfDocumentMgr>) {
     {
         let mut s = state.borrow_mut();
         s.shift.cancel();
+        s.caret_move = None;
         s.last_caret = None;
         if let Some(window) = &s.window {
             window.hide();
@@ -667,8 +724,10 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
 
     fn Deactivate(&self) -> Result<()> {
         ui::set_click_handler(None);
+        ui::set_caret_handler(None);
         unwatch_layout(&self.state);
         let mut s = self.state.borrow_mut();
+        s.caret_move = None;
         if let Some(thread_mgr) = s.thread_mgr.take() {
             unsafe {
                 if let (Some(button), Ok(items)) = (s.button.take(), thread_mgr.cast::<ITfLangBarItemMgr>()) {
@@ -729,11 +788,66 @@ impl ITfTextInputProcessorEx_Impl for TextService_Impl {
         }
         let weak = Rc::downgrade(&self.state);
         ui::set_click_handler(Some(Box::new(move |click| on_click(&weak, click))));
+        let weak = Rc::downgrade(&self.state);
+        ui::set_caret_handler(Some(Box::new(move || weak.upgrade().is_some_and(|state| caret_tick(&state)))));
         if let Some(focus) = focus {
             on_focus(&self.state, Some(&focus));
         }
         Ok(())
     }
+}
+
+/// 有键按下（OnTestKeyDown、OnKeyDown 共用）：记给单按 Shift 的判定。
+/// 有的应用不先问就直接报按下，所以两处都记；重复记同一下没有影响。
+///
+/// 成对标点还等着挪光标时用户又按了别的键（Shift、Ctrl 这些不算）：不挪了，
+/// 光标已经不一定在那一对标点后面。
+fn note_key_down(state: &Rc<RefCell<State>>, wparam: WPARAM, lparam: LPARAM) {
+    let vk = wparam.0 as u16;
+    let repeat = lparam.0 & (1 << 30) != 0;
+    let mut s = state.borrow_mut();
+    s.shift.key_down(vk, moment(), repeat);
+    if !keys::is_modifier(vk) {
+        s.caret_move = None;
+    }
+}
+
+/// 有键松开（OnTestKeyUp、OnKeyUp 共用）：是单按 Shift 就切换中英文。
+///
+/// 系统对同一次松开可能问几遍：浏览器内核的程序（Electron、Chrome）空闲时先看一眼消息再取走，
+/// 两次都走到 OnTestKeyUp。所以第一次报到就切换，[`ShiftTap`] 保证同一次松开不切第二遍。
+/// （以前 OnTestKeyUp 只记下结果、等 OnKeyUp 去切换；第二遍 OnTestKeyUp 把记下的结果清掉，
+/// 并回答「不要这个键」，OnKeyUp 不再被调用，这类程序里就切换不了。）
+///
+/// 不吃这个键：应用照常收到 Shift 松开，不会以为 Shift 还按着。
+///
+/// 成对标点还等着挪光标的话，修饰键一松开就去挪（见 [`caret_tick`]）。
+fn key_released(state: &Rc<RefCell<State>>, context: Option<&ITfContext>, wparam: WPARAM, lparam: LPARAM) {
+    if own_input() {
+        return;
+    }
+    let vk = wparam.0 as u16;
+    if keys::is_modifier(vk) && state.borrow().caret_move.is_some() {
+        caret_tick(state);
+    }
+    if !state.borrow_mut().shift.key_up(vk, moment()) || disabled(context) {
+        return;
+    }
+    let scan = ((lparam.0 >> 16) & 0xff) as u32;
+    let request = Request::ToggleMode {
+        shift: Some(keys::shift_side(vk, scan).name().to_string()),
+    };
+    if let Some(frame) = call(state, &request) {
+        // 不强求同步：系统只是先问一声（OnTestKeyUp）的时候不一定给同步的编辑会话，
+        // 这样写它能同步就同步、不能就排到后面，打到一半的字母照样能上屏
+        apply(state, context, frame, false);
+    }
+}
+
+/// FreeType 自己发的 ←（[`caret_tick`]）到了：交给应用。只有这时又在组字了才吃掉
+/// （用户已经接着打字，← 会把编辑区打断）。
+fn own_key_down(state: &Rc<RefCell<State>>) -> Result<BOOL> {
+    Ok(composing(state).into())
 }
 
 impl ITfKeyEventSink_Impl for TextService_Impl {
@@ -747,9 +861,11 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
     }
 
     fn OnTestKeyDown(&self, pic: Ref<ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
+        if own_input() {
+            return own_key_down(&self.state);
+        }
         let vk = wparam.0 as u16;
-        let repeat = lparam.0 & (1 << 30) != 0;
-        self.state.borrow_mut().shift.key_down(vk, moment(), repeat);
+        note_key_down(&self.state, wparam, lparam);
         if keys::is_modifier(vk) || disabled(pic.as_ref()) {
             return Ok(false.into());
         }
@@ -765,7 +881,11 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
     }
 
     fn OnKeyDown(&self, pic: Ref<ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
+        if own_input() {
+            return own_key_down(&self.state);
+        }
         let vk = wparam.0 as u16;
+        note_key_down(&self.state, wparam, lparam);
         if keys::is_modifier(vk) || disabled(pic.as_ref()) {
             return Ok(false.into());
         }
@@ -800,38 +920,14 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         Ok(handled.into())
     }
 
-    fn OnTestKeyUp(&self, _pic: Ref<ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
-        let mut s = self.state.borrow_mut();
-        let vk = wparam.0 as u16;
-        let tapped = s.shift.key_up(vk, moment());
-        let scan = ((lparam.0 >> 16) & 0xff) as u32;
-        s.shift_tapped = tapped.then(|| keys::shift_side(vk, scan));
-        Ok(tapped.into())
+    fn OnTestKeyUp(&self, pic: Ref<ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
+        key_released(&self.state, pic.as_ref(), wparam, lparam);
+        Ok(false.into())
     }
 
     fn OnKeyUp(&self, pic: Ref<ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
-        let side = {
-            let mut s = self.state.borrow_mut();
-            let vk = wparam.0 as u16;
-            let scan = ((lparam.0 >> 16) & 0xff) as u32;
-            s.shift_tapped
-                .take()
-                .or_else(|| s.shift.key_up(vk, moment()).then(|| keys::shift_side(vk, scan)))
-        };
-        let Some(side) = side else {
-            return Ok(false.into());
-        };
-        if disabled(pic.as_ref()) {
-            return Ok(false.into());
-        }
-        let context = pic.ok()?.clone();
-        let request = Request::ToggleMode {
-            shift: Some(side.name().to_string()),
-        };
-        if let Some(frame) = call(&self.state, &request) {
-            apply(&self.state, Some(&context), frame, true);
-        }
-        Ok(true.into())
+        key_released(&self.state, pic.as_ref(), wparam, lparam);
+        Ok(false.into())
     }
 
     fn OnPreservedKey(&self, _pic: Ref<ITfContext>, _rguid: *const GUID) -> Result<BOOL> {

@@ -17,10 +17,10 @@ use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_P
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreatePen, CreateSolidBrush,
     DeleteDC, DeleteObject, EndPaint, FillRect, GetDC, GetMonitorInfoW, GetStockObject, GetTextExtentPoint32W,
-    InvalidateRect, MonitorFromPoint, Rectangle, ReleaseDC, RoundRect, SelectObject, SetBkMode, SetTextColor,
-    TextOutW, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_PITCH, FF_DONTCARE, FW_NORMAL,
-    FW_SEMIBOLD, HDC, HFONT, MONITORINFO, MONITOR_DEFAULTTONEAREST, NULL_BRUSH, OUT_DEFAULT_PRECIS, PAINTSTRUCT,
-    PS_SOLID, SRCCOPY, TRANSPARENT,
+    InvalidateRect, MonitorFromPoint, MonitorFromWindow, Rectangle, ReleaseDC, RoundRect, SelectObject, SetBkMode,
+    SetTextColor, TextOutW, UpdateWindow, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_PITCH,
+    FF_DONTCARE, FW_NORMAL, FW_SEMIBOLD, HDC, HFONT, MONITORINFO, MONITOR_DEFAULTTONEAREST, NULL_BRUSH,
+    OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_SOLID, SRCCOPY, TRANSPARENT,
 };
 use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
@@ -29,17 +29,22 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos, GetWindowLongPtrW, GetWindowRect, IsWindowVisible,
-    KillTimer, LoadCursorW, RegisterClassExW, SetCursor, SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    CS_DROPSHADOW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, HWND_TOPMOST, IDC_ARROW, IDC_HAND, MA_NOACTIVATE,
-    SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE, WM_CAPTURECHANGED, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE,
-    WM_MOUSEMOVE, WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP, WM_SETCURSOR, WM_TIMER, WNDCLASSEXW, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    KillTimer, LoadCursorW, PostMessageW, RegisterClassExW, SetCursor, SetTimer, SetWindowLongPtrW, SetWindowPos,
+    ShowWindow, CS_DROPSHADOW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, HWND_TOPMOST, IDC_ARROW, IDC_HAND,
+    MA_NOACTIVATE, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE, WM_APP, WM_CAPTURECHANGED, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP, WM_SETCURSOR, WM_TIMER,
+    WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 const CLASS_NAME: PCWSTR = w!("FreeTypeCandidateWindow");
 const MENU_CLASS: PCWSTR = w!("FreeTypeCandidateMenu");
 const HINT_TIMER: usize = 1;
 const LONG_TIMER: usize = 2;
+/// 成对标点等着挪光标（等用户松开 Shift）时隔一会儿再看一次。
+const CARET_TIMER: usize = 3;
+const CARET_RETRY_MS: u32 = 15;
+/// 发给自己的消息：回到应用的消息循环以后，叫文本服务去挪光标（见 [`set_caret_handler`]）。
+const WM_CARET_TICK: u32 = WM_APP + 1;
 const HINT_MS: u32 = 1000;
 /// 按住多久算长按。
 const LONG_PRESS_MS: u32 = 500;
@@ -61,10 +66,29 @@ thread_local! {
     static HANDLER: RefCell<Option<Box<dyn Fn(Click)>>> = const { RefCell::new(None) };
     /// 这个线程的右键 / 长按菜单窗口。
     static MENU: RefCell<Option<HWND>> = const { RefCell::new(None) };
+    /// 文本服务挪光标的处理函数：返回 true 表示还没挪成，过一会儿再叫一次。
+    static CARET_HANDLER: RefCell<Option<Box<dyn Fn() -> bool>>> = const { RefCell::new(None) };
 }
 
 pub fn set_click_handler(handler: Option<Box<dyn Fn(Click)>>) {
     HANDLER.with(|h| *h.borrow_mut() = handler);
+}
+
+/// 候选窗是这个线程里输入法自己的窗口，文本服务借它「回到消息循环以后再做」和定时重试
+/// （[`CandidateWindow::request_caret_tick`]）。
+pub fn set_caret_handler(handler: Option<Box<dyn Fn() -> bool>>) {
+    CARET_HANDLER.with(|h| *h.borrow_mut() = handler);
+}
+
+fn caret_tick(hwnd: HWND) {
+    let again = CARET_HANDLER.with(|h| h.borrow().as_ref().is_some_and(|handler| handler()));
+    unsafe {
+        if again {
+            SetTimer(Some(hwnd), CARET_TIMER, CARET_RETRY_MS, None);
+        } else {
+            let _ = KillTimer(Some(hwnd), CARET_TIMER);
+        }
+    }
 }
 
 fn dispatch(click: Click) {
@@ -158,7 +182,7 @@ fn theme(style: &str) -> Theme {
 }
 
 /// 要画的东西。
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq)]
 struct View {
     title: Option<String>,
     preedit: String,
@@ -667,6 +691,14 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             }
             LRESULT(0)
         }
+        WM_TIMER if wparam.0 == CARET_TIMER => {
+            caret_tick(hwnd);
+            LRESULT(0)
+        }
+        WM_CARET_TICK => {
+            caret_tick(hwnd);
+            LRESULT(0)
+        }
         WM_TIMER if wparam.0 == HINT_TIMER => {
             unsafe {
                 let _ = KillTimer(Some(hwnd), HINT_TIMER);
@@ -797,6 +829,13 @@ impl CandidateWindow {
         unsafe { IsWindowVisible(self.hwnd).as_bool() }
     }
 
+    /// 回到应用的消息循环以后叫一次 [`set_caret_handler`] 的处理函数；它说还要等，就定时再叫。
+    pub fn request_caret_tick(&self) {
+        unsafe {
+            let _ = PostMessageW(Some(self.hwnd), WM_CARET_TICK, WPARAM(0), LPARAM(0));
+        }
+    }
+
     /// 按应答更新；`caret` 是编辑区（或光标）在屏幕上的位置。
     pub fn update(&self, frame: &Frame, caret: Option<RECT>) {
         let view = View {
@@ -839,11 +878,22 @@ impl CandidateWindow {
         }
     }
 
+    /// 排版、摆位置、画出来。
+    ///
+    /// 打字时每个键都会走到这里（浏览器类应用排好版后还会再来一次），所以已经显示着的窗口
+    /// 只做必要的改动：不先挪走再挪回来，内容和位置都没变就什么都不做，变了就当场画完。
+    /// （以前每次都先缩成 1×1 挪到光标处取 DPI，再放大、等消息循环空了才重画，每打一个字母闪一下。）
     fn show(&self, view: View, caret: RECT) {
         menu::close();
         unsafe {
-            // 先挪到光标处，按那块显示器的 DPI 排版
-            let _ = SetWindowPos(self.hwnd, Some(HWND_TOPMOST), caret.left, caret.bottom, 1, 1, SWP_NOACTIVATE);
+            // 按光标所在显示器的 DPI 排版：窗口还没显示、或光标到了另一块显示器时，先把窗口挪过去
+            let visible = self.visible();
+            let at = POINT { x: caret.left, y: caret.bottom };
+            if !visible
+                || MonitorFromPoint(at, MONITOR_DEFAULTTONEAREST) != MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTONEAREST)
+            {
+                let _ = SetWindowPos(self.hwnd, Some(HWND_TOPMOST), at.x, at.y, 1, 1, SWP_NOACTIVATE);
+            }
             let dpi = GetDpiForWindow(self.hwnd).max(96);
             let scale = dpi as f32 / 96.0;
             let hdc = GetDC(Some(self.hwnd));
@@ -867,13 +917,23 @@ impl CandidateWindow {
             x = x.min(work.right - w).max(work.left);
             y = y.min(work.bottom - h).max(work.top);
 
+            let mut current = RECT::default();
+            let _ = GetWindowRect(self.hwnd, &mut current);
+            let mut changed = false;
             if let Some(data) = data_of(self.hwnd) {
-                data.view = view;
-                data.layout = layout;
-                data.scale = scale;
-                data.hovered = None;
+                changed = !visible || current != rect(x, y, w, h) || data.view != view;
+                if changed {
+                    data.view = view;
+                    data.layout = layout;
+                    data.scale = scale;
+                    data.hovered = None;
+                }
+            }
+            if changed {
                 let _ = SetWindowPos(self.hwnd, Some(HWND_TOPMOST), x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
-                let _ = InvalidateRect(Some(self.hwnd), None, true);
+                // 整个窗口都自己画（见 paint），不用先擦背景；马上画完，不让变大的部分先露出旧内容
+                let _ = InvalidateRect(Some(self.hwnd), None, false);
+                let _ = UpdateWindow(self.hwnd);
             }
             if hint {
                 SetTimer(Some(self.hwnd), HINT_TIMER, HINT_MS, None);

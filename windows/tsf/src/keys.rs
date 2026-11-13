@@ -96,8 +96,13 @@ impl Side {
     }
 }
 
+/// 认单按 Shift。
+///
+/// 系统对同一次按下、松开可能问几遍（先 OnTestKey*、再 OnKey*；浏览器内核的程序空闲时
+/// 还会先看一眼消息再取走，多问一遍）。所以按下可以重复报，松开只有第一次报到时算数。
 #[derive(Default)]
 pub struct ShiftTap {
+    /// Shift 按下了，之后还没按过别的键。
     down: Option<Moment>,
 }
 
@@ -114,7 +119,7 @@ impl ShiftTap {
         }
     }
 
-    /// 有键松开：是一次干净的单按 Shift 返回 true。
+    /// 有键松开：是一次干净的单按 Shift 返回 true。同一次松开再报，返回 false。
     pub fn key_up(&mut self, vk: u16, at: Moment) -> bool {
         if !is_shift(vk) {
             return false;
@@ -144,9 +149,88 @@ pub fn shift_side(vk: u16, scan: u32) -> Side {
     }
 }
 
+/// FreeType 自己发给应用的键（成对标点后的 ←）带这个记号（`dwExtraInfo`）。按键回调认出来
+/// 就直接放行：不当成用户按的键发给服务进程，也不影响单按 Shift 的判定。
+pub const OWN_INPUT_TAG: usize = 0x4654_5950;
+
+/// 成对标点上屏以后，等着把光标挪到两半中间的这一次。
+///
+/// 不在上屏的当时发 ←，而是回到应用的消息循环以后再发：
+/// - 应用这时已经把字落好了，← 不会抢在上屏前面；
+/// - （、《、“ 是按着 Shift 打的，Shift 按着时应用把 ← 当成 Shift+←（选中右半边），
+///   Ctrl+← 是跳一个词、Win+← 是把窗口贴到左边。所以等用户松开这些键再发。
+///
+/// 等的时候焦点换了、用户又按了别的键、或者等得太久，这一次就作废，光标留在原处。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CaretMove {
+    steps: usize,
+    /// 过了这个时刻（毫秒）就作废。
+    deadline: u64,
+}
+
+/// 现在该拿 [`CaretMove`] 怎么办。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CaretStep {
+    /// 修饰键还按着：过一会儿再看。
+    Wait,
+    /// 发这么多下 ←。
+    Send(usize),
+    /// 作废。
+    Drop,
+}
+
+impl CaretMove {
+    /// 最多等多久（按住 Shift 不放的人，过后光标已经不在原处了）。
+    pub const TIMEOUT_MS: u64 = 2000;
+    /// 一次最多挪几下。
+    const MAX_STEPS: usize = 4;
+
+    pub fn new(steps: usize, now: u64) -> Self {
+        Self {
+            steps: steps.min(Self::MAX_STEPS),
+            deadline: now + Self::TIMEOUT_MS,
+        }
+    }
+
+    /// `focused`：这个线程还有输入焦点；`modifiers_held`：Shift、Ctrl、Alt、Win 有按着的。
+    pub fn step(&self, now: u64, focused: bool, modifiers_held: bool) -> CaretStep {
+        if !focused || now > self.deadline {
+            CaretStep::Drop
+        } else if modifiers_held {
+            CaretStep::Wait
+        } else {
+            CaretStep::Send(self.steps)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shift_tap_survives_repeated_queries() {
+        // 浏览器内核的程序对同一次按键会多问几遍（OnTestKeyDown / OnTestKeyUp 重复调用）
+        let mut tap = ShiftTap::default();
+        tap.key_down(0x10, PLAIN, false);
+        tap.key_down(0x10, PLAIN, false);
+        assert!(tap.key_up(0x10, PLAIN), "第一次问到松开就切换");
+        assert!(!tap.key_up(0x10, PLAIN), "同一次松开再问：不再切换");
+        assert!(!tap.key_up(0x10, PLAIN));
+        tap.key_down(0x10, PLAIN, false);
+        assert!(tap.key_up(0x10, PLAIN), "下一次单按照常切换");
+    }
+
+    #[test]
+    fn caret_move_waits_for_modifiers() {
+        let pending = CaretMove::new(1, 1000);
+        assert_eq!(pending.step(1000, true, true), CaretStep::Wait, "Shift 还按着：等");
+        assert_eq!(pending.step(1100, true, false), CaretStep::Send(1), "松手了：发 ←");
+        assert_eq!(pending.step(1100, false, false), CaretStep::Drop, "焦点换走了：不发");
+        assert_eq!(pending.step(1000 + CaretMove::TIMEOUT_MS, true, true), CaretStep::Wait);
+        assert_eq!(pending.step(1001 + CaretMove::TIMEOUT_MS, true, false), CaretStep::Drop, "等太久：作废");
+        assert_eq!(CaretMove::new(99, 0).step(0, true, false), CaretStep::Send(4), "一次最多挪 4 下");
+    }
 
     #[test]
     fn named_keys() {

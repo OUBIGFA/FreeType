@@ -24,7 +24,7 @@
       "name": "msime-windows",
       "repository": "https://github.com/metasequoiaime/msime-windows",
       "revision": "26796f3ed646e2ce75ba39bca6f1352caca9fd67",
-      "use": "只参照词库与快捷短语批量文件的公开格式；不复制代码或词库数据",
+      "use": "参照词库与快捷短语批量文件的公开格式，以及单按 Shift、成对标点后挪光标的处理思路；不复制代码或词库数据。本地对照副本放在 .local/references/msime-windows（不入库）",
       "license": "GPL-3.0"
     }
   ]
