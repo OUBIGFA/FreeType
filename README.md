@@ -8,7 +8,7 @@
 
 [English](README.en.md) | 简体中文
 
-![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-555555) ![Stage](https://img.shields.io/badge/stage-test%20version-555555)
+![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-555555)
 
 </div>
 
@@ -19,6 +19,36 @@ FreeType 是一个 Windows 中文输入法。它适合日常聊天、写作、�
 它支持全拼、双拼、模糊音和错字纠正。它会记住你的选词习惯。你也可以导入自己的词库和快捷短语。
 
 FreeType 的输入引擎在本机运行。普通中文输入不需要登录账号，也不需要上传正在输入的文字。
+
+## 软件预览
+
+下面的图片来自本机安装版 FreeType。常规页放在第一张。
+
+<table>
+<tr>
+<td><img src="windows/assets/readme/settings-general-installed.png" width="420" alt="FreeType 常规设置页"><br>常规</td>
+<td><img src="windows/assets/readme/settings-typing-installed.png" width="420" alt="FreeType 拼音与按键设置页"><br>拼音与按键</td>
+</tr>
+<tr>
+<td><img src="windows/assets/readme/settings-features-installed.png" width="420" alt="FreeType 实用功能设置页"><br>实用功能</td>
+<td><img src="windows/assets/readme/settings-dicts-installed.png" width="420" alt="FreeType 词库设置页"><br>词库</td>
+</tr>
+</table>
+
+### 候选窗颜色
+
+候选窗支持四种选中样式：
+
+<table>
+<tr>
+<td><img src="windows/assets/readme/candidate-pink.png" width="260" alt="粉色候选窗"><br>粉色（默认）</td>
+<td><img src="windows/assets/readme/candidate-blue.png" width="260" alt="蓝色候选窗"><br>蓝色</td>
+</tr>
+<tr>
+<td><img src="windows/assets/readme/candidate-green.png" width="260" alt="微信绿候选窗"><br>微信绿</td>
+<td><img src="windows/assets/readme/candidate-sogou.png" width="260" alt="搜狗样式候选窗"><br>搜狗样式（无底色块）</td>
+</tr>
+</table>
 
 ## 为什么使用 FreeType
 
@@ -111,59 +141,6 @@ FreeType 支持导入：
 
 完整备份包含词语、选词次数、最近使用时间和词语搭配。请把备份放在安全的位置。
 
-## 设置页预览
-
-下面的图片来自本机安装版 FreeType。常规页放在第一张。
-
-<table>
-<tr>
-<td><img src="windows/assets/readme/settings-general-installed.png" width="420" alt="FreeType 常规设置页"><br>常规</td>
-<td><img src="windows/assets/readme/settings-typing-installed.png" width="420" alt="FreeType 拼音与按键设置页"><br>拼音与按键</td>
-</tr>
-<tr>
-<td><img src="windows/assets/readme/settings-features-installed.png" width="420" alt="FreeType 实用功能设置页"><br>实用功能</td>
-<td><img src="windows/assets/readme/settings-dicts-installed.png" width="420" alt="FreeType 词库设置页"><br>词库</td>
-</tr>
-</table>
-
-### 候选窗颜色
-
-候选窗支持四种选中样式：
-
-<table>
-<tr>
-<td><img src="windows/assets/readme/candidate-pink.png" width="260" alt="粉色候选窗"><br>粉色（默认）</td>
-<td><img src="windows/assets/readme/candidate-blue.png" width="260" alt="蓝色候选窗"><br>蓝色</td>
-</tr>
-<tr>
-<td><img src="windows/assets/readme/candidate-green.png" width="260" alt="微信绿候选窗"><br>微信绿</td>
-<td><img src="windows/assets/readme/candidate-sogou.png" width="260" alt="搜狗样式候选窗"><br>搜狗样式（无底色块）</td>
-</tr>
-</table>
-
-## 快速开始
-
-1. 安装 FreeType。
-2. 在 Windows 输入法列表中启用 FreeType。
-3. 切换到 FreeType，输入 `nihao`。
-4. 按空格或数字键选择候选。
-5. 打开“FreeType 设置”，根据自己的习惯调整输入法。
-
-### 常用按键
-
-| 按键 | 作用 |
-| --- | --- |
-| 单按 `Shift` | 切换中文和英文 |
-| 空格 | 选择当前候选 |
-| `1` 到 `9` | 选择对应候选 |
-| 回车 | 原样上屏正在输入的字母 |
-| `-`、`=`、`PgUp`、`PgDn` | 翻页 |
-| `←`、`→`、`↓` | 移动候选；横排时 `↓` 可以展开候选面板 |
-| `[`、`]` | 上屏当前候选的第一个字或最后一个字 |
-| `Ctrl+Delete` | 删除当前词的学习记忆 |
-| `Esc` | 清空正在输入的内容 |
-| `v`、空格 | 打开工具栏 |
-
 ## 数据和隐私
 
 - 普通中文输入在本机完成。
@@ -174,11 +151,11 @@ FreeType 支持导入：
 - 打开剪贴板历史后，最多保留最近 20 条，并保存在内存中。
 - 学习备份包含个人输入习惯。请不要公开分享。
 
-## Windows 版本
+## 系统要求
 
-FreeType 当前面向 Windows 10/11 x64。它是测试版本。不同应用对输入法、候选窗位置和高 DPI 显示的支持可能不同。
+FreeType 支持 Windows 10/11 x64。
 
-如果某个应用已经打开，安装或更新输入法后，请重新打开这个应用。
+安装或更新后，请重新打开已经运行的应用。
 
 ## 常见问题
 

@@ -8,7 +8,7 @@ A Windows Chinese input method that learns your words and accepts your dictionar
 
 [简体中文](README.md) | English
 
-![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-555555) ![Stage](https://img.shields.io/badge/stage-test%20version-555555)
+![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-555555)
 
 </div>
 
@@ -19,6 +19,36 @@ FreeType is a Chinese input method for Windows. It is made for chat, writing, co
 It supports full pinyin, double pinyin, fuzzy pinyin, and typo correction. It learns the words that you choose. You can also import your own dictionaries and quick phrases.
 
 The input engine runs on your computer. Normal Chinese input needs no account. It does not upload the text that you type.
+
+## Software preview
+
+These images come from the FreeType installation on this computer. The General page is first.
+
+<table>
+<tr>
+<td><img src="windows/assets/readme/settings-general-installed.png" width="420" alt="FreeType General settings page"><br>General</td>
+<td><img src="windows/assets/readme/settings-typing-installed.png" width="420" alt="FreeType Pinyin and Keys settings page"><br>Pinyin and Keys</td>
+</tr>
+<tr>
+<td><img src="windows/assets/readme/settings-features-installed.png" width="420" alt="FreeType Useful Features settings page"><br>Useful Features</td>
+<td><img src="windows/assets/readme/settings-dicts-installed.png" width="420" alt="FreeType Dictionaries settings page"><br>Dictionaries</td>
+</tr>
+</table>
+
+### Candidate window colors
+
+The candidate window has four selected-candidate styles:
+
+<table>
+<tr>
+<td><img src="windows/assets/readme/candidate-pink.png" width="260" alt="Pink candidate window"><br>Pink (default)</td>
+<td><img src="windows/assets/readme/candidate-blue.png" width="260" alt="Blue candidate window"><br>Blue</td>
+</tr>
+<tr>
+<td><img src="windows/assets/readme/candidate-green.png" width="260" alt="Green candidate window"><br>WeChat green</td>
+<td><img src="windows/assets/readme/candidate-sogou.png" width="260" alt="Sogou-style candidate window"><br>Sogou style (no color block)</td>
+</tr>
+</table>
 
 ## Why use FreeType
 
@@ -111,59 +141,6 @@ The Learned Words page in Settings can:
 
 A complete backup includes words, selection counts, last-use times, and word pairs. Keep the backup in a safe place.
 
-## Settings preview
-
-These images come from the FreeType installation on this computer. The General page is first.
-
-<table>
-<tr>
-<td><img src="windows/assets/readme/settings-general-installed.png" width="420" alt="FreeType General settings page"><br>General</td>
-<td><img src="windows/assets/readme/settings-typing-installed.png" width="420" alt="FreeType Pinyin and Keys settings page"><br>Pinyin and Keys</td>
-</tr>
-<tr>
-<td><img src="windows/assets/readme/settings-features-installed.png" width="420" alt="FreeType Useful Features settings page"><br>Useful Features</td>
-<td><img src="windows/assets/readme/settings-dicts-installed.png" width="420" alt="FreeType Dictionaries settings page"><br>Dictionaries</td>
-</tr>
-</table>
-
-### Candidate window colors
-
-The candidate window has four selected-candidate styles:
-
-<table>
-<tr>
-<td><img src="windows/assets/readme/candidate-pink.png" width="260" alt="Pink candidate window"><br>Pink (default)</td>
-<td><img src="windows/assets/readme/candidate-blue.png" width="260" alt="Blue candidate window"><br>Blue</td>
-</tr>
-<tr>
-<td><img src="windows/assets/readme/candidate-green.png" width="260" alt="Green candidate window"><br>WeChat green</td>
-<td><img src="windows/assets/readme/candidate-sogou.png" width="260" alt="Sogou-style candidate window"><br>Sogou style (no color block)</td>
-</tr>
-</table>
-
-## Quick start
-
-1. Install FreeType.
-2. Enable FreeType in the Windows input method list.
-3. Switch to FreeType and type `nihao`.
-4. Press Space or a number key to choose a candidate.
-5. Open FreeType Settings and change the options that you need.
-
-### Common keys
-
-| Key | Action |
-| --- | --- |
-| Press `Shift` once | Switch between Chinese and English |
-| Space | Choose the current candidate |
-| `1` to `9` | Choose a candidate |
-| Enter | Commit the letters as typed |
-| `-`, `=`, `PgUp`, `PgDn` | Change pages |
-| `←`, `→`, `↓` | Move through candidates; `↓` opens the panel in horizontal layout |
-| `[` and `]` | Commit the first or last character of the current candidate |
-| `Ctrl+Delete` | Delete the learning memory for the current word |
-| `Esc` | Clear the current input |
-| `v`, Space | Open the toolbar |
-
 ## Data and privacy
 
 - Normal Chinese input runs on your computer.
@@ -174,11 +151,11 @@ The candidate window has four selected-candidate styles:
 - When enabled, clipboard history keeps the latest 20 items in memory.
 - A learning backup contains personal input habits. Do not share it in public.
 
-## Windows version
+## System requirements
 
-FreeType currently targets Windows 10/11 x64. It is a test version. Applications can differ in their input method, candidate position, and high-DPI support.
+FreeType supports Windows 10/11 x64.
 
-If an application was open during installation or an update, close and reopen it.
+After you install or update FreeType, reopen applications that were already running.
 
 ## Common questions
 
