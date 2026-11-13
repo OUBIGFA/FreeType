@@ -105,7 +105,7 @@ def resolve_import(name: str, base_dir: str) -> str:
     return os.path.join(base_dir, name)
 
 
-def load_entries(path, seen, use_imports=True, skip=()):
+def load_entries(path, seen, use_imports=True, skip=(), aliases=None):
     """递归加载一个 .dict.yaml，返回 {(code, text): weight}。
 
     skip：不合并的被引用词库（import_tables 里写的名字，如 dicts/cuoyin）。"""
@@ -115,12 +115,8 @@ def load_entries(path, seen, use_imports=True, skip=()):
         return {}
     seen.add(abs_path)
 
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-    except OSError as exc:
-        print("读取失败 %s: %s" % (path, exc), file=sys.stderr)
-        return {}
+    with open(path, "r", encoding="utf-8") as source:
+        lines = source.readlines()
 
     col, imports, body_start = parse_header(lines)
     merged = Entry()
@@ -131,11 +127,8 @@ def load_entries(path, seen, use_imports=True, skip=()):
             if name in skip:
                 print("跳过被引用词库: %s" % name, file=sys.stderr)
                 continue
-            imported = resolve_import(name, base_dir)
-            if not os.path.exists(imported):
-                print("找不到被引用词库: %s" % imported, file=sys.stderr)
-                continue
-            for key, weight in load_entries(imported, seen, use_imports, skip).items():
+            imported = resolve_import((aliases or {}).get(name, name), base_dir)
+            for key, weight in load_entries(imported, seen, use_imports, skip, aliases).items():
                 if key not in merged or weight > merged[key]:
                     merged[key] = weight
 

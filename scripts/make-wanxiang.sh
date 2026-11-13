@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# 从万象拼音（rime_wanxiang）生成可选词库包。默认词库仍是雾凇（scripts/make-data.sh），
-# 这个包不进安装包，用户在「WowType 设置 → 词库」里下载切换。
+# 保留的上游万象单库转换参考。FreeType 默认数据已合入万象，不使用此脚本。
+# FreeType 数据入口是 tools/make_default_data.py；以下流程仅用于上游技术对照。
 #
 #   scripts/make-wanxiang.sh [rime_wanxiang 目录] [输出目录] [打包目录]
 #

@@ -34,4 +34,6 @@ jobs:
         run: python -X utf8 tools/check_repo.py
       - name: Test repository boundaries
         run: python -X utf8 -m unittest discover -s tests/repository -v
+      - name: Test default dictionary assembly
+        run: python -X utf8 -m unittest discover -s tests/data -v
 

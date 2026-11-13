@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# 保留的上游 Linux/macOS 数据流程。FreeType Windows 默认数据用 tools/make_default_data.py 生成。
 # 从雾凇拼音（rime-ice）生成 WowType 用的词库和英文词表。
 #
 #   scripts/make-data.sh [rime-ice 目录] [输出目录]

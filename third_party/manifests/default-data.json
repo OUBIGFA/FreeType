@@ -1,0 +1,37 @@
+{
+  "version": "2026-11-13.1",
+  "frequencyTotal": 7500000000,
+  "minimumEntries": 500000,
+  "sources": [
+    {
+      "name": "rime-frost",
+      "repository": "https://github.com/gaboolic/rime-frost",
+      "revision": "555a736932de245d7f59f640a98bd58f368792b3",
+      "archiveSha256": "488e133ebccb24679a7aaae4938efda239ffd5418a9ab01259bf782b3e54bb0c",
+      "license": "GPL-3.0",
+      "dictionary": "rime_frost.dict.yaml",
+      "skipImports": ["cn_dicts/41448", "cn_dicts/GB18030-2022", "cn_dicts/corrections"],
+      "importAliases": {"cn_dicts_cell/extthot": "cn_dicts_cell/exthot"},
+      "extraChars": ["cn_dicts/41448.dict.yaml", "cn_dicts/GB18030-2022.dict.yaml"],
+      "english": ["en_dicts/en.dict.yaml", "en_dicts/en_ext.dict.yaml"]
+    },
+    {
+      "name": "rime-wanxiang-data",
+      "repository": "https://github.com/amzxyz/rime-wanxiang-data",
+      "revision": "4b50697bc3fa45ea7f79faebcc731fb42a3b6d8c",
+      "archiveSha256": "75ec8ed9fcc9776a5b052c201c10ad276c96c68f5cab8dab0bc8c0de598b1b99",
+      "license": "CC-BY-4.0",
+      "dictionaries": [
+        "dicts/zi.dict.yaml", "dicts/jichu.dict.yaml", "dicts/duoyin.dict.yaml",
+        "dicts/diming.dict.yaml", "dicts/mingren.dict.yaml", "dicts/yiren.dict.yaml"
+      ]
+    }
+  ],
+  "languageModel": {
+    "url": "https://github.com/Gloridust/WowType/releases/download/lm-2026.11.09/words.lm.xz",
+    "sha256": "42cb7c4a7cededa29b1a9ff105530085529fefff96535cc051341ebd51605dbe",
+    "license": "CC-BY-SA-4.0",
+    "licenseUrl": "https://raw.githubusercontent.com/spdx/license-list-data/31846481de7ea17d92f2f46fad76abe58b2e9bb0/text/CC-BY-SA-4.0.txt",
+    "licenseSha256": "cde7883b9050a1104f4ac19a1572aafd6e5d7323b68351aaf51fbf4beba54966"
+  }
+}

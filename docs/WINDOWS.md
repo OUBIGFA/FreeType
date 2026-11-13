@@ -65,7 +65,7 @@ flowchart LR
 - 日期时间（riqi、shijian、xingqi、rq、sj）、emoji 推荐、学习：与 WowType 的会话接口一致，见 [ABI.md](ABI.md) 和 [USAGE.md](USAGE.md)。
 - 中英文之间自动加空格（默认开）：同时检查光标前文字与本次上屏文字的交界，以及本次文字内部的中英交界。汉字与字母、汉字与数字分别控制。已有空格、换行和制表符保留；应用读不到光标前文字时，只处理本次上屏内容。
 - 默认不出 CJK 扩展 B 区以后的生僻单字（常见字体显示不了），设置里能打开。
-- 主词库可以换成自己的 `lexicon.tsv`（设置「词库」页，对应 WowType 的 `Lexicon=`）：万象拼音等 Rime 词库用 `tools/rime2tsv.py`、`scripts/make-wanxiang.sh` 转出来。服务进程在后台重新载入，几秒后生效；文件不在时用默认的雾凇词库。WowType 的发布页目前没有现成的万象词库包，所以不提供一键下载。
+- 主词库可以换成自己的 `lexicon.tsv`（设置「词库」页，对应 WowType 的 `Lexicon=`）：Rime 词库用 `tools/rime2tsv.py` 转换。服务进程在后台重新载入，几秒后生效；文件不在时恢复默认的白霜主词库、万象补充和项目热词。默认数据随安装包提供，不在运行时联网更新。
 - 可选快捷键（默认都不用，免得占用应用里同样的快捷键）：表情面板、中英文标点、简繁切换、`Ctrl+空格` 切换中英文。
 
 ### 状态提示（照水杉输入法）
@@ -208,14 +208,17 @@ lrgpt2_nnlm.bin` | 可选：微信输入法的神经语言模型（用户自己�
 
 需要：Windows 10/11 x64、Visual Studio 2022 或更新版本的 C++ 生成工具与 Windows SDK、Python 3.11 与 Pillow、Git。Rust 和 Go 1.27.3 可以放在 `.local\toolchains`（不入库），构建脚本优先使用那里的版本。
 
-1. 生成词库数据（rime-ice + 词级语言模型，约 70 MB，放 `.local\data`）：
+1. 生成默认数据（白霜完整主库、万象核心词库、项目热词和词级语言模型，放 `.local\data`）：
 
-   ```bash
-   git clone --depth 1 https://github.com/iDvel/rime-ice.git .local/data-src/rime-ice
-   bash scripts/make-data.sh .local/data-src/rime-ice .local/data
+   ```powershell
+   python -X utf8 tools/make_default_data.py
    ```
 
-   脚本调用 `python3`。Windows 上它可能是应用商店的占位程序，需要让 `python3` 指向真正的 Python。
+   输入修订、归档摘要及模型摘要固定在 `third_party/manifests/default-data.json`。下载使用 aria2-next；未加入 PATH 时，将 `ARIA2_NEXT` 设为其完整路径。已校验的快照会复用，不依赖浮动 `latest`。模型不变时复用现有 `words.lm`，也可以用 `--model` 指定本地文件，摘要必须匹配。
+
+   同音同词保留白霜权重，万象只补缺词和额外读音；两库分别按既有引擎的词频量级归一化，最后合入项目热词。保留白霜主库引用的细胞词库，修正其 `extthot` 引用为实际的 `exthot`。两张大字表只补缺字，不参与常用组句。白霜 `corrections`、万象 `cuoyin` 依赖 Rime 的纠音提示，不纳入 FreeType。万象取字表、基础词、兼容读音、地名、名人和艺人六张默认核心表，不使用其程序代码或 `.gram` 模型。
+
+   `MANIFEST.json` 记录修订、转换输入、词条数和输出摘要。`LICENSE` 包含 GPL-3.0、CC BY 4.0 与 CC BY-SA 4.0 文本；万象的许可范围和第三方声明也随数据保留。更新源修订后须重新生成并验收，不把新词覆盖率或排序改善当成未经测试的保证。
 
 2. 构建固定测试安装器：
 
@@ -223,13 +226,14 @@ lrgpt2_nnlm.bin` | 可选：微信输入法的神经语言模型（用户自己�
    powershell -ExecutionPolicy Bypass -File windows\build.ps1
    ```
 
-   脚本先跑核心、服务进程、DLL 和设置界面测试，再构建服务进程、两种架构的 DLL 和 mygo 程序。安装器生成后，使用一次性测试进程验证复制前的进程结束步骤，全部通过后才更新固定安装器、`.sha256` 和 `build-info.json`。`build-info.json` 记录内部构建号、源码树（`git write-tree` 的结果）、工具链版本、组件和数据的 SHA-256。mygo 首次打包会下载 NSIS 3.13 到 `%LOCALAPPDATA%\mygo` 并校验摘要。
+   脚本先校验默认数据与固定修订是否一致，再跑词库合并、核心、服务进程、DLL 和设置界面测试，随后构建服务进程、两种架构的 DLL 和 mygo 程序。安装器生成后，使用一次性测试进程验证复制前的进程结束步骤，全部通过后才更新固定安装器、`.sha256` 和 `build-info.json`。`build-info.json` 记录内部构建号、源码树（`git write-tree` 的结果）、工具链版本、组件和数据摘要，以及白霜、万象修订和词条数。mygo 首次打包会下载 NSIS 3.13 到 `%LOCALAPPDATA%\mygo` 并校验摘要。
 
 单独运行测试：
 
 ```powershell
 cargo test -p wowtype-core --no-default-features
 cargo test -p freetype-protocol -p freetype-server -p freetype-tsf
+python -X utf8 -m unittest discover -s tests/data -v
 python -X utf8 -m unittest discover -s tests/windows -v
 cd windows\app; go vet ./...; go test ./...
 ```

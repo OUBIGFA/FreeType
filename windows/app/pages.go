@@ -511,7 +511,7 @@ func (s *settings) reportView(c *ui.Context) {
 func (s *settings) dictsPage(c *ui.Context) {
 	pageHeader(c, "词库", "导入的词参与组词和排序，不会混进你学到的词")
 	section(c, "主词库", func() {
-		current := "雾凇拼音（随安装包，默认）"
+		current := "白霜＋万象＋项目热词（默认）"
 		if s.config.Lexicon != "" {
 			current = s.config.Lexicon
 		}
@@ -530,7 +530,7 @@ func (s *settings) dictsPage(c *ui.Context) {
 			}
 		})
 	})
-	hint(c, "主词库是「拼音<Tab>词<Tab>词频」一行一条的 lexicon.tsv。万象拼音等 Rime 词库可以用 tools/rime2tsv.py、scripts/make-wanxiang.sh 转出来；换词库要几秒，学到的词不受影响。文件不在时用默认词库。")
+	hint(c, "默认使用白霜主词库、万象补充和项目热词。也可以选择「拼音<Tab>词<Tab>词频」一行一条的 lexicon.tsv；Rime 词库用 tools/rime2tsv.py 转换。换词库要几秒，学到的词不受影响。文件不在时用默认词库。")
 	section(c, "导入词库", func() {
 		s.settingRow(c, "dicts/导入词库", func() {
 			if ui.PrimaryButton(c, "导入词库…").Clicked() {

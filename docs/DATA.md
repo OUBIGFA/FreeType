@@ -3,6 +3,14 @@
 记录 WeType `imeData.bundle` 里各二进制格式已确认的结构。所有结论都来自
 静态分析 + 实际文件字节核对。
 
+## FreeType 默认数据
+
+FreeType 默认词库使用白霜完整主库、万象默认核心词库补缺和项目热词，不另叠加雾凇整库。固定修订、许可与归档摘要见 [默认数据输入](../third_party/manifests/default-data.json)，生成方法见 [Windows 构建说明](WINDOWS.md#构建)。
+
+两库分别归一化词频，同音同词保留白霜权重，万象只补缺词和额外读音。项目热词最后合入。两张白霜大字表只补缺字；不使用依赖 Rime 纠音提示的错音错字表或万象 `.gram` 模型。`SOURCE.txt` 和 `MANIFEST.json` 随安装包记录来源、改动、词条数和摘要。
+
+本页后面的 WeType 格式分析及雾凇基线评测保留作技术对照，不代表新默认词库的准确率或性能。
+
 ## 1. 词典容器（通用头部）
 
 `_wxime_dict_item`（24 字节，来自 `ResourceMgr::Impl::ConfigDicts`）：
@@ -403,7 +411,7 @@ kind 29 用同一套 cursor 接口没有子节点（API 不同）；kind 0 直�
 
 分析到此为止：**能调用官方引擎（可做 teacher），但导不出它的词库和语言模型**。
 可行路线是继续解 `LargeDictValueHuffmanCodec`。
-当前项目采用开源词库（rime-ice）+ 自建引擎，实测完整输入 top1 99.2%。
+上游雾凇词库与自建引擎基线曾测得完整输入 top1 99.2%；此结果不适用于 FreeType 当前白霜、万象和项目热词的合并词库。
 
 ### 14.6 法律边界
 

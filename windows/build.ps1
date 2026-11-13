@@ -86,11 +86,12 @@ $env:GOTOOLCHAIN = 'local'
 $env:GOFLAGS = '-modcacherw'
 
 Step 'Checking inputs'
-foreach ($name in 'lexicon.tsv', 'words.lm', 'english.txt', 'LICENSE', 'SOURCE.txt', 'VERSION') {
+foreach ($name in 'lexicon.tsv', 'words.lm', 'english.txt', 'LICENSE', 'SOURCE.txt', 'VERSION', 'MANIFEST.json', 'WANXIANG-LICENSE-SCOPE.md', 'WANXIANG-NOTICE.md') {
     if (-not (Test-Path (Join-Path $Data $name))) {
-        throw "Missing .local\data\$name. Generate the dictionary data first (docs/WINDOWS.md)."
+        throw "Missing .local\data\$name. Run python -X utf8 tools/make_default_data.py first (docs/WINDOWS.md)."
     }
 }
+Invoke-Native python @('-X', 'utf8', 'tools/make_default_data.py', '--check')
 $GoVersion = (& go version)
 if ($GoVersion -notmatch 'go1\.27\.3') { throw "Go 1.27.3 is required for mygo $MygoVersion, found: $GoVersion" }
 $GoMod = Get-Content -Raw (Join-Path $AppDir 'go.mod')
@@ -103,6 +104,7 @@ $env:FREETYPE_TEST_TEMP = $Scratch
 
 if (-not $SkipTests) {
     Step 'Running tests'
+    Invoke-Native python @('-X', 'utf8', '-m', 'unittest', 'discover', '-s', 'tests/data', '-v')
     Invoke-Native cargo @('test', '-p', 'wowtype-core', '--no-default-features')
     Invoke-Native cargo @('test', '-p', 'freetype-protocol', '-p', 'freetype-server', '-p', 'freetype-tsf')
     Invoke-Native go @('vet', './...') $AppDir
@@ -125,7 +127,7 @@ Copy-Item (Join-Path $Icons 'tray.png'), (Join-Path $Icons 'tray-16.png'), (Join
 Copy-Item (Join-Path $Icons 'freetype.ico') $Bin
 Copy-Item 'target\release\FreeTypeServer.exe', 'target\release\freetype_tsf.dll' $Bin
 Copy-Item 'target\i686-pc-windows-msvc\release\freetype_tsf.dll' (Join-Path $Bin 'x86')
-foreach ($name in 'lexicon.tsv', 'words.lm', 'english.txt', 'LICENSE', 'SOURCE.txt', 'VERSION') {
+foreach ($name in 'lexicon.tsv', 'words.lm', 'english.txt', 'LICENSE', 'SOURCE.txt', 'VERSION', 'MANIFEST.json', 'WANXIANG-LICENSE-SCOPE.md', 'WANXIANG-NOTICE.md') {
     Copy-Item (Join-Path $Data $name) (Join-Path $Resources 'data')
 }
 Copy-Item 'core\data\s2t.tsv' (Join-Path $Resources 'data')
@@ -159,9 +161,7 @@ try {
     Remove-Item Env:\GIT_INDEX_FILE
 }
 $Head = (& git rev-parse HEAD).Trim()
-$RimeCommit = ''
-$SourceText = Get-Content -Raw -Encoding UTF8 (Join-Path $Data 'SOURCE.txt')
-if ($SourceText -match '([0-9a-f]{40})') { $RimeCommit = $Matches[1] }
+$DataManifest = Get-Content -Raw -Encoding UTF8 (Join-Path $Data 'MANIFEST.json') | ConvertFrom-Json
 $Pillow = (& python -c 'import PIL; print(PIL.__version__)').Trim()
 
 $Info = [ordered]@{
@@ -187,7 +187,10 @@ $Info = [ordered]@{
         'bin/freetype.ico'             = Sha256 (Join-Path $Bin 'freetype.ico')
     }
     data           = [ordered]@{
-        rimeIceCommit  = $RimeCommit
+        frostCommit    = $DataManifest.sources[0].revision
+        wanxiangCommit = $DataManifest.sources[1].revision
+        manifestSha256 = Sha256 (Join-Path $Data 'MANIFEST.json')
+        counts         = $DataManifest.counts
         dataVersion    = (Get-Content -Raw (Join-Path $Data 'VERSION')).Trim()
         lexiconSha256  = Sha256 (Join-Path $Data 'lexicon.tsv')
         wordsLmSha256  = Sha256 (Join-Path $Data 'words.lm')

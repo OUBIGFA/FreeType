@@ -35,7 +35,7 @@ These images come from the FreeType installation on this computer. The General p
 
 The candidate window has four selected-candidate styles:
 
-<table>
+<table align="center">
 <tr>
 <td><img src="windows/assets/readme/candidate-pink.png" width="260" alt="Pink candidate window"><br>Pink (default)</td>
 <td><img src="windows/assets/readme/candidate-blue.png" width="260" alt="Blue candidate window"><br>Blue</td>
@@ -51,6 +51,7 @@ The candidate window has four selected-candidate styles:
 - **Local input. Your data stays on your computer.** The input engine, dictionaries, and learning data run locally. Normal Chinese input uses no network and sends no typed text to a server.
 - **It learns your choices.** Your selected words and word pairs affect the candidate order.
 - **It handles typing mistakes.** It can find the right word when nearby keys are pressed or two keys are reversed.
+- **It includes open dictionaries.** Baishuang is the main dictionary, supplemented by Wanxiang and project hotwords for everyday language, online terms, and specialist vocabulary.
 - **It moves your dictionaries with you.** It can import dictionaries and phrases from Shuishan, Sogou, Rime, and WowType.
 - **It gives you input choices.** Use full pinyin, seven double-pinyin schemes, fuzzy pinyin, and several page keys.
 - **It makes mixed text easier.** Use Chinese punctuation, paired punctuation, and spaces between Chinese and Latin text.

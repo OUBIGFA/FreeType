@@ -863,7 +863,7 @@ func TestMainLexiconCanBeChangedAndReset(t *testing.T) {
 	s, b := newTestSettings()
 	s.openTable = func(string) string { return `D:\dict\wanxiang\lexicon.tsv` }
 	tt := open(t, s, "词库")
-	if !tt.HasText("雾凇拼音（随安装包，默认）") {
+	if !tt.HasText("白霜＋万象＋项目热词（默认）") {
 		t.Fatalf("没有显示默认词库：%q", tt.Texts())
 	}
 	if err := tt.Click("选择文件…"); err != nil {
