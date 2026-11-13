@@ -186,16 +186,18 @@ impl ClientState {
         self.session.set_context(&self.context.clone());
     }
 
-    /// 上屏一段字：要加空格就在前面加，记进上文。
+    /// 上屏一段字：交界和段内的中英混输共用同一规则，再记进上文。
     fn emit(&mut self, text: &str, env: &Env) -> String {
         let flags = env.autospace_flags();
         let mut out = String::new();
-        if let (Some(prev), Some(next)) = (self.prev(), text.chars().next()) {
-            if flags != 0 && autospace::needs_space(prev, next, flags) {
+        let mut prev = self.prev();
+        for next in text.chars() {
+            if prev.is_some_and(|p| autospace::needs_space(p, next, flags)) {
                 out.push(' ');
             }
+            out.push(next);
+            prev = Some(next);
         }
-        out.push_str(text);
         self.remember(&out);
         out
     }

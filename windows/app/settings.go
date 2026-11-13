@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/egoist/mygo/ui"
 )
 
 // settings 是设置窗口的状态。界面在主线程上画；找服务进程的事放到 goroutine 里做，
@@ -27,31 +29,40 @@ type settings struct {
 	// 托盘图标开关改了（托盘程序跟着建或拿掉图标）。
 	onTray func(show bool)
 
-	page      string
-	loaded    bool
-	status    Status
-	statusErr string
-	config    Config
+	page                         string
+	loaded                       bool
+	status                       Status
+	statusErr                    string
+	config                       Config
+	settingQuery, locatedSetting string
+	revealSetting                bool
+	pageScroll, searchScroll     ui.ScrollState
+	locatedHandle                ui.Handle
 
 	// 字体列表（第一次打开候选窗页时取）。
 	fonts []string
 
 	dicts   []Dictionary
 	phrases []QuickPhrase
+	common  []string
 	words   []UserWord
 
-	newCode, newText, newWeight string
-	formError                   string
-	replacePhrases              bool
-	phraseQuery                 string
+	newCode, newText, newWeight         string
+	formError                           string
+	replacePhrases                      bool
+	phraseQuery                         string
+	newCommon, commonQuery, commonError string
+	replaceCommon                       bool
 
-	wordQuery    string
-	newWord      string
-	newPinyin    string
-	wordError    string
-	wordsLoaded  bool
-	confirmClear bool
-	confirmWipe  bool
+	wordQuery                   string
+	newWord                     string
+	newPinyin                   string
+	wordError                   string
+	wordsLoaded                 bool
+	confirmClear                bool
+	confirmWipe                 bool
+	confirmRestore              bool
+	restorePath, restoreSummary string
 
 	// 最近一次导入的结果。
 	report       string
@@ -95,6 +106,7 @@ func (s *settings) refresh() {
 		config, cerr := s.backend.Call(op("get_config"))
 		dicts, _ := s.backend.Call(op("list_dictionaries"))
 		phrases, _ := s.backend.Call(op("list_quick_phrases"))
+		common, commonErr := s.backend.Call(op("list_common_phrases"))
 		return func() {
 			s.statusErr = ""
 			if status.Status != nil {
@@ -106,6 +118,11 @@ func (s *settings) refresh() {
 			}
 			s.dicts = dicts.Dictionaries
 			s.phrases = phrases.QuickPhrases
+			if commonErr == nil {
+				s.common = common.CommonPhrases
+			} else {
+				s.notice = "读取常用语失败：" + commonErr.Error()
+			}
 		}
 	})
 }

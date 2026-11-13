@@ -432,6 +432,15 @@ pub enum Request {
         replace: bool,
     },
     ExportQuickPhrases { path: String },
+    /// 工具栏里的独立常用语，不使用拼音编码。
+    ListCommonPhrases,
+    SetCommonPhrases { phrases: Vec<String> },
+    ImportCommonPhrases {
+        path: String,
+        #[serde(default)]
+        replace: bool,
+    },
+    ExportCommonPhrases { path: String },
     ListDictionaries,
     /// 导入水杉格式词库文件，存为 `dicts\<name>.txt`。
     ImportDictionary { path: String, name: String },
@@ -442,6 +451,10 @@ pub enum Request {
     ExportLearning { path: String },
     /// 合并完整学习备份，不清空现有记录，也不重复累加次数。
     ImportLearning { path: String },
+    /// 全部设置和用户数据的版本化备份；校验预览不改动当前数据。
+    ExportSettings { path: String },
+    InspectSettingsBackup { path: String },
+    ImportSettings { path: String },
     /// 学到的词（用户词库）。
     ListUserWords,
     /// 忘掉这些学到的词（用户词库和选词习惯都去掉）。
@@ -601,6 +614,8 @@ pub struct Response {
     pub config: Option<Config>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quick_phrases: Option<Vec<QuickPhrase>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub common_phrases: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dictionaries: Option<Vec<Dictionary>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

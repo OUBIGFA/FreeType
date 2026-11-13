@@ -1,6 +1,7 @@
 //! FreeType 服务进程：常驻拼音引擎，经命名管道服务输入法 DLL 和设置程序。
 
 pub mod dictfmt;
+mod backup;
 pub mod host;
 pub mod input;
 pub mod raw;

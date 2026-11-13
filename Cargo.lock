@@ -237,6 +237,7 @@ name = "freetype-server"
 version = "0.0.1"
 dependencies = [
  "freetype-protocol",
+ "serde",
  "serde_json",
  "windows 0.62.2",
  "wowtype-core",

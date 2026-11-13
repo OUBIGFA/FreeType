@@ -53,7 +53,7 @@ func stroked(paths string) *ui.SVG {
 
 // 侧边栏图标（自己画的简单线条）。
 var icons = struct {
-	general, candidates, typing, features, shortcuts, dicts, phrases, learned, about *ui.SVG
+	general, candidates, typing, features, shortcuts, dicts, phrases, common, learned, about *ui.SVG
 }{
 	general:    stroked(`<path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/>`),
 	candidates: stroked(`<rect x="3" y="6" width="18" height="12" rx="2.5"/><path d="M7 12h3M13 12h4"/>`),
@@ -62,6 +62,7 @@ var icons = struct {
 	shortcuts:  stroked(`<rect x="3" y="3" width="8" height="8" rx="2"/><rect x="13" y="13" width="8" height="8" rx="2"/><path d="M13 7h4a2 2 0 0 1 2 2v2M11 17H7a2 2 0 0 1-2-2v-2"/>`),
 	dicts:      stroked(`<path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 21V5M8 7h7M8 11h5"/>`),
 	phrases:    stroked(`<path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12h5"/>`),
+	common:     stroked(`<path d="M4 4h16v14H8l-4 3z"/><path d="M8 8h8M8 11h8M8 14h5"/>`),
 	learned:    stroked(`<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/>`),
 	about:      stroked(`<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5h.01"/>`),
 }

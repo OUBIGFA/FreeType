@@ -17,6 +17,7 @@ type fakeBackend struct {
 	calls       []Request
 	config      Config
 	phrases     []QuickPhrase
+	common      []string
 	dicts       []Dictionary
 	words       []UserWord
 	mode        string
@@ -60,6 +61,17 @@ func (f *fakeBackend) Call(r Request) (Response, error) {
 		f.phrases = nil
 		_ = json.Unmarshal(raw, &f.phrases)
 		return Response{OK: true}, nil
+	case "list_common_phrases":
+		return Response{OK: true, CommonPhrases: f.common}, nil
+	case "set_common_phrases":
+		raw, _ := json.Marshal(r["phrases"])
+		_ = json.Unmarshal(raw, &f.common)
+		return Response{OK: true}, nil
+	case "import_common_phrases":
+		f.common = append(f.common, "导入常用语")
+		return Response{OK: true, Report: &ImportReport{Added: 1}}, nil
+	case "export_common_phrases":
+		return Response{OK: true, Report: &ImportReport{Added: len(f.common)}}, nil
 	case "list_dictionaries":
 		return Response{OK: true, Dictionaries: f.dicts}, nil
 	case "import_dictionary":
@@ -72,6 +84,16 @@ func (f *fakeBackend) Call(r Request) (Response, error) {
 	case "import_learning":
 		f.words = append(f.words, UserWord{Word: "恢复词", Pinyin: "hui fu ci", Freq: 3000})
 		return Response{OK: true, UserWords: f.words, Report: &ImportReport{Added: 3}}, nil
+	case "export_settings", "inspect_settings_backup":
+		return Response{OK: true, Report: &ImportReport{Added: 5, Note: "全部设置、1 份词库、1 条快捷短语、1 条常用语、2 条学到的词及使用记录"}}, nil
+	case "import_settings":
+		f.config.PageSize, f.config.TrayIcon = 9, false
+		f.dicts = []Dictionary{{Name: "恢复词库", Entries: 10}}
+		f.phrases = []QuickPhrase{{Code: "hf", Text: "恢复短语", Weight: 20}}
+		f.common = []string{"恢复常用语"}
+		f.words = []UserWord{{Word: "恢复词", Pinyin: "hui fu ci", Freq: 5000}}
+		c := f.config
+		return Response{OK: true, Config: &c, Status: &Status{Ready: true, Mode: "chinese"}, Dictionaries: f.dicts, QuickPhrases: f.phrases, CommonPhrases: f.common, UserWords: f.words, Report: &ImportReport{Added: 3}}, nil
 	case "forget_words":
 		raw, _ := json.Marshal(r["words"])
 		var gone []string
@@ -328,6 +350,214 @@ func TestPhraseListShowsAtMostTwelveRows(t *testing.T) {
 	}
 }
 
+func TestCommonPhrasesPageAddsMultilineAndRemoves(t *testing.T) {
+	s, b := newTestSettings()
+	b.common = []string{"原有常用语"}
+	s.refresh()
+	tt := open(t, s, "常用语")
+	if err := tt.Click("常用语内容"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Type("第一行\n第二行FreeType")
+	if err := tt.Click("添加常用语"); err != nil {
+		t.Fatal(err)
+	}
+	if len(b.common) != 2 || b.common[1] != "第一行\n第二行FreeType" {
+		t.Fatalf("应保存完整多行常用语：%v", b.common)
+	}
+	if !tt.HasText("第一行 ↵") {
+		t.Fatalf("应显示多行预览：%q", tt.Texts())
+	}
+	if err := tt.Click("删除常用语 1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(b.common) != 1 || b.common[0] != "第一行\n第二行FreeType" {
+		t.Fatalf("删除错误：%v", b.common)
+	}
+	if len(b.phrases) != 1 || b.phrases[0].Code != "dz" {
+		t.Fatal("常用语管理不应改动快捷短语")
+	}
+}
+
+func TestCommonPhrasesPageImportsAndExportsJson(t *testing.T) {
+	s, b := newTestSettings()
+	s.openFile = func(title string) string {
+		if title != "导入常用语" {
+			t.Fatalf("文件选择标题：%s", title)
+		}
+		return `C:\test\common.json`
+	}
+	s.saveFile = func(title, name string) string {
+		if title != "导出常用语" || name != "FreeType 常用语.json" {
+			t.Fatalf("导出格式：%s %s", title, name)
+		}
+		return `C:\test\export.json`
+	}
+	tt := open(t, s, "常用语")
+	if err := tt.Click("导入…"); err != nil {
+		t.Fatal(err)
+	}
+	if b.last("import_common_phrases")["path"] != `C:\test\common.json` || !tt.HasText("导入常用语") {
+		t.Fatalf("应导入并刷新常用语：%v %q", b.calls, tt.Texts())
+	}
+	if err := tt.Click("导出…"); err != nil {
+		t.Fatal(err)
+	}
+	if b.last("export_common_phrases")["path"] != `C:\test\export.json` {
+		t.Fatal("未导出常用语")
+	}
+}
+
+func TestFullSettingsImportNeedsConfirmationAndRefreshesAllData(t *testing.T) {
+	s, b := newTestSettings()
+	s.openFile = func(title string) string {
+		if title != "导入全部设置" {
+			t.Fatalf("导入标题：%s", title)
+		}
+		return `C:\test\settings.json`
+	}
+	var tray bool = true
+	s.onTray = func(show bool) { tray = show }
+	tt := open(t, s, "常规")
+	if err := tt.Click("导入全部设置"); err != nil {
+		t.Fatal(err)
+	}
+	if b.last("inspect_settings_backup") == nil || b.last("import_settings") != nil {
+		t.Fatal("确认前只能校验备份")
+	}
+	if err := tt.Click("导入并替换"); err != nil {
+		t.Fatal(err)
+	}
+	if b.last("import_settings")["path"] != `C:\test\settings.json` {
+		t.Fatal("导入路径错误")
+	}
+	if s.config.PageSize != 9 || tray || s.dicts[0].Name != "恢复词库" || s.phrases[0].Text != "恢复短语" || s.common[0] != "恢复常用语" || s.words[0].Word != "恢复词" {
+		t.Fatalf("导入后必须刷新全部数据与托盘开关：%+v", s)
+	}
+}
+
+func TestFullSettingsImportCancelAndInvalidFilePreserveCurrentData(t *testing.T) {
+	for _, invalid := range []bool{false, true} {
+		s, b := newTestSettings()
+		s.openFile = func(string) string { return `C:\test\settings.json` }
+		if invalid {
+			b.failRequest = "inspect_settings_backup"
+		}
+		tt := open(t, s, "常规")
+		if err := tt.Click("导入全部设置"); err != nil {
+			t.Fatal(err)
+		}
+		if !invalid {
+			if err := tt.Click("取消"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if b.last("import_settings") != nil || s.config.PageSize != 6 || len(s.phrases) != 1 {
+			t.Fatal("取消或无效备份不能更改当前数据")
+		}
+	}
+}
+
+func TestFullSettingsExportUsesPortableJson(t *testing.T) {
+	s, b := newTestSettings()
+	s.saveFile = func(title, name string) string {
+		if title != "导出全部设置" || name != "FreeType 全部设置.json" {
+			t.Fatalf("导出信息错误：%s %s", title, name)
+		}
+		return `C:\test\all.json`
+	}
+	tt := open(t, s, "常规")
+	if err := tt.Click("导出全部设置"); err != nil {
+		t.Fatal(err)
+	}
+	if b.last("export_settings")["path"] != `C:\test\all.json` {
+		t.Fatal("必须导出完整备份")
+	}
+}
+
+func TestSettingsSearchLocatesMatchingRowAcrossPages(t *testing.T) {
+	s, _ := newTestSettings()
+	tt := ui.NewTester(s.view, 1000, 540)
+	if err := tt.Click("搜索全部设置"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Type("自动加空格")
+	if err := tt.Click("定位 拼音与按键 / 中英文之间自动加空格"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if s.page != "typing" {
+		t.Fatalf("应跳转到拼音与按键：%s", s.page)
+	}
+	bounds, found := tt.Find("设置项：中英文之间自动加空格")
+	if !found || bounds.Y < 32 || bounds.Y+bounds.H > 540 || bounds.X < 236 {
+		t.Fatalf("应滚动到目标设置：%+v，存在=%v", bounds, found)
+	}
+}
+
+func TestSettingsSearchRevealsHiddenOptionsWithoutChangingConfig(t *testing.T) {
+	for _, title := range []string{"汉字和字母之间", "双拼方案", "自动隐藏", "中英文状态"} {
+		s, b := newTestSettings()
+		s.config.Autospace, s.config.Shuangpin, s.config.StatusBar = false, false, false
+		s.config.DefaultMode = "global"
+		tt := ui.NewTester(s.view, 1000, 540)
+		if err := tt.Click("搜索全部设置"); err != nil {
+			t.Fatal(err)
+		}
+		tt.Type(title)
+		page := "拼音与按键"
+		if title == "自动隐藏" || title == "中英文状态" {
+			page = "常规"
+		}
+		if err := tt.Click("定位 " + page + " / " + title); err != nil {
+			t.Fatal(err)
+		}
+		tt.Frame()
+		bounds, found := tt.Find("设置项：" + title)
+		if !found || bounds.Y < 32 || bounds.Y+bounds.H > 540 {
+			t.Fatalf("应能定位隐藏选项 %s：%+v", title, bounds)
+		}
+		if s.config.Autospace || s.config.Shuangpin || s.config.StatusBar || s.config.DefaultMode != "global" || b.last("set_config") != nil {
+			t.Fatal("搜索不能自行改变任何设置")
+		}
+	}
+}
+
+func TestSettingsSearchNoMatchesEscapeAndMinimumWindow(t *testing.T) {
+	s, _ := newTestSettings()
+	tt := ui.NewTester(s.view, 780, 540)
+	tt.Frame()
+	bounds, found := tt.Find("搜索全部设置")
+	if !found || bounds.X < 0 || bounds.X+bounds.W > 236 || bounds.Y+bounds.H > 540 {
+		t.Fatalf("侧边栏底部应显示搜索框：%+v", bounds)
+	}
+	if err := tt.Click("搜索全部设置"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Type("不存在的设置xyz")
+	if !tt.HasText("没有找到相关设置") {
+		t.Fatalf("应显示无结果提示：%q", tt.Texts())
+	}
+	tt.Key(0, ui.KeyEscape)
+	if !tt.HasText("中英文切换") {
+		t.Fatal("Esc 应退出搜索，返回当前页面")
+	}
+}
+
+func TestEverySettingsSearchResultHasARealTarget(t *testing.T) {
+	for _, item := range settingsItems {
+		t.Run(item.ID, func(t *testing.T) {
+			s, _ := newTestSettings()
+			s.locateSetting(item)
+			tt := ui.NewTester(s.view, 1000, 1400)
+			tt.Frame()
+			if _, found := tt.Find("设置项：" + item.Title); !found {
+				t.Fatalf("搜索结果没有对应的实际设置：%s", item.ID)
+			}
+		})
+	}
+}
+
 func TestAddWordWithAndWithoutPinyin(t *testing.T) {
 	s, b := newTestSettings()
 	tt := open(t, s, "学到的词")
@@ -561,6 +791,45 @@ func TestSnapshots(t *testing.T) {
 			}
 			f.Close()
 		}
+	}
+}
+
+func TestNewSettingsLayoutsSnapshots(t *testing.T) {
+	directory := os.Getenv("FREETYPE_SNAPSHOT_DIR")
+	if directory == "" {
+		t.Skip("FREETYPE_SNAPSHOT_DIR 没设")
+	}
+	for _, sample := range []struct {
+		name, target, query string
+		width, height       int
+	}{
+		{"backup-min-window", "general/全部设置和数据", "", 780, 540},
+		{"common-min-window", "common/导入或导出", "", 780, 540},
+		{"search-hidden-option", "typing/汉字和字母之间", "", 1000, 540},
+		{"mixed-original-style", "typing/中英文之间自动加空格", "", 1000, 600},
+		{"search-results", "", "中英 空格", 1000, 720},
+	} {
+		s, _ := newTestSettings()
+		s.config.Autospace = false
+		if sample.name == "mixed-original-style" {
+			s.config.Autospace = true
+		}
+		s.common = []string{"您好，欢迎使用 FreeType。", "第一行\n第二行"}
+		if sample.target != "" {
+			s.locateSetting(setting(sample.target))
+		}
+		s.settingQuery = sample.query
+		tt := ui.NewTester(s.view, sample.width, sample.height)
+		tt.Frame()
+		file, err := os.Create(filepath.Join(directory, sample.name+".png"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := png.Encode(file, tt.Image()); err != nil {
+			file.Close()
+			t.Fatal(err)
+		}
+		file.Close()
 	}
 }
 

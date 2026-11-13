@@ -7,6 +7,7 @@
 //! | `config.json` | 设置 |
 //! | `mode.json` | 全局模式下最后主动选择的中文/英文状态 |
 //! | `quick_phrases.txt` | 快捷短语，水杉格式 `编码<Tab>短语<Tab>权重` |
+//! | `common_phrases.json` | 工具栏常用语，JSON 数组保留多行内容 |
 //! | `dicts\*.txt` | 导入的词库，水杉格式 `词语<Tab>拼音<Tab>权重` |
 //! | `user.tsv`、`history.tsv` | 引擎学到的词和输入习惯 |
 //! | `emoji-recent.txt` | 最近用过的表情，一行一个 |
@@ -80,6 +81,21 @@ pub(crate) fn write_atomic(path: &Path, data: &str) -> io::Result<()> {
 fn read_text(path: &Path) -> io::Result<String> {
     let bytes = fs::read(path)?;
     String::from_utf8(bytes).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "文件不是 UTF-8 编码"))
+}
+
+/// 常用语完整校验后再保存；统一换行并去重，不丢掉短语内部的空白。
+pub(crate) fn normalize_common_phrases(phrases: Vec<String>) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    for (i, text) in phrases.into_iter().enumerate() {
+        let text = text.replace("\r\n", "\n");
+        if text.trim().is_empty() || text.contains('\0') {
+            return Err(format!("第 {} 条：常用语不能为空，也不能包含空字符", i + 1));
+        }
+        if !out.contains(&text) {
+            out.push(text);
+        }
+    }
+    Ok(out)
 }
 
 impl Store {
@@ -217,6 +233,67 @@ impl Store {
     pub fn export_quick_phrases(&self, path: &Path) -> Result<usize, String> {
         let phrases = self.load_quick_phrases();
         fs::write(path, msime::format_quick_phrases(&phrases)).map_err(|e| format!("写入文件失败：{e}"))?;
+        Ok(phrases.len())
+    }
+
+    pub fn load_common_phrases(&self) -> Result<Vec<String>, String> {
+        let path = self.dir.join("common_phrases.json");
+        let text = match read_text(&path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(format!("读取常用语失败：{e}")),
+        };
+        let phrases = serde_json::from_str(&text).map_err(|e| format!("常用语文件格式错误：{e}"))?;
+        normalize_common_phrases(phrases)
+    }
+
+    pub fn set_common_phrases(&self, phrases: Vec<String>) -> Result<(), String> {
+        let phrases = normalize_common_phrases(phrases)?;
+        let text = serde_json::to_string_pretty(&phrases).map_err(|e| e.to_string())?;
+        write_atomic(&self.dir.join("common_phrases.json"), &(text + "\n"))
+            .map_err(|e| format!("保存常用语失败：{e}"))
+    }
+
+    /// JSON 保留多行短语；纯文本按一行一条导入，空行不作短语。
+    pub fn import_common_phrases(&self, path: &Path, replace: bool) -> Result<ImportReport, String> {
+        let text = read_text(path).map_err(|e| format!("读取常用语失败：{e}"))?;
+        let text = text.trim_start_matches('\u{feff}').trim();
+        if text.is_empty() {
+            return Err("文件里没有常用语".into());
+        }
+        let incoming = if text.starts_with(['{', '[']) {
+            let data: serde_json::Value = serde_json::from_str(text).map_err(|e| format!("常用语备份格式错误：{e}"))?;
+            let phrases = if data.is_array() {
+                data
+            } else {
+                if data["format"] != "freetype-common-phrases" || data["version"] != 1 {
+                    return Err("不是支持的 FreeType 常用语备份".into());
+                }
+                data["phrases"].clone()
+            };
+            serde_json::from_value(phrases).map_err(|e| format!("常用语列表格式错误：{e}"))?
+        } else {
+            text.lines().filter(|line| !line.trim().is_empty()).map(str::to_string).collect()
+        };
+        let incoming = normalize_common_phrases(incoming)?;
+        let mut phrases = if replace { Vec::new() } else { self.load_common_phrases()? };
+        let before = phrases.len();
+        for phrase in incoming {
+            if !phrases.contains(&phrase) {
+                phrases.push(phrase);
+            }
+        }
+        let added = phrases.len() - before;
+        self.set_common_phrases(phrases)?;
+        Ok(ImportReport { added, ..ImportReport::default() })
+    }
+
+    pub fn export_common_phrases(&self, path: &Path) -> Result<usize, String> {
+        let phrases = self.load_common_phrases()?;
+        let text = serde_json::to_string_pretty(&serde_json::json!({
+            "format": "freetype-common-phrases", "version": 1, "phrases": phrases,
+        })).map_err(|e| e.to_string())?;
+        write_atomic(path, &(text + "\n")).map_err(|e| format!("写入常用语备份失败：{e}"))?;
         Ok(phrases.len())
     }
 

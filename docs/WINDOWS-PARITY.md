@@ -26,7 +26,7 @@ mygo 固定为 v0.9.0，本次核对时仍为最新发布版。
 | 候选窗、点击、隐藏、缩放 | Windows 自有无焦点弹出窗口；上游 macOS 使用系统文字排版 | `ui_render_tests.rs`：真实绘制、三种字体、四档缩放、三种排列；私有桌面真实窗口点击和隐藏 |
 | Shift、中英文、CapsLock | 上游外壳负责模式切换；Windows 在 `keys.rs`、`host.rs` 接入 | 左右 Shift、组合键、重复预判、按应用记忆、全局保存；全局切换使旧按键缓存失效 |
 | 按键预判 | Windows TSF 特有的“先询问、再执行”接口 | 预判副本不能学习或忘词；真正接受按键后才写学习记录；DLL 也不能提前改变组字状态 |
-| 中文标点、引号、自动加空格 | 复用 `core/src/symbols.rs`、`autospace.rs`；对照 fcitx5 外壳顺序 | 服务测试；成对标点和延后挪光标为 Windows 补充，真实应用兼容仍需下表验收 |
+| 中文标点、引号、自动加空格 | 复用 `core/src/symbols.rs`、`autospace.rs`；Windows 上屏入口也处理整段混输的内部边界 | 服务测试覆盖汉字与字母、数字独立开关和已有空白；真实应用兼容仍需下表验收 |
 | V 模式、数字转换、日期时间 | 复用核心计算器与日期时间候选 | 核心会话测试；Windows 使用系统本地时间 |
 | 工具栏、剪贴板、常用语、符号 | 对照 fcitx5 外壳；Windows 使用 `tools.rs` | 面板层级、搜索、数字选择、网格与翻页测试；剪贴板历史仍由用户主动开启 |
 | 表情快捷键与最近表情 | 对照上游 `isEmojiKey` 的开 / 关行为 | 再按同一快捷键关闭面板；预判不提前关闭；选中后记录最近表情 |
@@ -34,6 +34,7 @@ mygo 固定为 v0.9.0，本次核对时仍为最新发布版。
 | 快捷短语、外部词库、自己加词 | Windows 批量格式适配，再交给原引擎排序 | `msime.rs`、`dictfmt.rs`、`store.rs` 测试；上游 `custom.tsv` 与 Windows 文件格式不混用 |
 | 学习、删除、完整备份 | 上游学习引擎；FreeType 已有完整备份接口 | 核心、服务、管道测试；增加反复预判后仅学习一次、预判不删除记录的回归 |
 | 设置、提示、托盘与状态栏 | Windows 补充；Go 与 Rust 使用同一配置字段 | 设置页面行为测试、服务状态测试；浅色 / 深色设置页面截图测试 |
+| 设置搜索、独立常用语、全部设置备份 | Windows 补充，搜索与界面共用名称；学习数据复用核心备份格式 | 所有搜索结果有实际目标、隐藏选项不改设置；常用语多行往返；完整备份含未存盘学习、自定义主词库迁移和写入失败回滚；真实管道往返与重启测试 |
 | Windows 平台与安装器 | TSF x64 / x86、命名管道、mygo 和 NSIS | DLL 加载测试、管道端到端测试、安装前准备测试；统一入口 `windows/build.ps1` |
 
 上游来源：[WowType 固定基线](https://github.com/Gloridust/WowType/tree/5656e136e9f5fc32837c87bc1a2242ec159a32d7)、[本次核对的 main](https://github.com/Gloridust/WowType/tree/882bd335c0e1484c8e49e00a22c47431a5b9feb4)、[fcitx5 按键外壳](https://github.com/Gloridust/WowType/blob/882bd335c0e1484c8e49e00a22c47431a5b9feb4/fcitx5-addon/src/wowtype_engine.cpp)、[macOS 候选窗](https://github.com/Gloridust/WowType/blob/882bd335c0e1484c8e49e00a22c47431a5b9feb4/macos/Sources/App/CandidatePanel.swift)。

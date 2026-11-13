@@ -22,6 +22,7 @@ use wowtype_core::msime;
 use wowtype_core::Engine;
 
 use crate::dictfmt::{self, LexiconReading};
+use crate::backup;
 use crate::input::{session_config, ClientState, Env, Out};
 use crate::store::Store;
 use crate::tools::Page;
@@ -256,12 +257,21 @@ impl Host {
     }
 
     fn load_phrases(&mut self) {
-        self.phrases = self
-            .store
+        self.phrases = match self.store.load_common_phrases() {
+            Ok(phrases) => phrases.into_iter().map(|text| (String::new(), text)).collect(),
+            Err(error) => {
+                crate::log(&error);
+                Vec::new()
+            }
+        };
+        for phrase in self.store
             .load_quick_phrases()
             .into_iter()
-            .map(|p| (p.code, p.text))
-            .collect();
+        {
+            if !self.phrases.iter().any(|(_, text)| text == &phrase.text) {
+                self.phrases.push((phrase.code, phrase.text));
+            }
+        }
     }
 
     /// 快捷短语、导入的词库交给引擎（不用 &mut）。
@@ -870,6 +880,44 @@ impl Host {
         }
     }
 
+    fn export_settings(&self, path: &Path) -> Response {
+        let Some(engine) = self.engine.as_deref() else { return Response::error("词库还在载入，请稍后再试"); };
+        Self::report(backup::export(&self.store, &self.config, self.mode, &self.recent_emoji, engine, path))
+    }
+
+    fn import_settings(&mut self, path: &Path) -> Response {
+        let Some(engine) = self.engine.as_deref() else { return Response::error("词库还在载入，请稍后再试"); };
+        // 确认运行中引擎的学习状态可读，再准备文件；失败不能先覆盖其他设置。
+        if let Err(error) = engine.export_learning() { return Response::error(format!("读取当前学习记录失败：{error:#}")); }
+        let prepared = match backup::read(path) { Ok(data) => data, Err(error) => return Response::error(error) };
+        let cleanup_note = match prepared.restore_files(&self.store) { Ok(note) => note, Err(error) => return Response::error(error) };
+        engine.clear_learned();
+        if let Err(error) = engine.import_learning(&prepared.data.learning.to_string()) {
+            return Response::error(format!("备份文件已恢复，但输入引擎尚未更新：{error:#}。请重新打开 FreeType"));
+        }
+        self.dirty = false;
+        self.recent_emoji = prepared.data.recent_emoji.clone();
+        self.set_config(prepared.restored_config(&self.store));
+        // 同一路径的主词库内容也可能变了，不能只按路径字符串判断是否重新载入。
+        if prepared.data.main_lexicon.is_some() { self.lexicon_change = Some(self.config.lexicon.clone()); }
+        self.mode = prepared.data.mode;
+        self.app_modes.clear();
+        for client in self.clients.values_mut() {
+            client.pending = None;
+            client.state.clear();
+            client.state.set_before("");
+        }
+        self.notify_bar();
+        let mut report = prepared.report();
+        if let Some(note) = cleanup_note { report.note = Some(format!("{}；{note}", report.note.unwrap_or_default())); }
+        Response {
+            config: Some(self.config.clone()), status: Some(self.status()),
+            quick_phrases: Some(self.store.list_quick_phrases()), common_phrases: Some(prepared.data.common_phrases),
+            dictionaries: Some(self.store.list_dictionaries()), user_words: Some(self.user_words()), report: Some(report),
+            ..Response::ok()
+        }
+    }
+
     /// 处理一条请求；里面出了 panic 时记日志、丢掉这个连接的输入状态，不让服务进程退出。
     pub fn handle(&mut self, id: ClientId, request: Request) -> Response {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.handle_inner(id, request)));
@@ -951,6 +999,26 @@ impl Host {
                 dictionaries: Some(self.store.list_dictionaries()),
                 ..Response::ok()
             },
+            Request::ListCommonPhrases => match self.store.load_common_phrases() {
+                Ok(phrases) => Response { common_phrases: Some(phrases), ..Response::ok() },
+                Err(error) => Response::error(error),
+            },
+            Request::SetCommonPhrases { phrases } => {
+                let result = self.store.set_common_phrases(phrases);
+                self.done(result)
+            }
+            Request::ImportCommonPhrases { path, replace } => {
+                let result = self.store.import_common_phrases(Path::new(&path), replace);
+                if result.is_ok() {
+                    self.load_phrases();
+                }
+                Self::report(result)
+            }
+            Request::ExportCommonPhrases { path } => {
+                Self::report(self.store.export_common_phrases(Path::new(&path)).map(|added| ImportReport {
+                    added, ..ImportReport::default()
+                }))
+            }
             Request::ImportDictionary { path, name } => {
                 let reading = |words: &[String]| self.reading(words);
                 let response = Self::report(self.store.import_dictionary(Path::new(&path), &name, &reading));
@@ -988,6 +1056,9 @@ impl Host {
             }
             Request::ExportLearning { path } => self.export_learning(Path::new(&path)),
             Request::ImportLearning { path } => self.import_learning(Path::new(&path)),
+            Request::ExportSettings { path } => self.export_settings(Path::new(&path)),
+            Request::InspectSettingsBackup { path } => Self::report(backup::read(Path::new(&path)).map(|data| data.report())),
+            Request::ImportSettings { path } => self.import_settings(Path::new(&path)),
             Request::ListUserWords => Response {
                 user_words: Some(self.user_words()),
                 ..Response::ok()

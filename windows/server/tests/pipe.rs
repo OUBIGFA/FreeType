@@ -187,3 +187,33 @@ fn global_mode_survives_process_restart_and_keycaps_round_trip() {
     assert_eq!(status.mode, Mode::English);
     assert!(!restarted.key('n').handled, "新进程也沿用最后主动选择的英文状态");
 }
+
+#[test]
+fn common_phrases_and_all_settings_backup_round_trip_through_real_pipe() {
+    let mut server = Server::start("profile");
+    let mut conn = server.connect();
+    let started = Instant::now();
+    loop {
+        let status = conn.call(&Request::Hello { session: true, app: "profile.exe".into() }).status.unwrap();
+        if status.ready { break; }
+        assert!(started.elapsed() < Duration::from_secs(20), "词库未载入：{:?}", status.error);
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(conn.call(&Request::SetCommonPhrases { phrases: vec!["打tag\n下一行".into()] }).ok);
+    conn.key('v'); conn.key(' '); conn.key('2');
+    assert_eq!(conn.key('1').commit.as_deref(), Some("打 tag\n下一行"));
+    conn.call(&Request::AddUserWord { word: "阿特".into(), pinyin: "a te".into() });
+    let path = server.root.join("all.json").display().to_string();
+    assert!(conn.call(&Request::ExportSettings { path: path.clone() }).ok);
+    assert!(conn.call(&Request::SetCommonPhrases { phrases: Vec::new() }).ok);
+    assert!(conn.call(&Request::ClearLearned).ok);
+    assert!(conn.call(&Request::InspectSettingsBackup { path: path.clone() }).ok);
+    let restored = conn.call(&Request::ImportSettings { path });
+    assert!(restored.ok, "{:?}", restored.error);
+    assert_eq!(restored.common_phrases.unwrap(), vec!["打tag\n下一行"]);
+    assert!(restored.user_words.unwrap().iter().any(|word| word.word == "阿特"));
+    drop(conn);
+    server.restart();
+    let mut conn = server.connect();
+    assert_eq!(conn.call(&Request::ListCommonPhrases).common_phrases.unwrap(), vec!["打tag\n下一行"]);
+}
