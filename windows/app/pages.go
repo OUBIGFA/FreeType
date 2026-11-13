@@ -171,12 +171,14 @@ func (s *settings) generalPage(c *ui.Context) {
 		row(c, "切换键", "单按一下 Shift 在中文和英文之间切换", func() {
 			changed = choose(c, "切换键", shiftToggles, &s.config.ShiftToggle, 200) || changed
 		})
-		row(c, "默认状态", "开机后、切到一个新应用时的状态", func() {
+		row(c, "默认状态", "选「全局」时，所有应用沿用最后主动切换的中英文状态，重启后也保留", func() {
 			changed = choose(c, "默认状态", modes, &s.config.DefaultMode, 200) || changed
 		})
-		row(c, "中英文状态", "选「每个应用分别记住」时，每个程序保留各自上次的中英文状态", func() {
-			changed = choose(c, "中英文状态", modeScopes, &s.config.ModeScope, 200) || changed
-		})
+		if s.config.DefaultMode != "global" {
+			row(c, "中英文状态", "选「每个应用分别记住」时，每个程序保留各自上次的中英文状态", func() {
+				changed = choose(c, "中英文状态", modeScopes, &s.config.ModeScope, 200) || changed
+			})
+		}
 	})
 	section(c, "状态提示", func() {
 		changed = switchRow(c, "显示托盘图标", "在任务栏通知区域显示 FreeType 图标，右键可切换状态、打开设置；关掉后可从开始菜单打开设置", &s.config.TrayIcon) || changed
@@ -314,7 +316,7 @@ func (s *settings) candidatePreview(c *ui.Context) {
 						label, text = style.text, style.text
 					}
 					item.Children(func() {
-						ui.Text(c, fmt.Sprint(i+1)).Font(family).FontSize(size * 0.78).TextColor(label)
+						ui.Text(c, fmt.Sprint((i+1)%10)).Font(family).FontSize(size * 0.78).TextColor(label)
 						ui.Text(c, w).Font(family).FontSize(size).TextColor(text)
 					})
 				}

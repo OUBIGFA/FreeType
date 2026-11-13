@@ -2,16 +2,17 @@
 #![cfg(windows)]
 
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use freetype_protocol::{decode, encode, pipe_name, Frame, Key, Request, Response};
+use freetype_protocol::{decode, encode, pipe_name, DefaultMode, Frame, Key, Mode, Request, Response};
 
 struct Server {
     root: PathBuf,
     pipe: String,
     child: std::process::Child,
+    instance: String,
 }
 
 impl Server {
@@ -22,20 +23,34 @@ impl Server {
         std::fs::create_dir_all(&resources).unwrap();
         std::fs::write(
             resources.join("lexicon.tsv"),
-            "ni hao\t你好\t1000\nni\t你\t900\nhao\t好\t800\n",
+            "ni hao\t你好\t1000\nni\t你\t900\nhao\t好\t800\nba\t八\t900\nba\t巴\t1000\n",
         )
         .unwrap();
         let instance = format!("e2e-{tag}-{}", std::process::id());
         let sid = freetype_server::pipe::current_user_sid().unwrap();
         let pipe = format!("{}-{instance}", pipe_name(&sid));
-        let child = Command::new(env!("CARGO_BIN_EXE_FreeTypeServer"))
-            .env("FREETYPE_INSTANCE", &instance)
+        let child = Self::launch(&root, &instance);
+        Self { root, pipe, child, instance }
+    }
+
+    fn launch(root: &Path, instance: &str) -> std::process::Child {
+        Command::new(env!("CARGO_BIN_EXE_FreeTypeServer"))
+            .env("FREETYPE_INSTANCE", instance)
             .env("FREETYPE_DATA_DIR", root.join("data"))
-            .env("FREETYPE_RESOURCE_DIR", &resources)
+            .env("FREETYPE_RESOURCE_DIR", root.join("res"))
             .env("XDG_CACHE_HOME", root.join("cache"))
             .spawn()
-            .unwrap();
-        Self { root, pipe, child }
+            .unwrap()
+    }
+
+    fn restart(&mut self) {
+        assert!(self.connect().call(&Request::Shutdown).ok);
+        let started = Instant::now();
+        while self.child.try_wait().unwrap().is_none() {
+            assert!(started.elapsed() < Duration::from_secs(5), "服务进程没有退出");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        self.child = Self::launch(&self.root, &self.instance);
     }
 
     fn connect(&self) -> Connection {
@@ -138,4 +153,37 @@ fn typing_through_the_pipe() {
         std::thread::sleep(Duration::from_millis(50));
     }
     assert!(server.root.join("data").join("quick_phrases.txt").exists());
+}
+
+#[test]
+fn global_mode_survives_process_restart_and_keycaps_round_trip() {
+    let mut server = Server::start("global-keycap");
+    let mut first = server.connect();
+    let started = Instant::now();
+    loop {
+        let status = first.call(&Request::Hello { session: true, app: "first.exe".into() }).status.unwrap();
+        if status.ready { break; }
+        assert!(started.elapsed() < Duration::from_secs(20), "词库未载入：{:?}", status.error);
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    first.key('b');
+    let frame = first.key('a');
+    let index = frame.candidates.iter().position(|s| s == "8️⃣").expect("应保留上游数字表情");
+    let selected = first.call(&Request::Select { index }).frame.unwrap();
+    assert_eq!(selected.commit.as_deref(), Some("8️⃣"), "跨管道仍是完整的表情序列");
+    let mut config = first.call(&Request::GetConfig).config.unwrap();
+    config.default_mode = DefaultMode::Global;
+    config.mode_scope = "app".into();
+    assert!(first.call(&Request::SetConfig { config }).ok);
+    assert_eq!(first.call(&Request::ToggleMode { shift: None }).frame.unwrap().mode, Mode::English);
+    let mut second = server.connect();
+    second.call(&Request::Hello { session: true, app: "second.exe".into() });
+    assert!(!second.key('n').handled, "另一个应用立即沿用英文状态");
+    drop(first);
+    drop(second);
+    server.restart();
+    let mut restarted = server.connect();
+    let status = restarted.call(&Request::Hello { session: true, app: "third.exe".into() }).status.unwrap();
+    assert_eq!(status.mode, Mode::English);
+    assert!(!restarted.key('n').handled, "新进程也沿用最后主动选择的英文状态");
 }

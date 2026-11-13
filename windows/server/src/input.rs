@@ -516,6 +516,8 @@ impl ClientState {
             }
             keysym::LEFT | keysym::UP => raw.move_cursor(true),
             keysym::RIGHT | keysym::DOWN | keysym::TAB => raw.move_cursor(false),
+            // 这些键没有邮箱正文含义，和候选框的翻页箭头使用同一入口。
+            keysym::PAGE_UP | keysym::PAGE_DOWN => return self.page(key.keysym == keysym::PAGE_DOWN, env),
             keysym::KP_DECIMAL => raw.push('.'),
             sym => {
                 let c = char::from_u32(sym)

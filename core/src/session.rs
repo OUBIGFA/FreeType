@@ -374,6 +374,9 @@ pub struct Session<'e> {
     last_choice: Option<Candidate>,
     /// 这次调用忘掉了学过的词（frame 取走）。
     forgot: bool,
+    /// Windows 预判副本：Some(false) 尚未遇到写操作，Some(true) 必须在实际按键时重算。
+    /// 克隆会话仍共享引擎，不能让预判提前学习或删除记录。
+    preview: Option<bool>,
 }
 
 impl Default for Session<'_> {
@@ -395,6 +398,7 @@ impl Default for Session<'_> {
             pending: None,
             last_choice: None,
             forgot: false,
+            preview: None,
         }
     }
 }
@@ -413,6 +417,27 @@ impl std::fmt::Debug for Session<'_> {
 impl<'e> Session<'e> {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// 非破坏性按键预判。只复制编辑状态，用户学习数据仍由真正接受按键的会话修改。
+    pub fn preview(&self) -> Self {
+        let mut preview = self.clone();
+        preview.preview = Some(false);
+        preview
+    }
+
+    /// 没有触及学习数据的预判可以直接接纳，省去重复算候选；否则调用方要对原会话重放按键。
+    pub fn accept_preview(&mut self) -> bool {
+        self.preview.take() == Some(false)
+    }
+
+    fn defer_learning(&mut self) -> bool {
+        if let Some(changed) = &mut self.preview {
+            *changed = true;
+            true
+        } else {
+            false
+        }
     }
 
     /// 带引擎建会话。
@@ -568,7 +593,9 @@ impl<'e> Session<'e> {
             return None;
         }
         if let Some(digit) = key.digit() {
-            // 数字按当前页选词
+            // 数字按当前页选词；Windows 可显示 10 个，0 对应第 10 个。
+            // 不足 10 个时仍然只吃掉 0，计算器已在前面的分支处理。
+            let digit = if digit == 0 { 10 } else { digit };
             let (start, len) = self.page_range(n);
             if (1..=len).contains(&digit) {
                 self.choose_now(start + digit - 1);
@@ -820,8 +847,10 @@ impl<'e> Session<'e> {
         let Some(index) = self.current_index() else {
             return;
         };
-        let chosen = &self.candidates[index];
-        if chosen.kind != CandidateKind::Word || !engine.forget_word(&chosen.text) {
+        if self.candidates[index].kind != CandidateKind::Word || self.defer_learning() {
+            return;
+        }
+        if !engine.forget_word(&self.candidates[index].text) {
             return;
         }
         self.forgot = true;
@@ -1282,20 +1311,26 @@ impl<'e> Session<'e> {
     }
 
     /// 记一次选词。上文和算候选时一样（已上屏的字 + 已选的词）。
-    fn learn(&self, word: &str, pinyin: &str) {
+    fn learn(&mut self, word: &str, pinyin: &str) {
         let Some(engine) = self.engine else {
             return;
         };
+        if self.defer_learning() {
+            return;
+        }
         let context = self.context.clone() + &self.selected_text();
         engine.set_context(utf8_tail(&context, CONTEXT_BYTES));
         engine.record_selection_with_pinyin(word, Some(pinyin).filter(|p| !p.is_empty()));
     }
 
     /// 记分几次选出来拼成的词，见 [`Engine::record_composed_word`]。上文是还没选词时的上文。
-    fn learn_composed(&self, word: &str, pinyin: &str) {
+    fn learn_composed(&mut self, word: &str, pinyin: &str) {
         let Some(engine) = self.engine else {
             return;
         };
+        if self.defer_learning() {
+            return;
+        }
         engine.set_context(utf8_tail(&self.context, CONTEXT_BYTES));
         engine.record_composed_word(word, pinyin);
     }

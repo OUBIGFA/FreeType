@@ -170,6 +170,46 @@ func TestGeneralPageShowsStatusAndSavesWholeConfig(t *testing.T) {
 	}
 }
 
+func TestGlobalDefaultChoiceSavesAndHidesConflictingScope(t *testing.T) {
+	s, b := newTestSettings()
+	tt := open(t, s, "")
+	chooseDefault := func(value string) {
+		t.Helper()
+		for _, control := range tt.AccessAll() {
+			if control.Name == "默认状态" && control.Focusable {
+				r := control.Bounds
+				tt.ClickAt(r.X+r.W/2, r.Y+r.H/2)
+				if err := tt.Click(value); err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+		}
+		t.Fatal("没有默认状态下拉框")
+	}
+	chooseDefault("全局")
+	tt.Frame()
+	if s.config.DefaultMode != "global" || b.config.DefaultMode != "global" {
+		t.Fatalf("全局选择没有保存：%+v", s.config)
+	}
+	if _, found := tt.Find("中英文状态"); found {
+		t.Fatal("全局状态下不应再显示按应用记忆的冲突选项")
+	}
+	if err := tt.Click("切换输入框时提示"); err != nil {
+		t.Fatal(err)
+	}
+	s.refresh()
+	tt.Frame()
+	if s.config.DefaultMode != "global" {
+		t.Fatal("保存其他设置后丢失了全局选择")
+	}
+	chooseDefault("英文")
+	tt.Frame()
+	if _, found := tt.Find("中英文状态"); !found || s.config.DefaultMode != "english" {
+		t.Fatal("固定英文默认状态应仍允许按应用记忆")
+	}
+}
+
 func TestTypingPageFuzzyGroups(t *testing.T) {
 	s, b := newTestSettings()
 	tt := open(t, s, "拼音与按键")

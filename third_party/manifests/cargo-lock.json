@@ -1,5 +1,5 @@
 {
-  "lockSha256": "e6c443770f981b795df72a65656eb3b08680ab39e0ee0baf8d825c529d3ee206",
+  "lockSha256": "f33429be97c022f867cb926c79216f95a1c9c2be683448293953e5e40eab6b85",
   "packages": [
     {
       "name": "aho-corasick",
@@ -450,6 +450,11 @@
       "name": "unicode-ident",
       "version": "1.0.27",
       "checksum": "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
+    },
+    {
+      "name": "unicode-segmentation",
+      "version": "1.13.3",
+      "checksum": "c6f5d3c3b1bf09027a88a6bc961fc00497d651009560b5463668dc81b0fa87a8"
     },
     {
       "name": "walkdir",

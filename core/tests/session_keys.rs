@@ -693,6 +693,26 @@ fn shown_texts(session: &mut Session) -> Vec<String> {
 }
 
 #[test]
+fn zero_selects_the_tenth_visible_candidate_on_ten_item_pages() {
+    for sym in [keysym::DIGIT_0, keysym::KP_0] {
+        for next_page in [false, true] {
+            let mut session = with(many_engine());
+            session.configure(Config { page_size: 10, emoji_suggest: false, ..Config::default() });
+            type_keys(&mut session, "shi");
+            if next_page { type_keys(&mut session, "<pgdn>"); }
+            let shown = shown_texts(&mut session);
+            assert_eq!(shown.len(), 10);
+            let frame = session.key(&Key::press(sym));
+            assert_eq!(frame.commit.as_ref(), Some(&shown[9]), "0 应选当前页显示的第 10 个候选");
+            assert!(!session.composing());
+        }
+    }
+    let mut session = with(many_engine());
+    let frame = type_keys(&mut session, "v10+2<sp>");
+    assert_eq!(frame.commit.as_deref(), Some("12"), "计算器里的 0 仍是数字正文");
+}
+
+#[test]
 fn space_commits_cursor_candidate() {
     // key_harness：「空格上屏首选」「右键移光标后空格上屏光标处」
     let (mut session, all) = default_paged();

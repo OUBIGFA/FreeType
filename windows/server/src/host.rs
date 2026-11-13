@@ -8,14 +8,14 @@
 //! 学到的词，以及通知桌面上的状态栏（[`Desktop`]）。
 //!
 //! TSF 先问「要不要这个键」（test）再真正按下：test 在会话副本上算一遍并记下结果，
-//! 紧接着的真按键直接用这份结果，不算两遍。test 说不要的键不会再真按，这时副本直接留下
+//! 普通编辑键直接接纳这份结果；涉及学习、删除记录的键只在真正按下时执行。test 说不要的键不会再真按，这时副本直接留下
 //! （交给应用的字记进了上文）。
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use freetype_protocol::{
-    modifier, Command, Config, Frame, ImportReport, Key, Mode, Request, Response, Status, UserWord,
+    modifier, Command, Config, DefaultMode, Frame, ImportReport, Key, Mode, Request, Response, Status, UserWord,
     PROTOCOL_VERSION,
 };
 use wowtype_core::msime;
@@ -65,7 +65,7 @@ pub struct Host {
     engine_error: Option<String>,
     store: Store,
     config: Config,
-    /// 全局的中英文状态（mode_scope 是 global 时用）。
+    /// 最后主动选择的中英文状态；全局模式和没有输入焦点时使用。
     mode: Mode,
     /// 按应用记的中英文状态（mode_scope 是 app 时用）。
     app_modes: HashMap<String, Mode>,
@@ -170,7 +170,7 @@ impl Host {
             clients: HashMap::new(),
             engine: None,
             engine_error: None,
-            mode: config.default_mode,
+            mode: config.default_mode.resolve(store.load_mode()),
             config,
             store,
             app_modes: HashMap::new(),
@@ -287,6 +287,7 @@ impl Host {
     }
 
     fn set_config(&mut self, config: Config) {
+        let current_mode = self.current_mode();
         let old_scope = self.config.mode_scope.clone();
         let old_lexicon = self.config.lexicon.clone();
         self.config = config.sanitized();
@@ -296,6 +297,10 @@ impl Host {
         if self.config.mode_scope != old_scope {
             self.app_modes.clear();
         }
+        // 切到全局时沿用当前应用的状态；改变范围也不应突然中英翻转。
+        if self.config.default_mode == DefaultMode::Global || self.config.mode_scope != old_scope {
+            self.mode = current_mode;
+        }
         self.detach();
         if let Some(engine) = self.engine.as_deref_mut() {
             configure_engine(engine, &self.config);
@@ -303,6 +308,16 @@ impl Host {
         self.attach();
         self.apply_user_data();
         self.notify_bar();
+    }
+
+    fn save_config(&mut self, config: Config) -> Result<(), String> {
+        let config = config.sanitized();
+        if config.default_mode == DefaultMode::Global && self.config.default_mode != DefaultMode::Global {
+            self.store.save_mode(self.current_mode()).map_err(|e| format!("保存中英文状态失败：{e}"))?;
+        }
+        self.store.save_config(&config).map_err(|e| format!("保存设置失败：{e}"))?;
+        self.set_config(config);
+        Ok(())
     }
 
     /// 改一项设置并存盘（快捷键、状态栏切换的）。
@@ -348,29 +363,36 @@ impl Host {
     }
 
     fn mode_of(&self, app: &str) -> Mode {
-        if self.config.mode_scope == "app" {
-            self.app_modes.get(app).copied().unwrap_or(self.config.default_mode)
+        if self.config.default_mode != DefaultMode::Global && self.config.mode_scope == "app" {
+            self.app_modes.get(app).copied().unwrap_or(self.config.default_mode.resolve(self.mode))
         } else {
             self.mode
         }
     }
 
-    fn set_mode(&mut self, app: &str, mode: Mode) {
-        if self.config.mode_scope == "app" {
-            self.app_modes.insert(app.to_string(), mode);
-        } else {
-            self.mode = mode;
+    fn set_mode(&mut self, app: &str, mode: Mode) -> Result<(), String> {
+        if self.config.default_mode == DefaultMode::Global {
+            self.store.save_mode(mode).map_err(|e| format!("保存中英文状态失败：{e}"))?;
         }
+        if self.config.default_mode != DefaultMode::Global && self.config.mode_scope == "app" {
+            self.app_modes.insert(app.to_string(), mode);
+        }
+        // 打开设置后原应用会失焦；仍需保留最后的主动选择，供启用全局时沿用。
+        self.mode = mode;
+        // 别的连接（托盘、其他应用）也能切状态，旧状态下缓存的按键结果随之作废。
+        for client in self.clients.values_mut() {
+            client.pending = None;
+        }
+        Ok(())
     }
 
     fn app_of(&self, id: ClientId) -> String {
         self.clients.get(&id).map(|c| c.state.app.clone()).unwrap_or_default()
     }
 
-    /// 状态栏、托盘看的状态：正在用的输入框所在应用的。
+    /// 状态栏、托盘看的状态：有焦点时取当前应用，否则保留最后的主动选择。
     fn current_mode(&self) -> Mode {
-        let app = self.focused.map(|id| self.app_of(id)).unwrap_or_default();
-        self.mode_of(&app)
+        self.focused.map(|id| self.mode_of(&self.app_of(id))).unwrap_or(self.mode)
     }
 
     fn notify_bar(&mut self) {
@@ -519,7 +541,15 @@ impl Host {
         Some(match action {
             1 => self.toggle_punct(id),
             2 => self.toggle_traditional(id),
-            3 => self.with_client(id, |state, env| state.open_tool(Page::Emoji, env)),
+            3 => self.with_client(id, |state, env| {
+                // 和上游一样，同一个表情快捷键再次按下时关闭面板。
+                if state.tool.as_ref().is_some_and(|tool| tool.page == Page::Emoji) {
+                    state.tool = None;
+                    state.current(true, env)
+                } else {
+                    state.open_tool(Page::Emoji, env)
+                }
+            }),
             _ => self.toggle_mode(id, None),
         })
     }
@@ -547,32 +577,35 @@ impl Host {
         let real = Key { test: false, ..key };
         if key.test {
             let mut state = client.state.clone();
+            state.session = state.session.preview();
             if let Some(before) = &before {
                 state.set_before(before);
             }
             let out = state.key(&real, &env);
-            let frame = out.frame.clone();
+            let mut frame = out.frame.clone();
             if frame.handled {
                 client.pending = Some((real, state, out));
-                return self.finish(mode, Out { frame, ..Out::default() });
+                self.style(&mut frame, mode);
+                return Response::with_frame(frame);
             }
             // 不要的键不会再真按：交给应用的字记进上文
             client.pending = None;
-            client.state = state;
-            return self.finish(mode, Out { frame, ..Out::default() });
-        }
-        let out = match client.pending.take() {
-            Some((pending, state, out)) if pending == real && before.is_none() => {
+            if state.session.accept_preview() {
                 client.state = state;
-                out
             }
-            _ => {
-                if let Some(before) = &before {
-                    client.state.set_before(before);
-                }
-                client.state.key(&real, &env)
+            self.style(&mut frame, mode);
+            return Response::with_frame(frame);
+        }
+        if let Some((pending, mut state, out)) = client.pending.take() {
+            if pending == real && before.is_none() && state.session.accept_preview() {
+                client.state = state;
+                return self.finish(mode, out);
             }
-        };
+        }
+        if let Some(before) = &before {
+            client.state.set_before(before);
+        }
+        let out = client.state.key(&real, &env);
         self.finish(mode, out)
     }
 
@@ -595,11 +628,14 @@ impl Host {
             Some(client) => client.state.app.clone(),
             None => self.focused.map(|f| self.app_of(f)).unwrap_or_default(),
         };
-        let mode = match self.mode_of(&app) {
+        let current = if app.is_empty() { self.current_mode() } else { self.mode_of(&app) };
+        let mode = match current {
             Mode::Chinese => Mode::English,
             Mode::English => Mode::Chinese,
         };
-        self.set_mode(&app, mode);
+        if let Err(error) = self.set_mode(&app, mode) {
+            return Response::error(error);
+        }
         let hint = self.config.hint_on_toggle.then(|| mode_hint(mode));
         let engine = self.engine_ref();
         let out = match self.clients.get_mut(&id) {
@@ -879,15 +915,14 @@ impl Host {
                 config: Some(self.config.clone()),
                 ..Response::ok()
             },
-            Request::SetConfig { config } => match self.store.save_config(&config.clone().sanitized()) {
+            Request::SetConfig { config } => match self.save_config(config) {
                 Ok(()) => {
-                    self.set_config(config);
                     Response {
                         config: Some(self.config.clone()),
                         ..Response::ok()
                     }
                 }
-                Err(e) => Response::error(format!("保存设置失败：{e}")),
+                Err(e) => Response::error(e),
             },
             Request::ListQuickPhrases => Response {
                 quick_phrases: Some(self.store.list_quick_phrases()),

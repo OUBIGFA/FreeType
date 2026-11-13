@@ -354,7 +354,7 @@ fn per_app_mode_scope() {
     host.handle(1, Request::ToggleMode { shift: None });
     assert!(!press(&mut host, 'a' as u32).handled, "记事本切成英文");
     assert!(key_with(&mut host, 2, 'a' as u32, 0).handled, "另一个应用还是中文");
-    configure(&mut host, |c| c.default_mode = Mode::English);
+    configure(&mut host, |c| c.default_mode = DefaultMode::English);
     host.handle(
         3,
         Request::Hello {
@@ -363,6 +363,141 @@ fn per_app_mode_scope() {
         },
     );
     assert!(!key_with(&mut host, 3, 'a' as u32, 0).handled, "新应用用默认的英文");
+    cleanup(&host);
+}
+
+#[test]
+fn global_default_keeps_manual_mode_across_apps_settings_and_restart() {
+    let mut host = host("global-default");
+    // 配置经由真实 JSON 协议读取，旧的中文、英文写法继续兼容。
+    let parsed = serde_json::from_str::<Config>(r#"{"default_mode":"global","mode_scope":"app"}"#);
+    assert!(parsed.is_ok(), "默认状态必须接受全局选项：{parsed:?}");
+    let response = host.handle(1, Request::SetConfig { config: parsed.unwrap() });
+    assert!(response.ok, "{response:?}");
+    let frame = host.handle(1, Request::ToggleMode { shift: None }).frame.unwrap();
+    assert_eq!(frame.mode, Mode::English);
+    host.handle(1, Request::Focus { active: false, before: None });
+    host.handle(2, Request::Hello { session: true, app: "browser.exe".into() });
+    let focused = host.handle(2, Request::Focus { active: true, before: None }).frame.unwrap();
+    assert_eq!(focused.mode, Mode::English, "全局模式不受旧的按应用设置影响");
+    assert!(!key_with(&mut host, 2, 'a' as u32, 0).handled);
+    configure(&mut host, |c| c.font_size = 22);
+    assert_eq!(host.handle(2, Request::Status).status.unwrap().mode, Mode::English);
+
+    let dir = host.data_dir();
+    drop(host);
+    let mut restarted = Host::new(Store::new(dir));
+    restarted.connect(3, "new.exe".into());
+    assert_eq!(restarted.handle(3, Request::Status).status.unwrap().mode, Mode::English);
+    let frame = restarted.handle(3, Request::ToggleMode { shift: None }).frame.unwrap();
+    assert_eq!(frame.mode, Mode::Chinese);
+    let dir = restarted.data_dir();
+    drop(restarted);
+    let mut restarted = Host::new(Store::new(dir));
+    assert_eq!(restarted.handle(3, Request::Status).status.unwrap().mode, Mode::Chinese);
+    cleanup(&restarted);
+}
+
+#[test]
+fn selecting_global_default_keeps_the_active_apps_current_mode() {
+    let mut host = host("enable-global");
+    configure(&mut host, |c| c.mode_scope = "app".into());
+    host.handle(1, Request::ToggleMode { shift: None });
+    host.handle(1, Request::Focus { active: true, before: None });
+    let mut json = serde_json::to_value(host.config()).unwrap();
+    json["default_mode"] = serde_json::json!("global");
+    let config = serde_json::from_value::<Config>(json);
+    assert!(config.is_ok(), "默认状态必须接受全局选项");
+    assert!(host.handle(1, Request::SetConfig { config: config.unwrap() }).ok);
+    assert_eq!(host.handle(1, Request::Status).status.unwrap().mode, Mode::English);
+    let dir = host.data_dir();
+    drop(host);
+    let mut restarted = Host::new(Store::new(dir));
+    assert_eq!(restarted.handle(1, Request::Status).status.unwrap().mode, Mode::English);
+    cleanup(&restarted);
+}
+
+#[test]
+fn selecting_global_in_settings_after_focus_leaves_keeps_last_manual_mode() {
+    let mut host = host("global-after-blur");
+    configure(&mut host, |c| c.mode_scope = "app".into());
+    host.handle(1, Request::Focus { active: true, before: None });
+    host.handle(1, Request::ToggleMode { shift: None });
+    // 打开设置窗口会让原来的文本框失焦，设置连接本身没有输入会话。
+    host.handle(1, Request::Focus { active: false, before: None });
+    let mut config = host.config().clone();
+    config.default_mode = DefaultMode::Global;
+    assert!(host.handle(90, Request::SetConfig { config }).ok);
+    assert_eq!(host.handle(90, Request::Status).status.unwrap().mode, Mode::English,
+        "从设置启用全局不能因原应用已失焦而丢掉最后手动选择的英文");
+    cleanup(&host);
+}
+
+#[test]
+fn key_test_does_not_learn_or_forget_before_the_key_is_accepted() {
+    let mut host = host("test-learning");
+    typing(&mut host, "nihao");
+    let before = host.engine.as_ref().unwrap().export_learning().unwrap();
+    let preview = Key { keysym: 0x20, test: true, ..Key::default() };
+    for _ in 0..3 {
+        assert!(host.handle(1, Request::Key { key: preview, before: None }).frame.unwrap().handled);
+        assert_eq!(host.engine.as_ref().unwrap().export_learning().unwrap(), before, "反复预判不能提前学习");
+    }
+    let result = press(&mut host, 0x20);
+    assert_eq!(result.commit.as_deref(), Some("你好"));
+    let learned = host.engine.as_ref().unwrap().export_learning().unwrap();
+    assert_ne!(learned, before, "真正接受按键后才学习");
+    let records: serde_json::Value = serde_json::from_str(&learned).unwrap();
+    assert_eq!(records["history"][0][1], 1, "重复预判之后一次上屏仍然只学习一次");
+
+    typing(&mut host, "nihao");
+    let preview = Key { keysym: keysym::DELETE, modifiers: modifier::CTRL, test: true };
+    assert!(host.handle(1, Request::Key { key: preview, before: None }).frame.unwrap().handled);
+    assert_eq!(host.engine.as_ref().unwrap().export_learning().unwrap(), learned, "预判删除键不能删除用户记录");
+    key_with(&mut host, 1, keysym::DELETE, modifier::CTRL);
+    assert_ne!(host.engine.as_ref().unwrap().export_learning().unwrap(), learned);
+    cleanup(&host);
+}
+
+#[test]
+fn global_mode_toggle_invalidates_other_clients_key_predictions() {
+    let mut host = host("global-prediction");
+    host.connect(2, "browser.exe".into());
+    let key = Key { keysym: 'n' as u32, test: true, ..Key::default() };
+    assert!(host.handle(1, Request::Key { key, before: None }).frame.unwrap().handled);
+    host.handle(2, Request::ToggleMode { shift: None });
+    let frame = press(&mut host, 'n' as u32);
+    assert_eq!(frame.mode, Mode::English);
+    assert!(!frame.handled && frame.preedit.is_empty(), "切换全局状态后不能接纳旧中文状态的按键预判");
+    cleanup(&host);
+}
+
+#[test]
+fn emoji_shortcut_toggles_the_panel_like_upstream() {
+    let mut host = host("emoji-toggle");
+    configure(&mut host, |c| c.hotkey_emoji = "ctrl+shift+e".into());
+    let modifiers = modifier::CTRL | modifier::SHIFT;
+    let opened = key_with(&mut host, 1, 'e' as u32, modifiers);
+    assert!(!opened.candidates.is_empty());
+    let key = Key { keysym: 'e' as u32, modifiers, test: true };
+    host.handle(1, Request::Key { key, before: None });
+    let closed = key_with(&mut host, 1, 'e' as u32, modifiers);
+    assert!(closed.preedit.is_empty() && closed.candidates.is_empty() && closed.title.is_none(),
+        "与上游一样，再按一次表情快捷键应关闭面板");
+    cleanup(&host);
+}
+
+#[test]
+fn email_completion_page_keys_match_the_visible_page_arrows() {
+    let mut host = host("email-page-keys");
+    let first = typing(&mut host, "abc@");
+    assert!(first.has_next);
+    let next = press(&mut host, keysym::PAGE_DOWN);
+    assert!(next.has_prev, "邮箱候选显示下一页按钮时 PgDn 也必须翻页");
+    assert_ne!(next.candidates, first.candidates);
+    let previous = press(&mut host, keysym::PAGE_UP);
+    assert_eq!(previous.candidates, first.candidates);
+    assert!(!previous.has_prev);
     cleanup(&host);
 }
 

@@ -103,6 +103,27 @@ pub enum Mode {
     English,
 }
 
+/// 默认状态和正在输入的状态分开：Global 是记忆策略，不能作为中/英文状态发给 DLL。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DefaultMode {
+    #[default]
+    Chinese,
+    English,
+    Global,
+}
+
+impl DefaultMode {
+    /// 把启动策略解析为可交给输入会话的中文或英文状态。
+    pub fn resolve(self, remembered: Mode) -> Mode {
+        match self {
+            Self::Chinese => Mode::Chinese,
+            Self::English => Mode::English,
+            Self::Global => remembered,
+        }
+    }
+}
+
 /// 用户设置，存为 `%APPDATA%\FreeType\config.json`。缺的字段取默认值。
 ///
 /// 取值是字符串的几项（快捷键、位置等）只认下面列出的写法，别的在 [`Config::sanitized`] 里换成默认值。
@@ -157,9 +178,9 @@ pub struct Config {
     pub autospace: bool,
     pub autospace_letters: bool,
     pub autospace_digits: bool,
-    /// 启动、切到新应用时的状态。
-    pub default_mode: Mode,
-    /// 中英文状态：global 全局统一，app 每个应用各记各的。
+    /// 启动、切到新应用时的状态；global 沿用最后主动切换的状态，所有应用共用并存盘。
+    pub default_mode: DefaultMode,
+    /// 中英文状态：global 全局统一，app 每个应用各记各的；default_mode 为 global 时忽略此项。
     pub mode_scope: String,
     /// 输出繁体。
     pub traditional: bool,
@@ -230,7 +251,7 @@ impl Default for Config {
             autospace: true,
             autospace_letters: true,
             autospace_digits: true,
-            default_mode: Mode::Chinese,
+            default_mode: DefaultMode::Chinese,
             mode_scope: "global".into(),
             traditional: false,
             quick_phrases: true,
@@ -477,7 +498,7 @@ pub struct Frame {
     /// 这一页的候选（显示用：换行、Tab 已画成 ⏎、⇥）。
     #[serde(default)]
     pub candidates: Vec<String>,
-    /// 候选前的标号；空表示 1、2、3……；某一项是空串表示不标。
+    /// 候选前的标号；空表示 1–9、0（第 10 个）；某一项是空串表示不标。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<String>,
     /// 高亮的候选（这一页里的序号）。

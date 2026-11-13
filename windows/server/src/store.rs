@@ -5,6 +5,7 @@
 //! | 文件 | 内容 |
 //! | --- | --- |
 //! | `config.json` | 设置 |
+//! | `mode.json` | 全局模式下最后主动选择的中文/英文状态 |
 //! | `quick_phrases.txt` | 快捷短语，水杉格式 `编码<Tab>短语<Tab>权重` |
 //! | `dicts\*.txt` | 导入的词库，水杉格式 `词语<Tab>拼音<Tab>权重` |
 //! | `user.tsv`、`history.tsv` | 引擎学到的词和输入习惯 |
@@ -16,7 +17,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use freetype_protocol::{Config, Dictionary, ImportReport, QuickPhrase};
+use freetype_protocol::{Config, Dictionary, ImportReport, Mode, QuickPhrase};
 use wowtype_core::msime::{self, DictEntry, LineError, Parsed};
 
 use crate::dictfmt;
@@ -122,6 +123,19 @@ impl Store {
     pub fn save_config(&self, config: &Config) -> io::Result<()> {
         let text = serde_json::to_string_pretty(config).map_err(io::Error::other)?;
         write_atomic(&self.config_path(), &(text + "\n"))
+    }
+
+    /// 运行状态单独保存，设置窗口整份写回配置时不会覆盖最近一次切换。
+    pub fn load_mode(&self) -> Mode {
+        fs::read_to_string(self.dir.join("mode.json"))
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save_mode(&self, mode: Mode) -> io::Result<()> {
+        let text = serde_json::to_string(&mode).map_err(io::Error::other)?;
+        write_atomic(&self.dir.join("mode.json"), &(text + "\n"))
     }
 
     fn recent_emoji_path(&self) -> PathBuf {

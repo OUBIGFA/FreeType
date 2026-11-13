@@ -415,11 +415,16 @@ fn apply_document(state: &Rc<RefCell<State>>, context: &ITfContext, frame: &Fram
 
 /// 记下应答里的状态（中英文、要不要光标前的字），更新任务栏按钮。
 fn note_frame(state: &Rc<RefCell<State>>, frame: &Frame) {
+    note_preview(state, frame);
+    state.borrow_mut().busy = !frame.preedit.is_empty() || !frame.candidates.is_empty() || frame.title.is_some();
+}
+
+/// OnTestKeyDown 只询问是否接收按键，预判结果不能提前改变真实组字状态。
+fn note_preview(state: &Rc<RefCell<State>>, frame: &Frame) {
     let button = {
         let mut s = state.borrow_mut();
         s.mode = frame.mode;
         s.want_before = frame.want_before;
-        s.busy = !frame.preedit.is_empty() || !frame.candidates.is_empty() || frame.title.is_some();
         s.button.clone()
     };
     if let Some(button) = button {
@@ -875,7 +880,7 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         };
         let frame = call(&self.state, &Request::Key { key, before: None });
         if let Some(frame) = &frame {
-            note_frame(&self.state, frame);
+            note_preview(&self.state, frame);
         }
         Ok(frame.is_some_and(|f| f.handled).into())
     }
@@ -1005,5 +1010,23 @@ impl ITfTextLayoutSink_Impl for TextService_Impl {
             Ok(())
         });
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn predicted_key_does_not_start_or_end_document_composition() {
+        let service = TextService::new(HINSTANCE::default());
+        let predicted = Frame { handled: true, preedit: "ni".into(), ..Frame::default() };
+        note_preview(&service.state, &predicted);
+        assert!(!composing(&service.state), "尚未接受的按键不能使 DLL 提前进入组字状态");
+        note_frame(&service.state, &predicted);
+        assert!(composing(&service.state));
+        let predicted_commit = Frame { handled: true, commit: Some("你".into()), ..Frame::default() };
+        note_preview(&service.state, &predicted_commit);
+        assert!(composing(&service.state), "预判上屏也不能提前结束正在进行的组字");
     }
 }

@@ -183,7 +183,7 @@ var (
 	candidateStyleChoices = []choice{{"pink", "粉色（默认）"}, {"blue", "蓝色"}, {"green", "微信绿"}, {"sogou", "搜狗样式（无底色块）"}}
 	shiftToggles          = []choice{{"both", "左右 Shift 都可以"}, {"left", "只用左 Shift"}, {"right", "只用右 Shift"}, {"off", "不用 Shift 切换"}}
 	selectKeys            = []choice{{"off", "不用"}, {"semicolon", "分号选第 2 个"}, {"quote", "分号、引号选第 2、3 个"}}
-	modes                 = []choice{{"chinese", "中文"}, {"english", "英文"}}
+	modes                 = []choice{{"chinese", "中文"}, {"english", "英文"}, {"global", "全局"}}
 	modeScopes            = []choice{{"global", "所有应用一致"}, {"app", "每个应用分别记住"}}
 	positions             = []choice{
 		{"top-left", "左上方"}, {"top", "正上方"}, {"top-right", "右上方"},

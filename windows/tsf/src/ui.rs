@@ -1,4 +1,4 @@
-//! 候选窗：每个线程一个不抢焦点的弹出窗口，用 GDI 双缓冲画。
+//! 候选窗：每个线程一个不抢焦点的弹出窗口，用 DirectWrite 排版、Direct2D 双缓冲画。
 //!
 //! - 横排：顶上是标题（工具栏、表情面板、邮箱补全的说明）和编辑区拼音（小字），下面是
 //!   「1 候选 2 候选 …」和翻页箭头；竖排、列表每个候选一行；网格（展开面板、表情）按列排。
@@ -11,19 +11,20 @@
 use std::cell::RefCell;
 
 use freetype_protocol::{Frame, Panel};
-use windows::core::{w, HSTRING, PCWSTR};
-use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
+use windows::core::{w, HSTRING, PCWSTR, Result};
+use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreatePen, CreateSolidBrush,
-    DeleteDC, DeleteObject, EndPaint, FillRect, GetDC, GetMonitorInfoW, GetStockObject, GetTextExtentPoint32W,
-    InvalidateRect, MonitorFromPoint, MonitorFromWindow, Rectangle, ReleaseDC, RoundRect, SelectObject, SetBkMode,
-    SetTextColor, TextOutW, UpdateWindow, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_PITCH,
-    FF_DONTCARE, FW_NORMAL, FW_SEMIBOLD, HDC, HFONT, MONITORINFO, MONITOR_DEFAULTTONEAREST, NULL_BRUSH,
-    OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_SOLID, SRCCOPY, TRANSPARENT,
+    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, EndPaint,
+    GetMonitorInfoW, InvalidateRect, MonitorFromPoint, MonitorFromWindow, SelectObject, UpdateWindow,
+    HDC, MONITORINFO, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, SRCCOPY,
 };
 use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
+
+#[path = "ui_text.rs"]
+mod text;
+use text::{Fonts, Painter, Text};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetCapture, ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT,
 };
@@ -206,7 +207,7 @@ struct View {
 impl View {
     fn label(&self, i: usize) -> String {
         if self.labels.is_empty() {
-            format!("{}", i + 1)
+            format!("{}", (i + 1) % 10)
         } else {
             self.labels.get(i).cloned().unwrap_or_default()
         }
@@ -234,11 +235,11 @@ struct Layout {
     width: i32,
     height: i32,
     /// (画的位置, 是什么)
-    parts: Vec<(RECT, Part)>,
+    parts: Vec<(RECT, Part, Text)>,
     /// 候选的底（点击区域）。
     items: Vec<RECT>,
     /// 翻页箭头（点击区域）。
-    arrows: Vec<(RECT, bool)>,
+    arrows: Vec<(RECT, bool, Text)>,
 }
 
 struct Data {
@@ -252,71 +253,6 @@ struct Data {
     long_fired: bool,
 }
 
-fn wide(text: &str) -> Vec<u16> {
-    text.encode_utf16().collect()
-}
-
-fn font(size: f32, family: &str, weight: i32) -> HFONT {
-    let family = if family.trim().is_empty() {
-        freetype_protocol::DEFAULT_FONT
-    } else {
-        family
-    };
-    unsafe {
-        CreateFontW(
-            -(size.round() as i32),
-            0,
-            0,
-            0,
-            weight,
-            0,
-            0,
-            0,
-            DEFAULT_CHARSET,
-            OUT_DEFAULT_PRECIS,
-            CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY,
-            (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
-            &HSTRING::from(family),
-        )
-    }
-}
-
-fn measure(hdc: HDC, text: &str) -> SIZE {
-    let mut size = SIZE::default();
-    unsafe {
-        let _ = GetTextExtentPoint32W(hdc, &wide(text), &mut size);
-    }
-    size
-}
-
-struct Fonts {
-    main: HFONT,
-    small: HFONT,
-    hint: HFONT,
-}
-
-impl Fonts {
-    fn new(view: &View, scale: f32) -> Self {
-        let size = view.font_size.max(12) as f32 * scale;
-        Self {
-            main: font(size, &view.font_family, FW_NORMAL.0 as i32),
-            small: font(size * 0.78, &view.font_family, FW_NORMAL.0 as i32),
-            hint: font(size, &view.font_family, FW_SEMIBOLD.0 as i32),
-        }
-    }
-}
-
-impl Drop for Fonts {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = DeleteObject(self.main.into());
-            let _ = DeleteObject(self.small.into());
-            let _ = DeleteObject(self.hint.into());
-        }
-    }
-}
-
 fn rect(x: i32, y: i32, w: i32, h: i32) -> RECT {
     RECT {
         left: x,
@@ -326,19 +262,19 @@ fn rect(x: i32, y: i32, w: i32, h: i32) -> RECT {
     }
 }
 
-fn layout(hdc: HDC, view: &View, fonts: &Fonts, scale: f32) -> Layout {
+fn layout(view: &View, fonts: &Fonts, scale: f32) -> Result<Layout> {
     let s = |v: f32| (v * scale).round() as i32;
     let pad = s(8.0);
     let mut out = Layout::default();
-    unsafe {
+    {
         if let Some(hint) = &view.hint {
-            SelectObject(hdc, fonts.hint.into());
-            let size = measure(hdc, hint);
+            let text = fonts.hint.text(hint)?;
+            let size = text.size;
             let side = size.cx.max(size.cy);
-            out.parts.push((rect(pad + (side - size.cx) / 2, pad, size.cx, size.cy), Part::Hint));
+            out.parts.push((rect(pad + (side - size.cx) / 2, pad, size.cx, size.cy), Part::Hint, text));
             out.width = side + 2 * pad;
             out.height = size.cy + 2 * pad;
-            return out;
+            return Ok(out);
         }
         let mut y = pad;
         let mut width = 0;
@@ -349,81 +285,80 @@ fn layout(hdc: HDC, view: &View, fonts: &Fonts, scale: f32) -> Layout {
             if text.is_empty() {
                 continue;
             }
-            SelectObject(hdc, fonts.small.into());
-            let size = measure(hdc, &text);
-            out.parts.push((rect(pad + s(4.0), y, size.cx, size.cy), part));
+            let text = fonts.small.text(&text)?;
+            let size = text.size;
+            out.parts.push((rect(pad + s(4.0), y, size.cx, size.cy), part, text));
             width = width.max(size.cx + s(8.0));
             y += size.cy + s(4.0);
         }
-        SelectObject(hdc, fonts.main.into());
-        let line = measure(hdc, "中").cy;
+        let line = fonts.main.text("中")?.size.cy;
         let item_pad = s(6.0);
-        let h = line + s(6.0);
-        // 每个候选的标号、正文大小
-        let sizes: Vec<(SIZE, SIZE)> = view
+        // 排版结果保留到绘制时使用；emoji 回退字体可能比中文行高，不能按“中”的高度裁切。
+        let texts: Vec<(Option<Text>, Text)> = view
             .candidates
             .iter()
             .enumerate()
-            .map(|(i, text)| {
-                SelectObject(hdc, fonts.small.into());
+            .map(|(i, text)| -> Result<_> {
                 let label = view.label(i);
-                let label = if label.is_empty() { SIZE::default() } else { measure(hdc, &label) };
-                SelectObject(hdc, fonts.main.into());
-                (label, measure(hdc, text))
+                let label = if label.is_empty() { None } else { Some(fonts.small.text(&label)?) };
+                Ok((label, fonts.main.text(text)?))
             })
-            .collect();
-        let item_width = |(label, body): &(SIZE, SIZE)| {
-            let gap = if label.cx > 0 { s(4.0) } else { 0 };
-            item_pad + label.cx + gap + body.cx + item_pad
+            .collect::<Result<_>>()?;
+        let h = texts.iter().fold(line, |h, (label, body)| h.max(body.size.cy).max(label.as_ref().map_or(0, |l| l.size.cy))) + s(6.0);
+        let item_width = |(label, body): &(Option<Text>, Text)| {
+            let label_w = label.as_ref().map_or(0, |l| l.size.cx + s(4.0));
+            item_pad + label_w + body.size.cx + item_pad
         };
         let place = |out: &mut Layout, i: usize, x: i32, y: i32, w: i32| {
-            let (label, body) = sizes[i];
+            let (label, body) = &texts[i];
             out.items.push(rect(x, y, w, h));
-            let gap = if label.cx > 0 { s(4.0) } else { 0 };
-            out.parts.push((rect(x + item_pad, y + (h - label.cy) / 2, label.cx, label.cy), Part::Label(i)));
+            let label_w = label.as_ref().map_or(0, |l| l.size.cx + s(4.0));
+            if let Some(label) = label {
+                out.parts.push((rect(x + item_pad, y + (h - label.size.cy) / 2, label.size.cx, label.size.cy), Part::Label(i), label.clone()));
+            }
             out.parts.push((
-                rect(x + item_pad + label.cx + gap, y + (h - body.cy) / 2, body.cx, body.cy),
-                Part::Candidate(i),
+                rect(x + item_pad + label_w, y + (h - body.size.cy) / 2, body.size.cx, body.size.cy),
+                Part::Candidate(i), body.clone(),
             ));
         };
-        SelectObject(hdc, fonts.main.into());
-        let arrow = measure(hdc, "‹");
-        let arrow_w = arrow.cx + s(12.0);
+        let prev = fonts.main.text("‹")?;
+        let next = fonts.main.text("›")?;
+        let arrow_w = prev.size.cx.max(next.size.cx) + s(12.0);
         let paging = view.has_prev || view.has_next;
         let horizontal = view.panel == Panel::Normal && !view.vertical;
         if horizontal {
             let mut x = pad;
-            for i in 0..sizes.len() {
-                let w = item_width(&sizes[i]);
+            for i in 0..texts.len() {
+                let w = item_width(&texts[i]);
                 place(&mut out, i, x, y, w);
                 x += w + s(2.0);
             }
             width = width.max(x - pad);
             if paging {
                 let ax = pad + width + s(4.0);
-                out.arrows.push((rect(ax, y, arrow_w, h), false));
-                out.arrows.push((rect(ax + arrow_w, y, arrow_w, h), true));
+                out.arrows.push((rect(ax, y, arrow_w, h), false, prev.clone()));
+                out.arrows.push((rect(ax + arrow_w, y, arrow_w, h), true, next.clone()));
                 width += s(4.0) + 2 * arrow_w;
             }
-            if !sizes.is_empty() {
+            if !texts.is_empty() {
                 y += h;
             }
         } else {
             let columns = if view.panel == Panel::Grid { view.columns.max(1) } else { 1 };
-            let cell = sizes.iter().map(item_width).max().unwrap_or(0);
+            let cell = texts.iter().map(item_width).max().unwrap_or(0);
             let cell = if view.panel == Panel::Grid { cell.max(h) } else { cell.max(s(120.0)) };
-            for i in 0..sizes.len() {
+            for i in 0..texts.len() {
                 let (row, col) = (i / columns, i % columns);
                 place(&mut out, i, pad + col as i32 * (cell + s(2.0)), y + row as i32 * h, cell);
             }
-            let rows = sizes.len().div_ceil(columns) as i32;
-            let cols = columns.min(sizes.len().max(1)) as i32;
+            let rows = texts.len().div_ceil(columns) as i32;
+            let cols = columns.min(texts.len().max(1)) as i32;
             width = width.max(cols * (cell + s(2.0)) - s(2.0));
             y += rows * h;
             if paging {
                 let ax = pad + width - 2 * arrow_w;
-                out.arrows.push((rect(ax, y, arrow_w, h), false));
-                out.arrows.push((rect(ax + arrow_w, y, arrow_w, h), true));
+                out.arrows.push((rect(ax, y, arrow_w, h), false, prev));
+                out.arrows.push((rect(ax + arrow_w, y, arrow_w, h), true, next));
                 width = width.max(2 * arrow_w);
                 y += h;
             }
@@ -431,21 +366,7 @@ fn layout(hdc: HDC, view: &View, fonts: &Fonts, scale: f32) -> Layout {
         out.width = width.max(s(40.0)) + 2 * pad;
         out.height = y + pad;
     }
-    out
-}
-
-fn fill_round(hdc: HDC, r: &RECT, color: COLORREF, radius: i32) {
-    unsafe {
-        let brush = CreateSolidBrush(color);
-        let pen = CreatePen(PS_SOLID, 1, color);
-        let ob = SelectObject(hdc, brush.into());
-        let op = SelectObject(hdc, pen.into());
-        let _ = RoundRect(hdc, r.left, r.top, r.right, r.bottom, radius, radius);
-        SelectObject(hdc, ob);
-        SelectObject(hdc, op);
-        let _ = DeleteObject(brush.into());
-        let _ = DeleteObject(pen.into());
-    }
+    Ok(out)
 }
 
 fn paint(hwnd: HWND, data: &Data) {
@@ -456,79 +377,55 @@ fn paint(hwnd: HWND, data: &Data) {
         let hdc = CreateCompatibleDC(Some(target));
         let bitmap = CreateCompatibleBitmap(target, w, h);
         let old_bitmap = SelectObject(hdc, bitmap.into());
+        match draw(hdc, data) {
+            Ok(()) => { let _ = BitBlt(target, 0, 0, w, h, Some(hdc), 0, 0, SRCCOPY); }
+            Err(error) => crate::log::write("候选窗绘制失败", &error.to_string()),
+        }
+        SelectObject(hdc, old_bitmap);
+        let _ = DeleteObject(bitmap.into());
+        let _ = DeleteDC(hdc);
+        let _ = EndPaint(hwnd, &ps);
+    }
+}
+
+/// 窗口和离屏回归使用同一条绘制路径，验证实际字体与表情，不用近似预览代替候选窗。
+fn draw(hdc: HDC, data: &Data) -> Result<()> {
+        let (w, h) = (data.layout.width, data.layout.height);
         let t = theme(&data.view.candidate_style);
-        let fonts = Fonts::new(&data.view, data.scale);
-
-        let background = CreateSolidBrush(t.background);
-        FillRect(hdc, &rect(0, 0, w, h), background);
-        let _ = DeleteObject(background.into());
-        let border = CreatePen(PS_SOLID, 1, t.border);
-        let old_pen = SelectObject(hdc, border.into());
-        let old_brush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
-        let _ = Rectangle(hdc, 0, 0, w, h);
-        SelectObject(hdc, old_brush);
-        SelectObject(hdc, old_pen);
-        let _ = DeleteObject(border.into());
-
-        SetBkMode(hdc, TRANSPARENT);
-        let radius = (6.0 * data.scale).round() as i32;
+        let painter = Painter::new(hdc, &rect(0, 0, w, h), t.background)?;
+        painter.border(&rect(0, 0, w, h), t.border);
+        let radius = 3.0 * data.scale;
         match data.hovered {
             Some(Hover::Item(i)) if data.view.cursor != Some(i) => {
                 if let Some(r) = data.layout.items.get(i) {
-                    fill_round(hdc, r, t.hover, radius);
+                    painter.fill_round(r, t.hover, radius);
                 }
             }
             Some(Hover::Arrow(next)) => {
-                if let Some((r, _)) = data.layout.arrows.iter().find(|(_, n)| *n == next) {
-                    fill_round(hdc, r, t.hover, radius);
+                if let Some((r, _, _)) = data.layout.arrows.iter().find(|(_, n, _)| *n == next) {
+                    painter.fill_round(r, t.hover, radius);
                 }
             }
             _ => {}
         }
         if let (Some(r), Some(accent)) = (data.view.cursor.and_then(|i| data.layout.items.get(i)), t.accent) {
-            fill_round(hdc, r, accent, radius);
+            painter.fill_round(r, accent, radius);
         }
         let selected = |i: usize| data.view.cursor == Some(i);
-        let draw = |r: &RECT, text: &str, font: HFONT, color: COLORREF, center: bool| {
-            SelectObject(hdc, font.into());
-            SetTextColor(hdc, color);
-            let size = measure(hdc, text);
-            let x = if center { r.left + ((r.right - r.left) - size.cx).max(0) / 2 } else { r.left };
-            let y = r.top + ((r.bottom - r.top) - size.cy).max(0) / 2;
-            let _ = TextOutW(hdc, x, y, &wide(text));
-        };
-        for (r, part) in &data.layout.parts {
-            match *part {
-                Part::Hint => draw(r, &data.view.hint.clone().unwrap_or_default(), fonts.hint, t.emphasis, false),
-                Part::Title => draw(r, data.view.title.as_deref().unwrap_or(""), fonts.small, t.muted, false),
-                Part::Preedit => draw(r, &data.view.preedit, fonts.small, t.muted, false),
-                Part::Label(i) => {
-                    let label = data.view.label(i);
-                    if !label.is_empty() {
-                        draw(r, &label, fonts.small, if selected(i) { t.accent_text } else { t.muted }, false);
-                    }
-                }
-                Part::Candidate(i) => draw(
-                    r,
-                    &data.view.candidates[i],
-                    fonts.main,
-                    if selected(i) { t.accent_text } else { t.text },
-                    false,
-                ),
-            }
+        for (r, part, text) in &data.layout.parts {
+            let color = match *part {
+                Part::Hint => t.emphasis,
+                Part::Title | Part::Preedit => t.muted,
+                Part::Label(i) => if selected(i) { t.accent_text } else { t.muted },
+                Part::Candidate(i) => if selected(i) { t.accent_text } else { t.text },
+            };
+            painter.text(r, text, color, false);
         }
-        for (r, next) in &data.layout.arrows {
+        for (r, next, text) in &data.layout.arrows {
             let enabled = if *next { data.view.has_next } else { data.view.has_prev };
-            draw(r, if *next { "›" } else { "‹" }, fonts.main, if enabled { t.text } else { t.border }, true);
+            painter.text(r, text, if enabled { t.text } else { t.border }, true);
         }
-
-        let _ = BitBlt(target, 0, 0, w, h, Some(hdc), 0, 0, SRCCOPY);
-        SelectObject(hdc, old_bitmap);
-        let _ = DeleteObject(bitmap.into());
-        let _ = DeleteDC(hdc);
-        drop(fonts);
-        let _ = EndPaint(hwnd, &ps);
-    }
+        painter.finish()
 }
 
 fn data_of(hwnd: HWND) -> Option<&'static mut Data> {
@@ -540,7 +437,7 @@ fn data_of(hwnd: HWND) -> Option<&'static mut Data> {
 
 fn hit(data: &Data, x: i32, y: i32) -> Option<Hover> {
     let inside = |r: &RECT| x >= r.left && x < r.right && y >= r.top && y < r.bottom;
-    if let Some((_, next)) = data.layout.arrows.iter().find(|(r, _)| inside(r)) {
+    if let Some((_, next, _)) = data.layout.arrows.iter().find(|(r, _, _)| inside(r)) {
         let enabled = if *next { data.view.has_next } else { data.view.has_prev };
         return enabled.then_some(Hover::Arrow(*next));
     }
@@ -896,11 +793,15 @@ impl CandidateWindow {
             }
             let dpi = GetDpiForWindow(self.hwnd).max(96);
             let scale = dpi as f32 / 96.0;
-            let hdc = GetDC(Some(self.hwnd));
-            let fonts = Fonts::new(&view, scale);
-            let layout = layout(hdc, &view, &fonts, scale);
-            drop(fonts);
-            ReleaseDC(Some(self.hwnd), hdc);
+            let result = Fonts::new(view.font_size.max(12) as f32 * scale, &view.font_family)
+                .and_then(|fonts| layout(&view, &fonts, scale));
+            let layout = match result {
+                Ok(layout) => layout,
+                Err(error) => {
+                    crate::log::write("候选窗排版失败", &error.to_string());
+                    return;
+                }
+            };
 
             let gap = (4.0 * scale) as i32;
             let work = work_area(caret.left, caret.bottom);
@@ -974,7 +875,7 @@ mod menu {
         entries: Vec<(String, Click)>,
         rows: Vec<RECT>,
         hovered: Option<usize>,
-        family: String,
+        texts: Vec<Text>,
         scale: f32,
     }
 
@@ -992,15 +893,18 @@ mod menu {
         };
         close();
         unsafe {
-            let hdc = GetDC(Some(hwnd));
-            let f = font(14.0 * scale, &family, FW_NORMAL.0 as i32);
-            let old = SelectObject(hdc, f.into());
+            let texts = Fonts::new(14.0 * scale, &family)
+                .and_then(|fonts| entries.iter().map(|(t, _)| fonts.main.text(t)).collect::<Result<Vec<_>>>());
+            let texts = match texts {
+                Ok(texts) => texts,
+                Err(error) => {
+                    crate::log::write("候选菜单排版失败", &error.to_string());
+                    return;
+                }
+            };
             let pad = (6.0 * scale) as i32;
-            let row_h = measure(hdc, "中").cy + (12.0 * scale) as i32;
-            let width = entries.iter().map(|(t, _)| measure(hdc, t).cx).max().unwrap_or(0) + (32.0 * scale) as i32;
-            SelectObject(hdc, old);
-            let _ = DeleteObject(f.into());
-            ReleaseDC(Some(hwnd), hdc);
+            let row_h = texts.iter().map(|t| t.size.cy).max().unwrap_or(0) + (12.0 * scale) as i32;
+            let width = texts.iter().map(|t| t.size.cx).max().unwrap_or(0) + (32.0 * scale) as i32;
             let rows: Vec<RECT> = (0..entries.len())
                 .map(|i| rect(pad, pad + i as i32 * row_h, width, row_h))
                 .collect();
@@ -1012,7 +916,7 @@ mod menu {
                     entries,
                     rows,
                     hovered: None,
-                    family,
+                    texts,
                     scale,
                 })) as _,
             ) as *mut MenuData;
@@ -1067,31 +971,22 @@ mod menu {
             let old_bitmap = SelectObject(hdc, bitmap.into());
             // 菜单只用到背景、边框、文字和停留底色，和强调色无关
             let t = theme("");
-            let bg = CreateSolidBrush(t.background);
-            FillRect(hdc, &rect(0, 0, w, h), bg);
-            let _ = DeleteObject(bg.into());
-            let pen = CreatePen(PS_SOLID, 1, t.border);
-            let op = SelectObject(hdc, pen.into());
-            let ob = SelectObject(hdc, GetStockObject(NULL_BRUSH));
-            let _ = Rectangle(hdc, 0, 0, w, h);
-            SelectObject(hdc, ob);
-            SelectObject(hdc, op);
-            let _ = DeleteObject(pen.into());
-            SetBkMode(hdc, TRANSPARENT);
-            let f = font(14.0 * d.scale, &d.family, FW_NORMAL.0 as i32);
-            let old_font = SelectObject(hdc, f.into());
-            for (i, (text, _)) in d.entries.iter().enumerate() {
-                let r = d.rows[i];
-                if d.hovered == Some(i) {
-                    fill_round(hdc, &r, t.hover, (4.0 * d.scale) as i32);
+            let result = Painter::new(hdc, &rect(0, 0, w, h), t.background).and_then(|painter| {
+                painter.border(&rect(0, 0, w, h), t.border);
+                for (i, text) in d.texts.iter().enumerate() {
+                    let mut r = d.rows[i];
+                    if d.hovered == Some(i) {
+                        painter.fill_round(&r, t.hover, 2.0 * d.scale);
+                    }
+                    r.left += (12.0 * d.scale) as i32;
+                    painter.text(&r, text, t.text, false);
                 }
-                SetTextColor(hdc, t.text);
-                let size = measure(hdc, text);
-                let _ = TextOutW(hdc, r.left + (12.0 * d.scale) as i32, r.top + (r.bottom - r.top - size.cy) / 2, &wide(text));
+                painter.finish()
+            });
+            match result {
+                Ok(()) => { let _ = BitBlt(target, 0, 0, w, h, Some(hdc), 0, 0, SRCCOPY); }
+                Err(error) => crate::log::write("候选菜单绘制失败", &error.to_string()),
             }
-            SelectObject(hdc, old_font);
-            let _ = DeleteObject(f.into());
-            let _ = BitBlt(target, 0, 0, w, h, Some(hdc), 0, 0, SRCCOPY);
             SelectObject(hdc, old_bitmap);
             let _ = DeleteObject(bitmap.into());
             let _ = DeleteDC(hdc);
@@ -1185,6 +1080,7 @@ mod tests {
             ..View::default()
         };
         assert_eq!(view.label(1), "2");
+        assert_eq!(view.label(9), "0", "第 10 个候选标出实际选择键");
         let view = View {
             labels: vec!["".into(), "3".into()],
             ..view
@@ -1193,3 +1089,7 @@ mod tests {
         assert_eq!(view.label(1), "3");
     }
 }
+
+#[cfg(test)]
+#[path = "ui_render_tests.rs"]
+mod render_tests;
