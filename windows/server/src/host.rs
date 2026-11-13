@@ -331,15 +331,20 @@ impl Host {
         if !self.dirty {
             return;
         }
-        let Some(engine) = self.engine.as_deref() else {
-            return;
-        };
-        let _ = std::fs::create_dir_all(self.store.dir());
-        let saved = engine.save_user_dict(self.store.user_dict_path()).is_ok()
-            && engine.save_history(self.store.history_path()).is_ok();
-        if saved {
-            self.dirty = false;
+        if let Err(error) = self.save_learning() {
+            crate::log(&error);
         }
+    }
+
+    fn save_learning(&mut self) -> Result<(), String> {
+        let engine = self.engine.as_deref().ok_or("词库还在载入，请稍后再试")?;
+        std::fs::create_dir_all(self.store.dir()).map_err(|error| format!("创建用户目录失败：{error}"))?;
+        engine.save_user_dict(self.store.user_dict_path())
+            .map_err(|error| format!("保存学习词条失败：{error:#}"))?;
+        engine.save_history(self.store.history_path())
+            .map_err(|error| format!("保存输入习惯失败：{error:#}"))?;
+        self.dirty = false;
+        Ok(())
     }
 
     fn mode_of(&self, app: &str) -> Mode {
@@ -746,7 +751,9 @@ impl Host {
         if let Err(e) = engine.add_user_word(&pinyin, &word, ADDED_WORD_FREQ) {
             return Response::error(format!("加不进去：{e}"));
         }
-        self.learned_changed();
+        if let Err(error) = self.learned_changed() {
+            return Response::error(error);
+        }
         Response {
             user_words: Some(self.user_words()),
             report: Some(ImportReport {
@@ -772,13 +779,59 @@ impl Host {
     }
 
     /// 改了引擎学到的东西：各输入框的候选作废，马上存盘。
-    fn learned_changed(&mut self) {
+    fn learned_changed(&mut self) -> Result<(), String> {
         for client in self.clients.values_mut() {
             client.pending = None;
             client.state.clear();
         }
         self.dirty = true;
-        self.save_if_dirty();
+        self.save_learning()
+    }
+
+    fn export_learning(&self, path: &Path) -> Response {
+        let Some(engine) = self.engine.as_deref() else {
+            return Response::error("词库还在载入，请稍后再试");
+        };
+        let data = match engine.export_learning() {
+            Ok(data) => data,
+            Err(error) => return Response::error(format!("读取学习记录失败：{error:#}")),
+        };
+        match crate::store::write_atomic(path, &data) {
+            Ok(()) => Response {
+                report: Some(ImportReport {
+                    added: engine.user_words().len(),
+                    note: Some("已导出学习备份，包含词条、选词次数和搭配".into()),
+                    ..ImportReport::default()
+                }),
+                ..Response::ok()
+            },
+            Err(error) => Response::error(format!("写入学习备份失败：{error}")),
+        }
+    }
+
+    fn import_learning(&mut self, path: &Path) -> Response {
+        let data = match std::fs::read_to_string(path) {
+            Ok(data) => data,
+            Err(error) => return Response::error(format!("读取学习备份失败：{error}")),
+        };
+        let Some(engine) = self.engine.as_deref() else {
+            return Response::error("词库还在载入，请稍后再试");
+        };
+        let changed = match engine.import_learning(&data) {
+            Ok(changed) => changed,
+            Err(error) => return Response::error(format!("导入学习备份失败：{error:#}")),
+        };
+        if let Err(error) = self.learned_changed() {
+            return Response::error(format!("学习记录已合并，但尚未保存到磁盘：{error}。请修复后重新导入"));
+        }
+        Response {
+            report: Some(ImportReport {
+                added: changed,
+                ..ImportReport::default()
+            }),
+            user_words: Some(self.user_words()),
+            ..Response::ok()
+        }
     }
 
     /// 处理一条请求；里面出了 panic 时记日志、丢掉这个连接的输入状态，不让服务进程退出。
@@ -898,6 +951,8 @@ impl Host {
                     Err(e) => Response::error(format!("写入文件失败：{e}")),
                 }
             }
+            Request::ExportLearning { path } => self.export_learning(Path::new(&path)),
+            Request::ImportLearning { path } => self.import_learning(Path::new(&path)),
             Request::ListUserWords => Response {
                 user_words: Some(self.user_words()),
                 ..Response::ok()
@@ -907,7 +962,9 @@ impl Host {
                     return Response::error("词库还在载入，请稍后再试");
                 };
                 let removed = words.iter().filter(|w| engine.forget_word(w)).count();
-                self.learned_changed();
+                if let Err(error) = self.learned_changed() {
+                    return Response::error(error);
+                }
                 Response {
                     report: Some(ImportReport {
                         added: removed,
@@ -923,7 +980,9 @@ impl Host {
                     return Response::error("词库还在载入，请稍后再试");
                 };
                 engine.clear_learned();
-                self.learned_changed();
+                if let Err(error) = self.learned_changed() {
+                    return Response::error(error);
+                }
                 Response {
                     user_words: Some(Vec::new()),
                     ..Response::ok()

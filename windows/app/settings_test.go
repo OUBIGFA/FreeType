@@ -6,6 +6,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -13,16 +14,20 @@ import (
 
 // fakeBackend 记下请求，按 op 给应答。
 type fakeBackend struct {
-	calls   []Request
-	config  Config
-	phrases []QuickPhrase
-	dicts   []Dictionary
-	words   []UserWord
-	mode    string
+	calls       []Request
+	config      Config
+	phrases     []QuickPhrase
+	dicts       []Dictionary
+	words       []UserWord
+	mode        string
+	failRequest string
 }
 
 func (f *fakeBackend) Call(r Request) (Response, error) {
 	f.calls = append(f.calls, r)
+	if r["op"] == f.failRequest {
+		return Response{}, fmt.Errorf("测试错误")
+	}
 	switch r["op"] {
 	case "status":
 		return Response{OK: true, Status: &Status{Ready: true, Mode: f.mode, DataDir: `C:\data`, LogDir: `C:\logs`, Version: "0.0.1"}}, nil
@@ -62,6 +67,11 @@ func (f *fakeBackend) Call(r Request) (Response, error) {
 		return Response{OK: true, Report: &ImportReport{Added: 2, Skipped: 1, Errors: []string{"第 3 行：编码不是有效的全拼"}}}, nil
 	case "list_user_words":
 		return Response{OK: true, UserWords: f.words}, nil
+	case "export_learning":
+		return Response{OK: true, Report: &ImportReport{Added: len(f.words), Note: "包含词条、选词次数和搭配"}}, nil
+	case "import_learning":
+		f.words = append(f.words, UserWord{Word: "恢复词", Pinyin: "hui fu ci", Freq: 3000})
+		return Response{OK: true, UserWords: f.words, Report: &ImportReport{Added: 3}}, nil
 	case "forget_words":
 		raw, _ := json.Marshal(r["words"])
 		var gone []string
@@ -326,6 +336,130 @@ func TestLearnedWordsSearchDeleteAndClear(t *testing.T) {
 	}
 	if b.last("clear_learned") == nil || len(s.words) != 0 {
 		t.Fatalf("没有清空：%+v", s.words)
+	}
+}
+
+func TestLearningBackupExportUsesJsonAndNotDictionaryExport(t *testing.T) {
+	s, backend := newTestSettings()
+	var suggested string
+	s.saveFile = func(title, name string) string {
+		suggested = name
+		return "C:/backup/learning.json"
+	}
+	tester := open(t, s, "学到的词")
+	if err := tester.Click("导出…"); err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Ext(suggested) != ".json" {
+		t.Fatalf("完整备份应保存为 JSON：%s", suggested)
+	}
+	request := backend.last("export_learning")
+	if request == nil || request["path"] != "C:/backup/learning.json" {
+		t.Fatalf("没有请求导出完整学习记录：%v", request)
+	}
+	if backend.last("export_user_dictionary") != nil {
+		t.Fatal("完整备份不能只导出词表")
+	}
+	if !tester.HasText("已导出 2 条（包含词条、选词次数和搭配）") {
+		t.Fatalf("导出结果应说明备份包含输入习惯：%q", tester.Texts())
+	}
+}
+
+func TestLearningBackupExportCancelDoesNotCallServer(t *testing.T) {
+	s, backend := newTestSettings()
+	s.saveFile = func(string, string) string { return "" }
+	tester := open(t, s, "学到的词")
+	if err := tester.Click("导出…"); err != nil {
+		t.Fatal(err)
+	}
+	if backend.last("export_learning") != nil {
+		t.Fatal("取消文件选择后不应执行导出")
+	}
+}
+
+func TestLearningBackupImportRefreshesWords(t *testing.T) {
+	state, backend := newTestSettings()
+	state.openFile = func(string) string { return "C:/backup/learning.json" }
+	tester := open(t, state, "学到的词")
+	if err := tester.Click("导入…"); err != nil {
+		t.Fatal(err)
+	}
+	request := backend.last("import_learning")
+	if request == nil || request["path"] != "C:/backup/learning.json" {
+		t.Fatalf("没有请求导入完整学习记录：%v", request)
+	}
+	tester.Frame()
+	if !tester.HasText("恢复词") || !tester.HasText("学到的词（3）") {
+		t.Fatalf("导入后应刷新词条：%q", tester.Texts())
+	}
+	if !strings.Contains(strings.Join(tester.Texts(), " "), "学习记录已合并 3 条") {
+		t.Fatalf("导入结果应报告合并的记录数：%q", tester.Texts())
+	}
+}
+
+func TestLearningBackupImportCancelDoesNotCallServer(t *testing.T) {
+	state, backend := newTestSettings()
+	state.openFile = func(string) string { return "" }
+	tester := open(t, state, "学到的词")
+	if err := tester.Click("导入…"); err != nil {
+		t.Fatal(err)
+	}
+	if backend.last("import_learning") != nil {
+		t.Fatal("取消文件选择后不应执行导入")
+	}
+}
+
+func TestLearningBackupErrorsPreserveWords(t *testing.T) {
+	for _, test := range []struct{ operation, button string }{
+		{"export_learning", "导出…"},
+		{"import_learning", "导入…"},
+	} {
+		t.Run(test.operation, func(t *testing.T) {
+			state, backend := newTestSettings()
+			backend.failRequest = test.operation
+			state.openFile = func(string) string { return "C:/backup/learning.json" }
+			state.saveFile = func(string, string) string { return "C:/backup/learning.json" }
+			tester := open(t, state, "学到的词")
+			if err := tester.Click(test.button); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(strings.Join(tester.Texts(), " "), "测试错误") || len(state.words) != 2 {
+				t.Fatalf("失败应显示原因并保留词条：%q %+v", tester.Texts(), state.words)
+			}
+		})
+	}
+}
+
+func TestLearningBackupButtonsFitMinimumWidth(t *testing.T) {
+	state, _ := newTestSettings()
+	state.page = "learned"
+	state.loadWords()
+	tester := ui.NewTester(state.view, 780, 540)
+	tester.Frame()
+	for _, label := range []string{"导入…", "导出…", "全部清空…"} {
+		bounds, found := tester.Find(label)
+		if !found || bounds.X < 0 || bounds.X+bounds.W > 780 || bounds.Y+bounds.H > 540 {
+			t.Fatalf("最小窗口中应能看到并使用 %s：%+v", label, bounds)
+		}
+	}
+	count := 0
+	for _, label := range tester.Texts() {
+		if label == "导出…" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("学习页只保留一个导出按钮，实际 %d 个", count)
+	}
+	if directory := os.Getenv("FREETYPE_SNAPSHOT_DIR"); directory != "" {
+		file, err := os.Create(filepath.Join(directory, "learned-min-width.png"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer file.Close()
+		if err := png.Encode(file, tester.Image()); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

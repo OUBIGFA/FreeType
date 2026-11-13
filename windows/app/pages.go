@@ -595,10 +595,15 @@ func (s *settings) phrasesPage(c *ui.Context) {
 func (s *settings) learnedPage(c *ui.Context) {
 	pageHeader(c, "学到的词", "你选过的词组会被记住，下次排得更靠前。打错字被记住了，可以在这里删掉；打字时长按候选或按 Ctrl+Delete 也能删")
 	section(c, "", func() {
-		row(c, "全部清空", "删掉学到的全部词和输入习惯，候选回到刚安装时的顺序", func() {
-			if ui.Button(c, "导出…").Clicked() {
-				s.export("export_user_dictionary", "导出学到的词", "FreeType 学到的词.txt")
+		row(c, "学习备份", "保存词条、选词次数和搭配；导入时保留现有记录，重复导入不累加", func() {
+			if ui.Button(c, "导入…").Clicked() {
+				s.importLearning()
 			}
+			if ui.Button(c, "导出…").Clicked() {
+				s.export("export_learning", "导出学习备份", "FreeType 学习备份.json")
+			}
+		})
+		row(c, "全部清空", "删掉学到的全部词和输入习惯，候选回到刚安装时的顺序", func() {
 			if ui.Button(c, "全部清空…").Clicked() {
 				s.confirmClear = true
 			}
@@ -623,7 +628,7 @@ func (s *settings) learnedPage(c *ui.Context) {
 			}
 		})
 	})
-	switch ui.AlertDialog(c, &s.confirmClear, "清空学到的词？", "学到的词和输入习惯都会删掉，不能恢复。快捷短语和导入的词库不受影响。", "取消", "清空") {
+	switch ui.AlertDialog(c, &s.confirmClear, "清空学到的词？", "学到的词和输入习惯都会删掉。没有备份时无法恢复。快捷短语和导入的词库不受影响。", "取消", "清空") {
 	case 1:
 		s.clearLearned()
 	}

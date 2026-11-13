@@ -5,6 +5,7 @@
 //! LTR / 神经重排 / MixRank 只在接口上预留，尚未接入真实模型。
 
 pub mod autospace;
+mod backup;
 pub mod beam;
 pub mod calc;
 pub mod clipboard;

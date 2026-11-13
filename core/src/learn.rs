@@ -97,7 +97,7 @@ impl UserPairs {
         })
     }
 
-    fn insert(&mut self, prev: String, cur: String, entry: HistoryEntry) {
+    pub(crate) fn insert(&mut self, prev: String, cur: String, entry: HistoryEntry) {
         self.map.entry(prev).or_default().insert(cur, entry);
     }
 }

@@ -232,6 +232,28 @@ func (s *settings) export(request, title, name string) {
 				count = resp.Report.Added
 			}
 			s.notice = fmt.Sprintf("已导出 %d 条", count)
+			if resp.Report != nil && resp.Report.Note != "" {
+				s.notice += "（" + resp.Report.Note + "）"
+			}
+		}
+	})
+}
+
+func (state *settings) importLearning() {
+	state.background(func() func() {
+		path := state.openFile("导入学习备份")
+		if path == "" {
+			return nil
+		}
+		resp, err := state.backend.Call(op("import_learning", "path", path))
+		return func() {
+			if err != nil {
+				state.notice = "导入失败：" + err.Error()
+				return
+			}
+			state.words = resp.UserWords
+			state.wordsLoaded = true
+			state.notice, _ = describe(resp.Report, "学习记录已合并")
 		}
 	})
 }

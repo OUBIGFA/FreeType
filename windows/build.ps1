@@ -18,6 +18,8 @@
 #>
 param([switch]$SkipTests)
 
+$OutputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$env:PYTHONUTF8 = '1'
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
@@ -31,6 +33,7 @@ $Resources = Join-Path $AppDir 'resources'
 $Data = Join-Path $Root '.local\data'
 $Release = Join-Path $Root 'output\release'
 $Installer = Join-Path $Release "FreeType-$Version-Setup.exe"
+$Scratch = Join-Path $Root "_temp\build-$BuildNumber"
 
 function Step($text) { Write-Host "==> $text" -ForegroundColor Cyan }
 
@@ -50,6 +53,21 @@ function Write-Utf8([string]$Path, [string]$Text) {
 }
 
 function Sha256([string]$Path) { (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant() }
+
+function Recycle-GeneratedDirectory([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    $Resolved = (Resolve-Path -LiteralPath $Path).Path
+    $Allowed = @($Resources, (Join-Path $AppDir 'build'), $Scratch)
+    if ($Allowed -notcontains $Resolved -or ((Get-Item -LiteralPath $Resolved).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        throw "Not a generated directory owned by this build: $Resolved"
+    }
+    Add-Type -AssemblyName Microsoft.VisualBasic
+    [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory(
+        $Resolved,
+        [Microsoft.VisualBasic.FileIO.UIOption]::OnlyErrorDialogs,
+        [Microsoft.VisualBasic.FileIO.RecycleOption]::SendToRecycleBin,
+        [Microsoft.VisualBasic.FileIO.UICancelOption]::ThrowException)
+}
 
 # Project-local toolchains (not tracked by Git).
 $Toolchains = Join-Path $Root '.local\toolchains'
@@ -78,6 +96,11 @@ if ($GoVersion -notmatch 'go1\.27\.3') { throw "Go 1.27.3 is required for mygo $
 $GoMod = Get-Content -Raw (Join-Path $AppDir 'go.mod')
 if ($GoMod -notmatch "github.com/egoist/mygo $([regex]::Escape($MygoVersion))") { throw "windows/app/go.mod must pin mygo $MygoVersion" }
 
+New-Item -ItemType Directory -Force -Path $Scratch | Out-Null
+$env:TEMP = $Scratch
+$env:TMP = $Scratch
+$env:FREETYPE_TEST_TEMP = $Scratch
+
 if (-not $SkipTests) {
     Step 'Running tests'
     Invoke-Native cargo @('test', '-p', 'wowtype-core', '--no-default-features')
@@ -92,7 +115,7 @@ Invoke-Native rustup @('target', 'add', 'i686-pc-windows-msvc')
 Invoke-Native cargo @('build', '--release', '-p', 'freetype-tsf', '--target', 'i686-pc-windows-msvc')
 
 Step 'Staging app resources'
-if (Test-Path $Resources) { Remove-Item -Recurse -Force $Resources }
+Recycle-GeneratedDirectory $Resources
 $Bin = Join-Path $Resources 'windows-amd64\bin'
 New-Item -ItemType Directory -Force -Path (Join-Path $Bin 'x86'), (Join-Path $Resources 'icons'), (Join-Path $Resources 'data') | Out-Null
 $Icons = Join-Path $Root "_temp\build-$BuildNumber\icons"
@@ -109,10 +132,15 @@ Copy-Item 'core\data\s2t.tsv' (Join-Path $Resources 'data')
 
 Step "Building the mygo app and installer (mygo $MygoVersion)"
 $AppBuild = Join-Path $AppDir 'build'
-if (Test-Path $AppBuild) { Remove-Item -Recurse -Force $AppBuild }
+Recycle-GeneratedDirectory $AppBuild
 Invoke-Native go @('tool', 'mygo', 'build') $AppDir
 $Built = Get-ChildItem -Recurse -File $AppBuild -Filter "freetype-setup-$Version-*.exe" | Select-Object -First 1
 if (-not $Built) { throw "mygo build produced no installer under $AppBuild" }
+
+if (-not $SkipTests) {
+    Step 'Testing installer preparation with disposable processes'
+    Invoke-Native python @('-X', 'utf8', '-m', 'unittest', 'discover', '-s', 'tests/windows', '-v')
+}
 
 Step 'Recording the release'
 New-Item -ItemType Directory -Force -Path $Release | Out-Null
@@ -167,7 +195,7 @@ $Info = [ordered]@{
     }
 }
 Write-Utf8 (Join-Path $Release 'build-info.json') (($Info | ConvertTo-Json -Depth 5) + "`n")
-Remove-Item -Recurse -Force (Join-Path $Root "_temp\build-$BuildNumber")
+Recycle-GeneratedDirectory $Scratch
 
 Write-Host ''
 Write-Host "Installer : $Installer"

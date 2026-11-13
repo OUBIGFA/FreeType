@@ -417,6 +417,10 @@ pub enum Request {
     RemoveDictionary { name: String },
     /// 导出学到的用户词（水杉词库格式）。
     ExportUserDictionary { path: String },
+    /// 完整学习备份（JSON）：词条、次数、时间和搭配。
+    ExportLearning { path: String },
+    /// 合并完整学习备份，不清空现有记录，也不重复累加次数。
+    ImportLearning { path: String },
     /// 学到的词（用户词库）。
     ListUserWords,
     /// 忘掉这些学到的词（用户词库和选词习惯都去掉）。

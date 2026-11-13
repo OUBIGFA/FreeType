@@ -56,6 +56,136 @@ fn cleanup(host: &Host) {
     let _ = std::fs::remove_dir_all(host.data_dir());
 }
 
+fn learning_request(operation: &str, path: &Path) -> Request {
+    serde_json::from_value(serde_json::json!({
+        "op": operation,
+        "path": path.to_string_lossy(),
+    }))
+    .expect("学习备份请求应被协议支持")
+}
+
+fn learning_host(name: &str) -> Host {
+    let host = host(name);
+    std::fs::create_dir_all(host.data_dir()).unwrap();
+    host
+}
+
+#[test]
+fn learning_backup_restores_unsaved_words_history_and_pairs_after_restart() {
+    let mut source = learning_host("learning-source");
+    let engine = source.engine.as_ref().unwrap();
+    for _ in 0..3 {
+        engine.record_selection_with_pinyin("阿特", Some("a te"));
+    }
+    engine.set_context("阿特");
+    engine.input("nihao");
+    engine.record_selection_with_pinyin("你好", Some("ni hao"));
+    assert!(engine.pair_count() > 0);
+    assert!(!source.store.user_dict_path().exists(), "导出必须包含尚未定时存盘的学习");
+    let backup = source.data_dir().join("学习备份.json");
+    let response = source.handle(1, learning_request("export_learning", &backup));
+    assert!(response.ok, "{:?}", response.error);
+    let bytes = std::fs::read(&backup).unwrap();
+    let data: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(data["format"], "freetype-learning");
+    assert_eq!(data["version"], 1);
+
+    let mut restored = learning_host("learning-restored");
+    let response = restored.handle(1, learning_request("import_learning", &backup));
+    assert!(response.ok, "{:?}", response.error);
+    assert!(response.user_words.unwrap().iter().any(|word| word.word == "阿特"));
+    let restarted = Engine::new(
+        std::sync::Arc::new(wowtype_core::MemoryLexicon::new()),
+        std::sync::Arc::new(wowtype_core::BigramLm::default()),
+    );
+    restarted.load_user_dict(restored.store.user_dict_path()).unwrap();
+    restarted.load_history(restored.store.history_path()).unwrap();
+    assert_eq!(restarted.history_count("阿特"), 3);
+    assert_eq!(restarted.history_count("你好"), 1);
+    assert!(restarted.pair_count() > 0);
+    assert!(restarted.input("ate").iter().any(|candidate| candidate.text == "阿特"));
+    cleanup(&source);
+    cleanup(&restored);
+}
+
+#[test]
+fn learning_backup_merge_preserves_current_learning_and_is_idempotent() {
+    let mut target = learning_host("learning-merge");
+    let engine = target.engine.as_ref().unwrap();
+    for _ in 0..5 {
+        engine.record_selection_with_pinyin("你好", Some("ni hao"));
+    }
+    for _ in 0..3 {
+        engine.record_selection_with_pinyin("霜频阁", Some("shuang pin ge"));
+    }
+    assert!(engine.user_words().iter().any(|(_, word, _)| word == "霜频阁"));
+    let backup = target.data_dir().join("backup.json");
+    std::fs::write(&backup, serde_json::to_vec(&serde_json::json!({
+        "format": "freetype-learning", "version": 1,
+        "words": [["a te", "阿特", 3000.0]],
+        "history": [["阿特", 3, 1234], ["你好", 1, 1234]],
+        "pairs": [["阿特", "你好", 2, 1234]]
+    })).unwrap()).unwrap();
+    assert!(target.handle(1, learning_request("import_learning", &backup)).ok);
+    let first = std::fs::read(target.store.history_path()).unwrap();
+    assert!(target.handle(1, learning_request("import_learning", &backup)).ok);
+    assert_eq!(std::fs::read(target.store.history_path()).unwrap(), first);
+    let engine = target.engine.as_ref().unwrap();
+    assert_eq!(engine.history_count("你好"), 5, "旧备份不能覆盖较新的使用记录");
+    assert_eq!(engine.history_count("阿特"), 3, "重复导入不能累加次数");
+    assert!(engine.user_words().iter().any(|(_, word, _)| word == "霜频阁"));
+    assert_eq!(engine.pair_count(), 1);
+    cleanup(&target);
+}
+
+#[test]
+fn learning_backup_rejects_invalid_records_without_partial_import() {
+    let mut target = learning_host("learning-invalid");
+    target.engine.as_ref().unwrap().record_selection_with_pinyin("你好", Some("ni hao"));
+    let backup = target.data_dir().join("invalid.json");
+    let valid = serde_json::json!({
+        "format": "freetype-learning", "version": 1,
+        "words": [["a te", "阿特", 3000.0]],
+        "history": [["阿特", 3, 1234]], "pairs": []
+    });
+    for (field, value) in [
+        ("version", serde_json::json!(2)),
+        ("format", serde_json::json!("other-app")),
+        ("words", serde_json::json!([["a te", "阿特", 3000], ["bad-code!", "坏词", 3]])),
+        ("history", serde_json::json!([["阿特", -1, 1234]])),
+        ("pairs", serde_json::json!([["你好", "", 1, 1234]])),
+        ("words", serde_json::Value::Null),
+    ] {
+        let mut data = valid.clone();
+        data[field] = value;
+        std::fs::write(&backup, serde_json::to_vec(&data).unwrap()).unwrap();
+        let response = target.handle(1, learning_request("import_learning", &backup));
+        assert!(!response.ok, "损坏的 {field} 必须报错");
+        let engine = target.engine.as_ref().unwrap();
+        assert_eq!(engine.history_count("你好"), 1);
+        assert_eq!(engine.history_count("阿特"), 0, "校验完全部记录后才能导入");
+        assert!(!engine.user_words().iter().any(|(_, word, _)| word == "阿特"));
+    }
+    cleanup(&target);
+}
+
+#[test]
+fn learning_backup_reports_io_failures() {
+    let mut target = learning_host("learning-io");
+    let missing = target.data_dir().join("missing.json");
+    assert!(!target.handle(1, learning_request("import_learning", &missing)).ok);
+    let directory = target.data_dir().to_path_buf();
+    assert!(!target.handle(1, learning_request("export_learning", &directory)).ok);
+    let backup = target.data_dir().join("backup.json");
+    target.engine.as_ref().unwrap().record_selection_with_pinyin("阿特", Some("a te"));
+    assert!(target.handle(1, learning_request("export_learning", &backup)).ok);
+    std::fs::create_dir(target.store.history_path()).unwrap();
+    let response = target.handle(1, learning_request("import_learning", &backup));
+    assert!(!response.ok, "无法持久化时不能声称恢复成功");
+    assert!(target.dirty, "保存失败后仍需重试存盘");
+    cleanup(&target);
+}
+
 #[test]
 fn letters_compose_and_space_commits() {
     let mut host = host("compose");

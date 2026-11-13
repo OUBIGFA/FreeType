@@ -54,7 +54,7 @@ func (a *app) openSettings() {
 		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
 			Parent:  a.win,
 			Title:   title,
-			Filters: []mygo.FileFilter{{Name: "词库、短语文件", Extensions: []string{"txt", "tsv", "scel", "csv"}}},
+			Filters: []mygo.FileFilter{{Name: "词库、短语、学习备份", Extensions: []string{"txt", "tsv", "scel", "csv", "json"}}},
 		})
 		if err != nil || len(paths) == 0 {
 			return ""

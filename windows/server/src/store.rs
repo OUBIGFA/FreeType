@@ -67,7 +67,7 @@ fn report(added: usize, errors: &[LineError]) -> ImportReport {
 }
 
 /// 写到临时文件再改名，写一半断电不会留下坏文件。
-fn write_atomic(path: &Path, data: &str) -> io::Result<()> {
+pub(crate) fn write_atomic(path: &Path, data: &str) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }

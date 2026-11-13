@@ -825,6 +825,33 @@ impl UserLexicon {
         Ok(())
     }
 
+    /// 合并备份词条：先全部校验，已有词保留当前读音，权重只取较大值。
+    pub(crate) fn merge_words(&self, incoming: &[(String, String, f64)]) -> Result<usize> {
+        let mut checked = MemoryLexicon::new();
+        for (pinyin, word, frequency) in incoming {
+            checked.insert(pinyin, word, *frequency)?;
+        }
+        let mut changed = 0;
+        {
+            let mut words = self.words.write().map_err(|_| anyhow!("user words lock poisoned"))?;
+            for (pinyin, word, frequency) in incoming {
+                if let Some(current) = words.iter_mut().find(|(_, existing, _)| existing == word) {
+                    if *frequency > current.2 {
+                        current.2 = *frequency;
+                        changed += 1;
+                    }
+                } else {
+                    words.push((pinyin.trim().to_string(), word.clone(), *frequency));
+                    changed += 1;
+                }
+            }
+        }
+        if changed > 0 {
+            self.rebuild();
+        }
+        Ok(changed)
+    }
+
     /// 删除用户词，返回是否删掉了东西。
     pub fn remove(&self, word: &str) -> bool {
         let removed = {
