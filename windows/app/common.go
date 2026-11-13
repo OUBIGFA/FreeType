@@ -9,7 +9,7 @@ import (
 
 // 常用语独立于快捷短语：没有编码，只从 v + 空格的工具栏中选择。
 func (s *settings) commonPage(c *ui.Context) {
-	pageHeader(c, "常用语", "在 v + 空格的工具栏中选择，不需要编码；原有快捷短语也会出现在工具栏里")
+	pageHeader(c, "常用语", "常用语不需要编码。启用工具栏后，在全拼状态下按 v + 空格，再选择「常用语」。快捷短语也会显示在该列表中。")
 	section(c, "添加", func() {
 		s.settingBlock(c, "common/添加常用语", func() {
 			ui.Column(c).Padding(16, 18).Gap(12).Children(func() {
@@ -51,7 +51,11 @@ func (s *settings) commonPage(c *ui.Context) {
 				}
 			}
 			if len(shown) == 0 {
-				row(c, "没有常用语", "", nil)
+				title := "没有常用语"
+				if query != "" {
+					title = "没有匹配的常用语"
+				}
+				row(c, title, "", nil)
 				return
 			}
 			remove := -1

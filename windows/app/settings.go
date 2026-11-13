@@ -24,10 +24,16 @@ type settings struct {
 	openTable  func(title string) string
 	saveFile   func(title, name string) string
 	openFolder func(path string)
+	openURL    func(url string) error
 	// 安装目录里的资源（图标），测试里为空。
 	resources string
 	// 托盘图标开关改了（托盘程序跟着建或拿掉图标）。
 	onTray func(show bool)
+	// 更新动作由应用接入真实更新库；视图只显示状态并提交用户操作。
+	onCheckUpdates    func()
+	onUpdateNow       func()
+	onAutomaticUpdate func(bool)
+	updateStatus      updateState
 
 	page                         string
 	loaded                       bool
@@ -143,6 +149,9 @@ func (s *settings) saveConfig() {
 			if resp.Config != nil {
 				s.config = *resp.Config
 			}
+			if s.onAutomaticUpdate != nil {
+				s.onAutomaticUpdate(s.config.AutoUpdate)
+			}
 			s.wordsLoaded = false
 		}
 	})
@@ -249,8 +258,12 @@ func (s *settings) export(request, title, name string) {
 			if resp.Report != nil {
 				count = resp.Report.Added
 			}
-			s.notice = fmt.Sprintf("已导出 %d 条", count)
-			if resp.Report != nil && resp.Report.Note != "" {
+			if request == "export_settings" {
+				s.notice = "已导出全部设置和数据"
+			} else {
+				s.notice = fmt.Sprintf("已导出 %d 条", count)
+			}
+			if request != "export_settings" && resp.Report != nil && resp.Report.Note != "" {
 				s.notice += "（" + resp.Report.Note + "）"
 			}
 		}

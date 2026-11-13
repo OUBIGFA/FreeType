@@ -224,6 +224,8 @@ pub struct Config {
     pub hint_on_focus: bool,
     /// 提示在光标的哪边：top-left top top-right bottom-left bottom bottom-right。
     pub hint_position: String,
+    /// 开启后由托盘程序后台下载更新，下一次启动时交给完整安装器；默认关闭。
+    pub auto_update: bool,
 }
 
 impl Default for Config {
@@ -271,6 +273,7 @@ impl Default for Config {
             hint_on_toggle: true,
             hint_on_focus: false,
             hint_position: "top-left".into(),
+            auto_update: false,
         }
     }
 }
@@ -700,6 +703,15 @@ mod tests {
         assert_eq!(config.font_family, DEFAULT_FONT);
         assert!(config.fullwidth_punct);
         assert_eq!(config.fuzzy_groups, fuzzy::DEFAULT);
+    }
+
+    #[test]
+    fn automatic_updates_default_off_and_round_trip_in_config() {
+        let mut config: Config = serde_json::from_str("{}").unwrap();
+        assert!(!config.auto_update, "旧配置不能自动开启软件更新");
+        config.auto_update = true;
+        let restored: Config = serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
+        assert!(restored.auto_update);
     }
 
     #[test]

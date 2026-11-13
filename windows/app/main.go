@@ -5,7 +5,9 @@
 package main
 
 import (
+	"context"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/netproxy"
 	"github.com/egoist/mygo/ui"
 
 	// 语言目录：安装器和 mygo 自己的控件文字按系统语言显示（简体中文、繁体中文、英文）
@@ -25,6 +28,7 @@ type app struct {
 	win       *mygo.Window
 	settings  *settings
 	tray      *mygo.Tray
+	updates   *updates
 }
 
 func (a *app) openSettings() {
@@ -39,6 +43,33 @@ func (a *app) openSettings() {
 	s.resources = a.resources
 	s.onTray = a.showTray
 	s.openFolder = func(path string) { _ = exec.Command("explorer.exe", path).Start() }
+	s.openURL = mygo.Shell.OpenExternal
+	if a.updates != nil {
+		s.updateStatus = a.updates.snapshot()
+		s.onAutomaticUpdate = a.updates.setAutomatic
+		s.onCheckUpdates = func() {
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				_ = a.updates.check(ctx) // The manager exposes errors as a visible state.
+			}()
+		}
+		s.onUpdateNow = func() {
+			go func() {
+				executable, err := os.Executable()
+				if err == nil {
+					err = a.updates.updateNow(filepath.Dir(executable))
+				}
+				if err != nil {
+					log.Println("update now:", err)
+					return
+				}
+				mygo.RunOnMain(func() { mygo.App.Quit() })
+			}()
+		}
+	} else {
+		s.updateStatus.Message = "更新检查暂不可用，请重启 FreeType 后重试"
+	}
 	s.openTable = func(title string) string {
 		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
 			Parent:  a.win,
@@ -54,7 +85,7 @@ func (a *app) openSettings() {
 		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
 			Parent:  a.win,
 			Title:   title,
-			Filters: []mygo.FileFilter{{Name: "词库、短语、学习备份", Extensions: []string{"txt", "tsv", "scel", "csv", "json"}}},
+			Filters: []mygo.FileFilter{{Name: "词库、短语或备份文件", Extensions: []string{"txt", "tsv", "scel", "csv", "json"}}},
 		})
 		if err != nil || len(paths) == 0 {
 			return ""
@@ -119,7 +150,7 @@ func (a *app) makeTray() {
 			go a.client.Call(op("reload"))
 		}},
 		mygo.Separator(),
-		{Label: "关闭托盘图标", Click: func(*mygo.MenuItem, *mygo.Window) { mygo.App.Quit() }},
+		{Label: "关闭设置和托盘", Click: func(*mygo.MenuItem, *mygo.Window) { mygo.App.Quit() }},
 	})
 	tray, err := mygo.NewTray(mygo.TrayOptions{
 		ID:      "freetype",
@@ -149,10 +180,46 @@ func main() {
 	mygo.App.OnWindowAllClosed(func() {})
 	mygo.App.WhenReady(func() {
 		a.resources, _ = mygo.App.Path(mygo.PathResources)
+		if dir, err := mygo.App.Path(mygo.PathUserData); err == nil {
+			transport := netproxy.Transport().Clone()
+			transport.ResponseHeaderTimeout = 30 * time.Second
+			a.updates, err = newUpdates(dir, mygo.App.Version(), &http.Client{Transport: transport}, "")
+			if err != nil {
+				log.Println("initialize updates:", err)
+			} else {
+				a.updates.changed = func(state updateState) {
+					mygo.RunOnMain(func() {
+						if a.settings != nil && a.win != nil {
+							settings := a.settings
+							a.win.Update(func() { settings.updateStatus = state })
+						}
+					})
+				}
+			}
+		} else {
+			log.Println("update data directory:", err)
+		}
 		go func() {
 			if err := ensureServer(a.client, a.resources, 10*time.Second); err != nil {
 				log.Println(err)
+				return
 			}
+			config, err := a.client.Call(op("get_config"))
+			if err != nil || config.Config == nil || a.updates == nil {
+				return
+			}
+			if config.Config.AutoUpdate && a.updates.snapshot().Ready {
+				executable, err := os.Executable()
+				if err == nil {
+					err = a.updates.install(filepath.Dir(executable))
+				}
+				if err == nil {
+					mygo.RunOnMain(func() { mygo.App.Quit() })
+					return
+				}
+				log.Println("apply downloaded update:", err)
+			}
+			a.updates.setAutomatic(config.Config.AutoUpdate)
 		}()
 		// 先放托盘图标；读到设置里关掉了再拿掉
 		a.makeTray()
@@ -168,5 +235,8 @@ func main() {
 	})
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)
+	}
+	if a.updates != nil {
+		a.updates.close()
 	}
 }

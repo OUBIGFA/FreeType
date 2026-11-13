@@ -833,6 +833,8 @@ func TestNewSettingsLayoutsSnapshots(t *testing.T) {
 		{"common-min-window", "common/导入或导出", "", 780, 540},
 		{"search-hidden-option", "typing/汉字和字母之间", "", 1000, 540},
 		{"mixed-original-style", "typing/中英文之间自动加空格", "", 1000, 600},
+		{"about-min-window", "about/自动更新", "", 780, 540},
+		{"about-updates-ready", "about/检查更新", "", 1000, 540},
 		{"search-results", "", "中英 空格", 1000, 720},
 	} {
 		s, _ := newTestSettings()
@@ -841,6 +843,13 @@ func TestNewSettingsLayoutsSnapshots(t *testing.T) {
 			s.config.Autospace = true
 		}
 		s.common = []string{"您好，欢迎使用 FreeType。", "第一行\n第二行"}
+		if sample.name == "about-updates-ready" {
+			s.updateStatus = updateState{Version: "0.2.0", Message: "更新已下载，可立即更新；开启自动更新后，下次启动时安装", Ready: true}
+		}
+		s.onCheckUpdates, s.onUpdateNow = func() {}, func() {}
+		if _, err := os.Stat("resources"); err == nil {
+			s.resources = "resources"
+		}
 		if sample.target != "" {
 			s.locateSetting(setting(sample.target))
 		}

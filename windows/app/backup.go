@@ -68,6 +68,9 @@ func (s *settings) importSettingsBackup(path string) {
 			if s.onTray != nil {
 				s.onTray(s.config.TrayIcon)
 			}
+			if s.onAutomaticUpdate != nil {
+				s.onAutomaticUpdate(s.config.AutoUpdate)
+			}
 			s.notice = "已导入全部设置和数据"
 			if response.Report != nil && response.Report.Note != "" {
 				s.notice += "（" + response.Report.Note + "）"

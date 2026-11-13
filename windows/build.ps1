@@ -27,6 +27,7 @@ Set-Location $Root
 $Version = '0.0.1'
 $Identifier = 'io.github.oubigfa.freetype'
 $MygoVersion = 'v0.9.0'
+$SelfUpdateVersion = 'v1.7.1'
 $BuildNumber = Get-Date -Format 'yyyyMMddHHmmss'
 $AppDir = Join-Path $Root 'windows\app'
 $Resources = Join-Path $AppDir 'resources'
@@ -96,6 +97,7 @@ $GoVersion = (& go version)
 if ($GoVersion -notmatch 'go1\.27\.3') { throw "Go 1.27.3 is required for mygo $MygoVersion, found: $GoVersion" }
 $GoMod = Get-Content -Raw (Join-Path $AppDir 'go.mod')
 if ($GoMod -notmatch "github.com/egoist/mygo $([regex]::Escape($MygoVersion))") { throw "windows/app/go.mod must pin mygo $MygoVersion" }
+if ($GoMod -notmatch "github.com/creativeprojects/go-selfupdate $([regex]::Escape($SelfUpdateVersion))") { throw "windows/app/go.mod must pin go-selfupdate $SelfUpdateVersion" }
 
 New-Item -ItemType Directory -Force -Path $Scratch | Out-Null
 $env:TEMP = $Scratch
@@ -177,10 +179,12 @@ $Info = [ordered]@{
         cargo  = (& cargo --version).Trim()
         go     = $GoVersion.Trim()
         mygo   = $MygoVersion
+        goSelfUpdate = $SelfUpdateVersion
         python = (& python --version).Trim()
         pillow = $Pillow
     }
     components     = [ordered]@{
+        'FreeType.exe'                 = Sha256 (Join-Path $AppBuild 'windows-amd64\FreeType.exe')
         'bin/FreeTypeServer.exe'       = Sha256 (Join-Path $Bin 'FreeTypeServer.exe')
         'bin/freetype_tsf.dll'         = Sha256 (Join-Path $Bin 'freetype_tsf.dll')
         'bin/x86/freetype_tsf.dll'     = Sha256 (Join-Path $Bin 'x86\freetype_tsf.dll')

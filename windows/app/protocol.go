@@ -54,6 +54,7 @@ type Config struct {
 	HintOnToggle      bool   `json:"hint_on_toggle"`
 	HintOnFocus       bool   `json:"hint_on_focus"`
 	HintPosition      string `json:"hint_position"`
+	AutoUpdate        bool   `json:"auto_update"`
 }
 
 // defaultConfig 和服务进程的默认值一样（连不上服务进程时界面先按它画）。

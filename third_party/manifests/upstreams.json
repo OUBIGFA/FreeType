@@ -21,6 +21,21 @@
       "license": "MIT"
     },
     {
+      "name": "go-selfupdate",
+      "repository": "https://github.com/creativeprojects/go-selfupdate",
+      "version": "v1.7.1",
+      "revision": "5dd040baff932ef7b1dbe8d6c52cb99d89326dde",
+      "use": "Windows 更新版本选择、安装器下载、SHA-256 校验和下载缓存的原子替换；由 windows/app/go.mod 固定。GitHub 官方 API 提供安装器校验值，完整安装复用现有 NSIS 流程",
+      "license": "MIT；见 windows/app/assets/go-selfupdate-license.txt"
+    },
+    {
+      "name": "GitHub Octicons",
+      "repository": "https://github.com/primer/octicons",
+      "revision": "68ec2de8d0ddfcbb7497da01d0b7d98eb5593020",
+      "use": "关于页的 GitHub 标志；只调整 SVG 的填充色使其跟随文字。SVG 与 MIT 许可文本位于 windows/app/assets，并嵌入应用",
+      "license": "MIT；见 windows/app/assets/octicons-license.txt"
+    },
+    {
       "name": "msime-windows",
       "repository": "https://github.com/metasequoiaime/msime-windows",
       "revision": "26796f3ed646e2ce75ba39bca6f1352caca9fd67",

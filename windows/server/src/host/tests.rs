@@ -709,6 +709,7 @@ fn settings_backup_restores_all_data_including_unsaved_learning_and_custom_lexic
         c.page_size = 9;
         c.autospace_digits = false;
         c.tray_icon = false;
+        c.auto_update = true;
         c.lexicon = main_lexicon.to_string_lossy().into();
         c.default_mode = DefaultMode::Global;
     });
@@ -734,6 +735,7 @@ fn settings_backup_restores_all_data_including_unsaved_learning_and_custom_lexic
     assert_eq!(data["format"], "freetype-settings");
     assert_eq!(data["version"], 1);
     assert_eq!(data["config"]["lexicon"], "", "备份不依赖来源机器的路径");
+    assert_eq!(data["config"]["auto_update"], true);
 
     let mut target = learning_host("settings-target");
     target.engine.as_ref().unwrap().record_selection_with_pinyin("旧词", Some("jiu ci"));
@@ -746,6 +748,7 @@ fn settings_backup_restores_all_data_including_unsaved_learning_and_custom_lexic
     assert!(result.ok, "{result:?}");
     assert_eq!(target.config.page_size, 9);
     assert!(!target.config.autospace_digits && !target.config.tray_icon);
+    assert!(target.config.auto_update, "全部设置备份也应恢复自动更新开关");
     assert_eq!(target.mode, Mode::English);
     assert_eq!(target.store.list_quick_phrases()[0].text, "第一行\n第二行");
     assert_eq!(target.store.load_common_phrases().unwrap(), vec!["常用FreeType"]);

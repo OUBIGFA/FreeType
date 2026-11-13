@@ -131,7 +131,7 @@ func (s *settings) statusCard(c *ui.Context) {
 			ui.Text(c, "FreeType 输入法").FontSize(17).FontWeight(600)
 			switch {
 			case s.statusErr != "":
-				ui.Text(c, "输入法服务没有运行："+s.statusErr).TextColor(t.Danger).Wrap()
+				ui.Text(c, "无法连接输入法服务："+s.statusErr).TextColor(t.Danger).Wrap()
 			case s.status.Error != "":
 				ui.Text(c, "词库载入失败："+s.status.Error).TextColor(t.Danger).Wrap()
 			case !s.status.Ready:
@@ -467,18 +467,18 @@ func (s *settings) shortcutsPage(c *ui.Context) {
 			changed = choose(c, "切换中文 / 英文", hotkeysMode, &s.config.HotkeyMode, 180) || changed
 		})
 	})
-	hint(c, "设了的快捷键由输入法先接收，应用里同样的快捷键（如编辑器的 Ctrl+. 快速修复）就不起作用了，所以默认都不用。")
+	hint(c, "快捷键默认关闭。启用后，FreeType 会先接收该按键；应用中的同名快捷键将无法使用。")
 	section(c, "固定按键", func() {
 		s.settingBlock(c, "shortcuts/固定按键", func() {
 			for _, k := range [][2]string{
 				{"Shift", "切换中文 / 英文（可在「常规」里改）"},
-				{"空格 / 1–9", "选词；回车原样上屏打的字母"},
-				{"- =  PgUp PgDn", "翻页"},
+				{"空格 / 1–9 / 0", "空格选择当前候选；数字选择对应候选，每页有 10 项时，0 选择第 10 项；回车上屏原始输入"},
+				{"- =  PgUp PgDn", "翻页；其他翻页键可在「拼音与按键」中设置"},
 				{"← →  ↓", "移动候选；横排时 ↓ 展开更多候选"},
 				{"Ctrl + Delete", "删除光标处学错的词的记忆（也可以长按或右键候选）"},
-				{"[ ]", "以词定字：上屏第一个 / 最后一个字"},
-				{"v + 空格", "工具栏：剪贴板、常用语、符号、表情"},
-				{"Esc", "清空正在打的字"},
+				{"[ ]", "启用「以词定字」后，选择候选的第一个 / 最后一个字；设置为翻页键时用于翻页"},
+				{"v + 空格", "启用工具栏后，在全拼状态下打开剪贴板、常用语、符号和表情"},
+				{"Esc", "清空当前输入，或关闭工具栏和表情面板"},
 			} {
 				ui.Row(c).Padding(11, 18).Gap(16).AlignItems(ui.Center).Children(func() {
 					ui.Row(c).Width(180).Gap(4).Children(func() {
@@ -530,7 +530,7 @@ func (s *settings) dictsPage(c *ui.Context) {
 			}
 		})
 	})
-	hint(c, "默认使用白霜主词库、万象补充和项目热词。也可以选择「拼音<Tab>词<Tab>词频」一行一条的 lexicon.tsv；Rime 词库用 tools/rime2tsv.py 转换。换词库要几秒，学到的词不受影响。文件不在时用默认词库。")
+	hint(c, "默认使用白霜主词库、万象补充和项目热词。自定义主词库需使用 TSV 文件：每行包含拼音、词语和词频，列之间用制表符分隔。Rime 等词库可从下方「导入词库」导入。选择文件后，FreeType 会在后台载入词库；文件不存在时使用默认词库。")
 	section(c, "导入词库", func() {
 		s.settingRow(c, "dicts/导入词库", func() {
 			if ui.PrimaryButton(c, "导入词库…").Clicked() {
@@ -558,7 +558,7 @@ func (s *settings) dictsPage(c *ui.Context) {
 }
 
 func (s *settings) phrasesPage(c *ui.Context) {
-	pageHeader(c, "快捷短语", "编码（只能是英文字母）正好打完时，短语排在候选第一个；也能在 v + 空格的「常用语」里选")
+	pageHeader(c, "快捷短语", "启用「快捷短语候选」后，输入完整编码即可选用短语。编码只使用英文字母；短语也会显示在工具栏的「常用语」中。")
 	section(c, "添加", func() {
 		s.settingBlock(c, "phrases/添加快捷短语", func() {
 			ui.Column(c).Padding(16, 18).Gap(12).Children(func() {
@@ -592,14 +592,18 @@ func (s *settings) phrasesPage(c *ui.Context) {
 	})
 	s.reportView(c)
 	ui.Row(c).Margin(16, 0, 0, 0).Gap(12).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, fmt.Sprintf("全部短语（%d）", len(s.phrases))).FontSize(14).FontWeight(600).Grow(1)
+		ui.Text(c, fmt.Sprintf("全部快捷短语（%d）", len(s.phrases))).FontSize(14).FontWeight(600).Grow(1)
 		ui.SearchField(c, &s.phraseQuery).Placeholder("搜索编码或短语").Width(240)
 	})
 	section(c, "", func() {
 		s.settingBlock(c, "phrases/全部快捷短语", func() {
 			shown := s.filteredPhrases()
 			if len(shown) == 0 {
-				row(c, "没有快捷短语", "", nil)
+				title := "没有快捷短语"
+				if strings.TrimSpace(s.phraseQuery) != "" {
+					title = "没有匹配的快捷短语"
+				}
+				row(c, title, "", nil)
 				return
 			}
 			remove := -1
@@ -624,7 +628,7 @@ func (s *settings) phrasesPage(c *ui.Context) {
 }
 
 func (s *settings) learnedPage(c *ui.Context) {
-	pageHeader(c, "学到的词", "你选过的词组会被记住，下次排得更靠前。打错字被记住了，可以在这里删掉；打字时长按候选或按 Ctrl+Delete 也能删")
+	pageHeader(c, "学到的词", "查看和管理自动学习的词。选词次数和上下文搭配会影响候选排序；可在这里删除错误记录，也可长按候选或按 Ctrl+Delete 删除。")
 	section(c, "", func() {
 		s.settingRow(c, "learned/学习备份", func() {
 			if ui.Button(c, "导入…").Clicked() {
@@ -643,7 +647,7 @@ func (s *settings) learnedPage(c *ui.Context) {
 	section(c, "添加词", func() {
 		s.settingBlock(c, "learned/添加词", func() {
 			ui.Column(c).Padding(16, 18).Gap(10).Children(func() {
-				ui.Text(c, "中文词可留空并自动注音，多音字请填写拼音。英文词默认用原词作输入码；中英混输请填写实际输入码，例如 datag → 打 tag。").FontSize(12.5).TextColor(colors(c).muted).Wrap()
+				ui.Text(c, "中文词的拼音可留空，FreeType 会自动注音；多音字请填写拼音。英文词默认使用原词的小写作为输入码。中英混输词请填写实际输入码，如 datag → 打 tag。").FontSize(12.5).TextColor(colors(c).muted).Wrap()
 				ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
 					grayed(c).Children(func() {
 						ui.TextInput(c, &s.newWord).Placeholder("词语，例如 霜频阁").Label("词语").Width(200)
@@ -661,7 +665,7 @@ func (s *settings) learnedPage(c *ui.Context) {
 			})
 		})
 	})
-	switch ui.AlertDialog(c, &s.confirmClear, "清空学到的词？", "学到的词和输入习惯都会删掉。没有备份时无法恢复。快捷短语和导入的词库不受影响。", "取消", "清空") {
+	switch ui.AlertDialog(c, &s.confirmClear, "清空学习记录？", "将删除全部学习词条、选词次数和搭配。此操作需要学习备份才能恢复。", "取消", "清空") {
 	case 1:
 		s.clearLearned()
 	}
@@ -671,7 +675,7 @@ func (s *settings) learnedPage(c *ui.Context) {
 		if ui.Button(c, "刷新").Clicked() {
 			s.loadWords()
 		}
-		ui.SearchField(c, &s.wordQuery).Placeholder("搜索词或拼音").Width(240)
+		ui.SearchField(c, &s.wordQuery).Placeholder("搜索词、拼音或输入码").Width(240)
 	})
 	p := colors(c)
 	ui.Column(c).Margin(8, 0, 0, 0).Radius(8).Background(p.card).Border(1, p.border).Clip().Children(func() {
@@ -681,7 +685,11 @@ func (s *settings) learnedPage(c *ui.Context) {
 				return
 			}
 			if len(words) == 0 {
-				row(c, "没有学到的词", "", nil)
+				title := "没有学到的词"
+				if strings.TrimSpace(s.wordQuery) != "" {
+					title = "没有匹配的学习词条"
+				}
+				row(c, title, "", nil)
 				return
 			}
 			ui.List(c, nil, len(words), func(i int) {
@@ -696,35 +704,6 @@ func (s *settings) learnedPage(c *ui.Context) {
 				})
 			}).MaxHeight(460)
 		})
-	})
-}
-
-func (s *settings) aboutPage(c *ui.Context) {
-	pageHeader(c, "关于", "")
-	section(c, "", func() {
-		row(c, "FreeType "+s.version, "基于 WowType 的 Windows 中文输入法；设置界面使用 mygo。这是测试版本", nil)
-		if s.status.DataDir != "" {
-			dir := s.status.DataDir
-			s.settingRowValue(c, "about/用户数据", dir, func() {
-				if ui.Button(c, "打开文件夹").Label("打开用户数据文件夹").Clicked() && s.openFolder != nil {
-					s.openFolder(dir)
-				}
-			})
-		}
-		if s.status.LogDir != "" {
-			dir := s.status.LogDir
-			s.settingRow(c, "about/日志", func() {
-				if ui.Button(c, "打开文件夹").Label("打开日志文件夹").Clicked() && s.openFolder != nil {
-					s.openFolder(dir)
-				}
-			})
-		}
-		s.settingRow(c, "about/问题反馈", nil)
-	})
-	section(c, "来源与许可", func() {
-		s.settingRow(c, "about/拼音引擎", nil)
-		s.settingRow(c, "about/词库", nil)
-		s.settingRow(c, "about/水杉输入法格式", nil)
 	})
 }
 

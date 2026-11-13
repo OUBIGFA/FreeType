@@ -35,6 +35,7 @@ mygo 固定为 v0.9.0，本次核对时仍为最新发布版。
 | 学习、删除、完整备份 | 复用上游词库、热度与搭配；本地补齐英文和混输输入码学习 | 核心测试覆盖 datag 分段组词、英文、较长混输、双拼单字、排序、删除、重启与备份；服务验证显示格式与真实词条标识；预判不能提前学习 |
 | 设置、提示、托盘与状态栏 | Windows 补充；Go 与 Rust 使用同一配置字段 | 设置页面行为测试、服务状态测试；浅色 / 深色设置页面截图测试 |
 | 设置搜索、独立常用语、全部设置备份 | Windows 补充，搜索与界面共用名称；学习数据复用核心备份格式 | 所有搜索结果有实际目标、隐藏选项不改设置；常用语多行往返；完整备份含未存盘学习、自定义主词库迁移和写入失败回滚；真实管道往返与重启测试 |
+| 项目、反馈与软件更新 | 真实 GitHub 入口；go-selfupdate 固定版本负责下载和校验，现有 NSIS 完整安装器负责输入法组件 | 默认关闭、开关与备份往返、后台下载与待安装记录、同版本注册重试、旧版本拒绝、缓存损坏重下、重复操作与无发布/请求失败；实际升级尚需真实发布与隔离安装验收 |
 | Windows 平台与安装器 | TSF x64 / x86、命名管道、mygo 和 NSIS | DLL 加载测试、管道端到端测试、安装前准备测试；统一入口 `windows/build.ps1` |
 
 上游来源：[WowType 固定基线](https://github.com/Gloridust/WowType/tree/5656e136e9f5fc32837c87bc1a2242ec159a32d7)、[本次核对的 main](https://github.com/Gloridust/WowType/tree/882bd335c0e1484c8e49e00a22c47431a5b9feb4)、[fcitx5 按键外壳](https://github.com/Gloridust/WowType/blob/882bd335c0e1484c8e49e00a22c47431a5b9feb4/fcitx5-addon/src/wowtype_engine.cpp)、[macOS 候选窗](https://github.com/Gloridust/WowType/blob/882bd335c0e1484c8e49e00a22c47431a5b9feb4/macos/Sources/App/CandidatePanel.swift)。
