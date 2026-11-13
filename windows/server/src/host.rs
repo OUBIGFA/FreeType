@@ -780,7 +780,10 @@ impl Host {
         if word.is_empty() || word.contains(['\t', '\n', '\r']) {
             return Response::error("词语不能为空，也不能有换行");
         }
-        let pinyin = if pinyin.trim().is_empty() {
+        let english = word.bytes().any(|b| b.is_ascii_alphabetic()) && word.bytes().all(|b| b.is_ascii_alphanumeric());
+        let pinyin = if pinyin.trim().is_empty() && english {
+            word.to_ascii_lowercase()
+        } else if pinyin.trim().is_empty() {
             match dictfmt::Reading::pinyin(self.reading(&[word.clone()]).as_ref(), &word) {
                 Some(p) => p,
                 None => return Response::error(format!("认不出「{word}」的读音，请填上拼音")),
@@ -788,8 +791,13 @@ impl Host {
         } else {
             pinyin
         };
-        let Some(pinyin) = msime::normalize_pinyin(&pinyin) else {
-            return Response::error("拼音不对：写成 ni hao、ni'hao 或 nihao");
+        let pinyin = if word.chars().any(|c| c.is_ascii_alphabetic()) {
+            pinyin
+        } else {
+            let Some(pinyin) = msime::normalize_pinyin(&pinyin) else {
+                return Response::error("拼音不对：写成 ni hao、ni'hao 或 nihao");
+            };
+            pinyin
         };
         let Some(engine) = self.engine.as_deref() else {
             return Response::error("词库还在载入，请稍后再试");
@@ -818,7 +826,11 @@ impl Host {
         let mut words: Vec<UserWord> = engine
             .user_words()
             .into_iter()
-            .map(|(pinyin, word, freq)| UserWord { word, pinyin, freq })
+            .map(|(pinyin, word, freq)| {
+                let display = wowtype_core::autospace::format_text(&word, None, crate::input::autospace_flags(&self.config));
+                let display = if display == word { String::new() } else { display };
+                UserWord { word, display, pinyin, freq }
+            })
             .collect();
         words.sort_by(|a, b| b.freq.total_cmp(&a.freq).then_with(|| a.pinyin.cmp(&b.pinyin)));
         words

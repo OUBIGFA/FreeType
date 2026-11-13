@@ -104,9 +104,17 @@ type Dictionary struct {
 
 // UserWord 是一个学到的词。
 type UserWord struct {
-	Word   string  `json:"word"`
-	Pinyin string  `json:"pinyin"`
-	Freq   float64 `json:"freq"`
+	Word    string  `json:"word"`
+	Display string  `json:"display,omitempty"`
+	Pinyin  string  `json:"pinyin"`
+	Freq    float64 `json:"freq"`
+}
+
+func (word UserWord) text() string {
+	if word.Display != "" {
+		return word.Display
+	}
+	return word.Word
 }
 
 // Status 是服务进程的状态。

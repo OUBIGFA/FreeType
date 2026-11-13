@@ -609,6 +609,32 @@ func TestLearnedWordsSearchDeleteAndClear(t *testing.T) {
 	}
 }
 
+func TestLearnedMixedWordsDisplaySearchAndDeleteTheOriginalEntry(t *testing.T) {
+	s, b := newTestSettings()
+	if err := json.Unmarshal([]byte(`[{"word":"打tag","display":"打 tag","pinyin":"datag","freq":3000}]`), &b.words); err != nil {
+		t.Fatal(err)
+	}
+	tt := open(t, s, "学到的词")
+	if !tt.HasText("打 tag") {
+		t.Fatalf("应显示上屏的混输格式：%q", tt.Texts())
+	}
+	s.wordQuery = "打 tag"
+	tt.Frame()
+	if !tt.HasText("打 tag") {
+		t.Fatal("按上屏内容搜索应能找到混输词")
+	}
+	if err := tt.Click("删除 打 tag"); err != nil {
+		t.Fatal(err)
+	}
+	if len(b.words) != 0 {
+		t.Fatal("显示格式不能改变真正删除的词条标识")
+	}
+	deleted, _ := json.Marshal(b.last("forget_words")["words"])
+	if string(deleted) != `["打tag"]` {
+		t.Fatalf("删除标识错误：%s", deleted)
+	}
+}
+
 func TestLearningBackupExportUsesJsonAndNotDictionaryExport(t *testing.T) {
 	s, backend := newTestSettings()
 	var suggested string

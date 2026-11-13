@@ -24,6 +24,33 @@ pub fn needs_space(prev: char, next: char, flags: u32) -> bool {
     (is_han(prev) && is_ascii_kind(next, flags)) || (is_ascii_kind(prev, flags) && is_han(next))
 }
 
+/// 按指定字母/数字开关处理整段文字；显示和上屏共用，不重复或替换已有空白。
+pub fn format_text(text: &str, before: Option<char>, flags: u32) -> String {
+    let mut out = String::new();
+    let mut previous = before;
+    for next in text.chars() {
+        if previous.is_some_and(|prev| needs_space(prev, next, flags)) { out.push(' '); }
+        out.push(next);
+        previous = Some(next);
+    }
+    out
+}
+
+/// 对照学习词条时去掉中英边界上的单个空格；不合并英文词，也不跨换行。
+pub(crate) fn without_boundary_spaces(text: &str) -> String {
+    let mut chars = text.chars().peekable();
+    let mut out = String::new();
+    let mut previous = None;
+    while let Some(next) = chars.next() {
+        if next == ' ' && previous.zip(chars.peek().copied()).is_some_and(|(prev, after)| needs_space(prev, after, LETTERS | DIGITS)) {
+            continue;
+        }
+        out.push(next);
+        previous = Some(next);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -143,6 +143,7 @@ func (s *settings) saveConfig() {
 			if resp.Config != nil {
 				s.config = *resp.Config
 			}
+			s.wordsLoaded = false
 		}
 	})
 }
@@ -455,8 +456,8 @@ func (s *settings) filteredWords() []UserWord {
 	var out []UserWord
 	compact := strings.ReplaceAll(q, " ", "")
 	for _, w := range s.words {
-		pinyin := strings.ReplaceAll(w.Pinyin, " ", "")
-		if strings.Contains(w.Word, q) || strings.Contains(pinyin, compact) {
+		pinyin := strings.ReplaceAll(strings.ToLower(w.Pinyin), " ", "")
+		if strings.Contains(strings.ToLower(w.Word), q) || strings.Contains(strings.ToLower(w.text()), q) || strings.Contains(pinyin, compact) {
 			out = append(out, w)
 		}
 	}

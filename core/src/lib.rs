@@ -120,6 +120,8 @@ pub struct EngineConfig {
 
 /// 分几次选出来的词，多长以内用一次就学（人名、术语、成语大多在四个字以内）。
 pub const COMPOSED_WORD_MAX_CHARS: usize = 4;
+/// 混输短词按汉字数判断，同时沿用英文候选的长度范围，避免把长句当作造词。
+const MIXED_WORD_MAX_CHARS: usize = 32;
 
 impl Default for EngineConfig {
     fn default() -> Self {
@@ -266,7 +268,8 @@ impl Engine {
     fn add_learned_word(&self, word: &str, pinyin: &str, count: u32) {
         // 候选带的拼音已经是全拼（双拼也翻好了）；以前的前端会传双拼键位串（如 "vsgo"），
         // 那样的要先展开，否则用户词会带着一串无效音节存进去，永远也打不出来。
-        let pinyin = if self.config.shuangpin && !pinyin.trim().contains(' ') {
+        let pinyin = if self.config.shuangpin && !word.chars().any(|c| c.is_ascii_alphabetic())
+            && !pinyin.trim().contains(' ') && crate::lexicon::parse_pinyin_keys(pinyin.trim()).is_err() {
             crate::shuangpin::to_full_pinyin(self.config.shuangpin_scheme, pinyin.trim())
         } else {
             pinyin.to_string()
@@ -287,7 +290,10 @@ impl Engine {
     /// 反馈见 https://x.com/so1v3/status/2120415675969896729
     pub fn record_composed_word(&self, word: &str, pinyin: &str) {
         // 超过四个字的多半是先选句首词、再选剩下的长句，不是要造的词：照常按次数学
-        if word.chars().count() > COMPOSED_WORD_MAX_CHARS {
+        let chars = word.chars().count();
+        let mixed_short_word = word.chars().any(|c| c.is_ascii_alphabetic()) && chars <= MIXED_WORD_MAX_CHARS
+            && word.chars().filter(|c| crate::autospace::is_han(*c)).count() <= COMPOSED_WORD_MAX_CHARS;
+        if chars > COMPOSED_WORD_MAX_CHARS && !mixed_short_word {
             self.record_selection_with_pinyin(word, Some(pinyin));
             return;
         }
@@ -350,7 +356,9 @@ impl Engine {
             return None;
         }
         let context = self.context.read().ok()?;
-        context.trim_end().ends_with(&last).then_some(last)
+        let matches = context.trim_end().ends_with(&last)
+            || crate::autospace::without_boundary_spaces(context.trim_end()).ends_with(&crate::autospace::without_boundary_spaces(&last));
+        matches.then_some(last)
     }
 
     /// 学到的搭配数。
@@ -668,7 +676,7 @@ impl Engine {
         } else {
             self.pinyin_candidates(raw, None, at_ms)?
         };
-        self.prepend_custom_codes(raw, &mut result);
+        self.prepend_custom_codes(raw, at_ms, &mut result);
         if let Ok(mut last) = self.last_words.write() {
             last.clear();
             for c in &result {
@@ -690,13 +698,23 @@ impl Engine {
     }
 
     /// 输入正好是某个自定义编码（mail、wdyx）时，把对应的词放在最前面。
-    fn prepend_custom_codes(&self, raw: &str, result: &mut Vec<Candidate>) {
+    fn prepend_custom_codes(&self, raw: &str, at_ms: u64, result: &mut Vec<Candidate>) {
         let words = self.lexicon.custom_code_words(raw.trim());
-        if words.is_empty() {
+        let mut learned = self.lexicon.learned_code_words(raw.trim());
+        if words.is_empty() && learned.is_empty() {
             return;
         }
-        result.retain(|c| !words.contains(&c.text));
-        let front = words.into_iter().map(|text| Candidate {
+        // 输入码没有音节路径，沿用已有热度衰减和词搭配给同码的个人词排序。
+        let start = self.start_word();
+        let preference = |word: &str| {
+            let hot = self.history.read().ok().and_then(|history| history.get(word).copied()).map(|entry| crate::learn::decayed(entry, at_ms)).unwrap_or(0.0);
+            let pair = start.as_ref().and_then(|previous| self.pairs.read().ok().map(|pairs| pairs.bonus(previous, word, at_ms))).unwrap_or(0.0);
+            (1.0 + hot).ln() + pair
+        };
+        learned.sort_by(|a, b| preference(&b.1).total_cmp(&preference(&a.1)).then_with(|| b.2.total_cmp(&a.2)));
+        learned.retain(|(_, text, _)| !words.contains(text));
+        result.retain(|c| !words.contains(&c.text) && !learned.iter().any(|(_, text, _)| text == &c.text));
+        let configured = words.into_iter().map(|text| Candidate {
             pinyin: String::new(),
             score: 0.0,
             features: Feature::default(),
@@ -709,6 +727,12 @@ impl Engine {
             consumed: raw.len(),
             text,
         });
+        let learned = learned.into_iter().map(|(input, text, freq)| Candidate {
+            pinyin: input.clone(), score: preference(&text), features: Feature::default(),
+            words: vec![CandidateWord { text: text.clone(), pinyin: input, freq, known: true }],
+            consumed: raw.len(), text,
+        });
+        let front = configured.chain(learned);
         result.splice(0..0, front);
     }
 

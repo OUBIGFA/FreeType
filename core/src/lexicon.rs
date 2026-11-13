@@ -780,6 +780,8 @@ pub struct UserLexicon {
     custom: RwLock<Vec<(String, String, f64)>>,
     /// 自定义词里编码不是拼音的（mail -> 邮箱地址）：只在整个输入正好等于编码时给出。
     codes: RwLock<Vec<(String, String)>>,
+    /// 学到的英文或混输输入码；由 words 重建，不另存一份用户数据。
+    learned_codes: RwLock<Vec<(String, String, f64)>>,
     /// 全部自定义词按文件里的顺序（编码、词，词保留转义），给工具栏的「常用语」列表用。
     phrases: RwLock<Vec<(String, String)>>,
     /// 导入的词库（比如水杉格式的批量文件）：只读，整份替换，不写回用户词库，也不提前排。
@@ -797,6 +799,7 @@ impl UserLexicon {
             words: RwLock::new(Vec::new()),
             custom: RwLock::new(Vec::new()),
             codes: RwLock::new(Vec::new()),
+            learned_codes: RwLock::new(Vec::new()),
             phrases: RwLock::new(Vec::new()),
             extra: RwLock::new(Vec::new()),
             snapshot: RwLock::new(Arc::new(MemoryLexicon::new())),
@@ -805,20 +808,15 @@ impl UserLexicon {
 
     /// 添加或更新一个用户词。拼音可以是 ni hao / nihao / xi'an。
     pub fn add(&self, pinyin: &str, word: &str, freq: f64) -> Result<()> {
-        if word.is_empty() || pinyin.trim().is_empty() {
-            bail!("用户词的拼音和词都不能为空");
-        }
-        // 先单独校验一次，拼音非法时不要污染词库。
-        // 注意不能借用 from_tsv_str：它对未知音节是「跳过」而不是报错。
-        parse_pinyin_keys(pinyin.trim()).context("用户词拼音无法解析")?;
+        let pinyin = user_reading(pinyin, word, freq)?;
 
         {
             let mut words = self.words.write().unwrap();
             if let Some(slot) = words.iter_mut().find(|(_, w, _)| w == word) {
-                slot.0 = pinyin.trim().to_string();
+                slot.0 = pinyin;
                 slot.2 = freq;
             } else {
-                words.push((pinyin.trim().to_string(), word.to_string(), freq));
+                words.push((pinyin, word.to_string(), freq));
             }
         }
         self.rebuild();
@@ -827,14 +825,14 @@ impl UserLexicon {
 
     /// 合并备份词条：先全部校验，已有词保留当前读音，权重只取较大值。
     pub(crate) fn merge_words(&self, incoming: &[(String, String, f64)]) -> Result<usize> {
-        let mut checked = MemoryLexicon::new();
+        let mut checked = Vec::with_capacity(incoming.len());
         for (pinyin, word, frequency) in incoming {
-            checked.insert(pinyin, word, *frequency)?;
+            checked.push((user_reading(pinyin, word, *frequency)?, word.clone(), *frequency));
         }
         let mut changed = 0;
         {
             let mut words = self.words.write().map_err(|_| anyhow!("user words lock poisoned"))?;
-            for (pinyin, word, frequency) in incoming {
+            for (pinyin, word, frequency) in &checked {
                 if let Some(current) = words.iter_mut().find(|(_, existing, _)| existing == word) {
                     if *frequency > current.2 {
                         current.2 = *frequency;
@@ -1011,6 +1009,14 @@ impl UserLexicon {
             .unwrap_or_default()
     }
 
+    /// 与自定义编码一样只命中完整输入；保留读音/输入码供后续选词继续计数。
+    pub(crate) fn learned_code_words(&self, code: &str) -> Vec<(String, String, f64)> {
+        let code: String = code.chars().filter(|c| !c.is_whitespace() && *c != '\'').flat_map(char::to_lowercase).collect();
+        self.learned_codes.read().map(|words| {
+            words.iter().filter(|(input, _, _)| input == &code).cloned().collect()
+        }).unwrap_or_default()
+    }
+
     pub fn custom_words(&self) -> Vec<(String, String, f64)> {
         self.custom.read().map(|w| w.clone()).unwrap_or_default()
     }
@@ -1035,6 +1041,12 @@ impl UserLexicon {
 
     fn rebuild(&self) {
         let mut words = self.words.read().map(|w| w.clone()).unwrap_or_default();
+        let mut learned_codes = Vec::new();
+        words.retain(|(input, word, freq)| {
+            if parse_pinyin_keys(input).is_ok() { return true; }
+            learned_codes.push((input.clone(), word.clone(), *freq));
+            false
+        });
         words.extend(self.custom_words());
         words.extend(self.extra_words());
         let mut tsv = String::new();
@@ -1044,6 +1056,29 @@ impl UserLexicon {
         if let Ok(lexicon) = MemoryLexicon::from_tsv_str(&tsv) {
             if let Ok(mut slot) = self.snapshot.write() {
                 *slot = Arc::new(lexicon);
+            }
+        }
+        if let Ok(mut slot) = self.learned_codes.write() { *slot = learned_codes; }
+    }
+}
+
+/// 中文词仍校验音节；英文、混输词无法拆成拼音时保存实际输入码。
+/// 使用同一校验入口，保证直接添加、TSV 重载和 JSON 备份恢复接受相同词条。
+fn user_reading(input: &str, word: &str, frequency: f64) -> Result<String> {
+    if word.trim().is_empty() || word.contains(['\t', '\r', '\n', '\0']) || input.trim().is_empty()
+        || input.contains(['\t', '\r', '\n', '\0']) {
+        bail!("用户词及其输入不能为空，也不能包含换行或制表符");
+    }
+    if !frequency.is_finite() || frequency < 0.0 { bail!("频次必须是非负有限数"); }
+    match parse_pinyin_keys(input.trim()) {
+        Ok(_) => Ok(input.trim().to_string()),
+        Err(error) => {
+            let code: String = input.chars().filter(|c| *c != ' ' && *c != '\'').flat_map(char::to_lowercase).collect();
+            if word.chars().any(|c| c.is_ascii_alphabetic()) && code.bytes().any(|b| b.is_ascii_alphanumeric())
+                && code.bytes().all(|b| b.is_ascii_alphanumeric() || b == b';') {
+                Ok(code)
+            } else {
+                Err(error).context("用户词拼音无法解析")
             }
         }
     }

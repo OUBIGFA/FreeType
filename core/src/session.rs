@@ -1255,7 +1255,7 @@ impl<'e> Session<'e> {
             }
             _ if chosen.consumed < remaining => {
                 // 句首词：先放进已选栈，剩下的拼音继续选
-                self.learn(&chosen.text, &chosen.pinyin);
+                self.learn(&chosen.text, &chosen.pinyin, chosen.consumed);
                 self.push_selection(Selection {
                     text: chosen.text,
                     pinyin: chosen.pinyin,
@@ -1288,7 +1288,7 @@ impl<'e> Session<'e> {
         if self.engine.is_some() && !text.is_empty() {
             if !tail.is_empty() {
                 // 带上拼音：选够次数后引擎会自动把这个词收进用户词库
-                self.learn(tail, tail_pinyin);
+                self.learn(tail, tail_pinyin, self.remaining().len());
             }
             // 以词定字取出来的字对不上读音时拼音是空的，这样拼成的不学
             if !self.selections.is_empty()
@@ -1311,7 +1311,7 @@ impl<'e> Session<'e> {
     }
 
     /// 记一次选词。上文和算候选时一样（已上屏的字 + 已选的词）。
-    fn learn(&mut self, word: &str, pinyin: &str) {
+    fn learn(&mut self, word: &str, pinyin: &str, input_bytes: usize) {
         let Some(engine) = self.engine else {
             return;
         };
@@ -1320,7 +1320,9 @@ impl<'e> Session<'e> {
         }
         let context = self.context.clone() + &self.selected_text();
         engine.set_context(utf8_tail(&context, CONTEXT_BYTES));
-        engine.record_selection_with_pinyin(word, Some(pinyin).filter(|p| !p.is_empty()));
+        // 英文和混输使用真正按下的输入码，双拼、简拼时也不能只保留中文读音。
+        let reading = if word.chars().any(|c| c.is_ascii_alphabetic()) { &self.remaining()[..input_bytes.min(self.remaining().len())] } else { pinyin };
+        engine.record_selection_with_pinyin(word, Some(reading).filter(|p| !p.is_empty()));
     }
 
     /// 记分几次选出来拼成的词，见 [`Engine::record_composed_word`]。上文是还没选词时的上文。
@@ -1332,7 +1334,8 @@ impl<'e> Session<'e> {
             return;
         }
         engine.set_context(utf8_tail(&self.context, CONTEXT_BYTES));
-        engine.record_composed_word(word, pinyin);
+        let reading = if word.chars().any(|c| c.is_ascii_alphabetic()) { &self.input } else { pinyin };
+        engine.record_composed_word(word, reading);
     }
 
     /// 上屏 text（空的不上屏，frame 取走），清空编辑区。

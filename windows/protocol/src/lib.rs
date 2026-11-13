@@ -356,6 +356,9 @@ pub struct Dictionary {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UserWord {
     pub word: String,
+    /// 设置列表中的上屏格式；word 仍是学习、删除与备份使用的原始标识。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub display: String,
     /// 拼音，空格分音节。
     pub pinyin: String,
     pub freq: f64,

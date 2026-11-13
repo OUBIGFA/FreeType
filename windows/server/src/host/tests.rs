@@ -860,6 +860,45 @@ fn settings_backup_rollback_preserves_case_of_existing_dictionary_names() {
 }
 
 #[test]
+fn mixed_learning_is_visible_and_restored_by_all_settings_backup() {
+    let mut source = learning_host("mixed-profile-source");
+    let lexicon = wowtype_core::MemoryLexicon::from_tsv_str("da\t打\t1000\nda\t大\t800\nta\t他\t700\nge\t个\t600\n").unwrap();
+    let engine = Engine::new(std::sync::Arc::new(lexicon), std::sync::Arc::new(wowtype_core::BigramLm::default()));
+    engine.load_english_str("tag\n");
+    source.install_engine(Ok(engine));
+    let frame = typing(&mut source, "datag");
+    let index = frame.candidates.iter().position(|word| word == "打").unwrap();
+    let frame = source.handle(1, Request::Select { index }).frame.unwrap();
+    let index = frame.candidates.iter().position(|word| word == "tag").unwrap();
+    assert_eq!(source.handle(1, Request::Select { index }).frame.unwrap().commit.as_deref(), Some("打 tag"));
+    let listed = serde_json::to_value(source.handle(1, Request::ListUserWords)).unwrap();
+    let word = listed["user_words"].as_array().unwrap().iter().find(|word| word["word"] == "打tag").unwrap();
+    assert_eq!(word["display"], "打 tag", "设置列表应显示实际的混输格式，同时保留删除用的词条标识");
+    assert_eq!(word["pinyin"], "datag");
+    let path = source.data_dir().join("all.json");
+    assert!(source.handle(1, learning_request("export_settings", &path)).ok);
+    let mut target = learning_host("mixed-profile-target");
+    assert!(target.handle(1, learning_request("import_settings", &path)).ok);
+    assert_eq!(typing(&mut target, "datag").candidates[0], "打tag");
+    assert_eq!(press(&mut target, 0x20).commit.as_deref(), Some("打 tag"));
+    cleanup(&source);
+    cleanup(&target);
+}
+
+#[test]
+fn personal_english_and_mixed_words_can_be_added_with_input_codes() {
+    let mut host = learning_host("mixed-manual-add");
+    let response = host.handle(1, Request::AddUserWord { word: "打tag".into(), pinyin: "datag".into() });
+    assert!(response.ok, "手动添加混输词应接受实际输入码：{response:?}");
+    assert_eq!(typing(&mut host, "datag").candidates[0], "打tag");
+    assert_eq!(press(&mut host, 0x20).commit.as_deref(), Some("打 tag"));
+    let response = host.handle(1, Request::AddUserWord { word: "FreeType".into(), pinyin: String::new() });
+    assert!(response.ok, "纯英文词应可以直接按原词输入：{response:?}");
+    assert!(host.engine.as_ref().unwrap().user_words().iter().any(|(input, word, _)| input == "freetype" && word == "FreeType"));
+    cleanup(&host);
+}
+
+#[test]
 fn emoji_panel_hotkey_records_recent() {
     let mut host = host("emoji");
     configure(&mut host, |c| c.hotkey_emoji = "ctrl+shift+e".into());

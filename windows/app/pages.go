@@ -643,13 +643,13 @@ func (s *settings) learnedPage(c *ui.Context) {
 	section(c, "添加词", func() {
 		s.settingBlock(c, "learned/添加词", func() {
 			ui.Column(c).Padding(16, 18).Gap(10).Children(func() {
-				ui.Text(c, "加进去的词马上能打出来，排在前面。拼音可以不填，按常用读音自动注音（多音字请自己填）").FontSize(12.5).TextColor(colors(c).muted).Wrap()
+				ui.Text(c, "中文词可留空并自动注音，多音字请填写拼音。英文词默认用原词作输入码；中英混输请填写实际输入码，例如 datag → 打 tag。").FontSize(12.5).TextColor(colors(c).muted).Wrap()
 				ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
 					grayed(c).Children(func() {
 						ui.TextInput(c, &s.newWord).Placeholder("词语，例如 霜频阁").Label("词语").Width(200)
 					})
 					grayed(c).Grow(1).Children(func() {
-						ui.TextInput(c, &s.newPinyin).Placeholder("拼音，例如 shuang pin ge").Label("拼音").FillWidth()
+						ui.TextInput(c, &s.newPinyin).Placeholder("如 shuang pin ge 或 datag").Label("拼音或输入码").FillWidth()
 					})
 					if ui.PrimaryButton(c, "添加").Label("添加词").Clicked() {
 						s.addWord()
@@ -687,10 +687,10 @@ func (s *settings) learnedPage(c *ui.Context) {
 			ui.List(c, nil, len(words), func(i int) {
 				w := words[i]
 				ui.Row(c).Padding(9, 18).Gap(14).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(p.border).Children(func() {
-					ui.Text(c, w.Word).Width(160).SingleLine()
+					ui.Text(c, w.text()).Width(160).SingleLine()
 					ui.Text(c, w.Pinyin).Grow(1).SingleLine().TextColor(p.muted)
 					ui.Textf(c, "%.0f", w.Freq).FontSize(12.5).TextColor(p.muted).Width(70)
-					if ui.Button(c, "删除").Label("删除 " + w.Word).Clicked() {
+					if ui.Button(c, "删除").Label("删除 " + w.text()).Clicked() {
 						s.forgetWords([]string{w.Word})
 					}
 				})

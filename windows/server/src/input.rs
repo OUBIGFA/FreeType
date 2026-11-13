@@ -57,22 +57,27 @@ impl Env<'_> {
     }
 
     fn autospace_flags(&self) -> u32 {
-        if !self.config.autospace {
-            return 0;
-        }
-        let mut flags = 0;
-        if self.config.autospace_letters {
-            flags |= autospace::LETTERS;
-        }
-        if self.config.autospace_digits {
-            flags |= autospace::DIGITS;
-        }
-        flags
+        autospace_flags(self.config)
     }
 
     fn shuangpin(&self) -> bool {
         self.engine.is_some_and(|e| e.config().shuangpin)
     }
+}
+
+/// 设置列表的字词显示与实际输入共用同一组空格开关。
+pub(crate) fn autospace_flags(config: &Config) -> u32 {
+    if !config.autospace {
+        return 0;
+    }
+    let mut flags = 0;
+    if config.autospace_letters {
+        flags |= autospace::LETTERS;
+    }
+    if config.autospace_digits {
+        flags |= autospace::DIGITS;
+    }
+    flags
 }
 
 /// 按键的结果：给 DLL 的应答，加上宿主要做的事。
@@ -188,16 +193,7 @@ impl ClientState {
 
     /// 上屏一段字：交界和段内的中英混输共用同一规则，再记进上文。
     fn emit(&mut self, text: &str, env: &Env) -> String {
-        let flags = env.autospace_flags();
-        let mut out = String::new();
-        let mut prev = self.prev();
-        for next in text.chars() {
-            if prev.is_some_and(|p| autospace::needs_space(p, next, flags)) {
-                out.push(' ');
-            }
-            out.push(next);
-            prev = Some(next);
-        }
+        let out = autospace::format_text(text, self.prev(), env.autospace_flags());
         self.remember(&out);
         out
     }
