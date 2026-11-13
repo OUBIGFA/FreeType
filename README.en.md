@@ -4,7 +4,7 @@
 
 # FreeType
 
-A Windows Chinese input method that learns your words and accepts your dictionaries
+A local Windows Chinese input method. Your input stays on your computer.
 
 [简体中文](README.md) | English
 
@@ -14,11 +14,7 @@ A Windows Chinese input method that learns your words and accepts your dictionar
 
 ## What FreeType is
 
-FreeType is a Chinese input method for Windows. It is made for chat, writing, coding, and office work.
-
-It supports full pinyin, double pinyin, fuzzy pinyin, and typo correction. It learns the words that you choose. You can also import your own dictionaries and quick phrases.
-
-The input engine runs on your computer. Normal Chinese input needs no account. It does not upload the text that you type.
+FreeType is a local Chinese input method. The input engine, dictionaries, and learning data run on your computer. Normal Chinese input needs no network. FreeType does not send the text that you type to a server.
 
 ## Software preview
 
@@ -52,6 +48,7 @@ The candidate window has four selected-candidate styles:
 
 ## Why use FreeType
 
+- **Local input. Your data stays on your computer.** The input engine, dictionaries, and learning data run locally. Normal Chinese input uses no network and sends no typed text to a server.
 - **It learns your choices.** Your selected words and word pairs affect the candidate order.
 - **It handles typing mistakes.** It can find the right word when nearby keys are pressed or two keys are reversed.
 - **It moves your dictionaries with you.** It can import dictionaries and phrases from Shuishan, Sogou, Rime, and WowType.
