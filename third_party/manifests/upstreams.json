@@ -17,6 +17,11 @@
       "version": "v0.9.0",
       "revision": "4811a2869b5a66d2b7e21a9eb5993fcff544460b",
       "go": "1.27.3",
+      "buildGo": "1.27.4",
+      "goWindowsArchive": {
+        "url": "https://go.dev/dl/go1.27.4.windows-amd64.zip",
+        "sha256": "178ab98950ac69ab25069307dc6ade79f3816e414cce95b4da166a115cde1e7e"
+      },
       "use": "Windows 托盘、设置窗口与安装器的 Go 依赖，由 windows/app/go.mod 固定",
       "license": "MIT"
     },

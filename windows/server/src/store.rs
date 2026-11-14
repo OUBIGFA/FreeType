@@ -15,8 +15,9 @@
 //! 悬浮状态栏的位置 `statusbar.txt` 由 [`crate::desktop`] 读写。
 
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use freetype_protocol::{Config, Dictionary, ImportReport, Mode, QuickPhrase};
 use wowtype_core::msime::{self, DictEntry, LineError, Parsed};
@@ -70,12 +71,34 @@ fn report(added: usize, errors: &[LineError]) -> ImportReport {
 
 /// 写到临时文件再改名，写一半断电不会留下坏文件。
 pub(crate) fn write_atomic(path: &Path, data: &str) -> io::Result<()> {
+    static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+    let filename = path.file_name().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "缺少文件名"))?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let tmp = path.with_extension("tmp");
-    fs::write(&tmp, data)?;
-    fs::rename(&tmp, path)
+    // 导出目录属于用户，临时文件必须独占创建，不能占用已有的同名 .tmp 文件。
+    let (tmp, mut file) = loop {
+        let serial = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
+        let mut name = std::ffi::OsString::from(".");
+        name.push(filename);
+        name.push(format!(".{}.{serial}.tmp", std::process::id()));
+        let tmp = path.with_file_name(name);
+        match fs::OpenOptions::new().write(true).create_new(true).open(&tmp) {
+            Ok(file) => break (tmp, file),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    };
+    let result = file.write_all(data.as_bytes()).and_then(|()| file.sync_all());
+    drop(file);
+    let result = result.and_then(|()| fs::rename(&tmp, path));
+    if let Err(error) = result {
+        if let Err(cleanup) = fs::remove_file(&tmp) {
+            return Err(io::Error::new(error.kind(), format!("{error}；清理临时文件 {} 失败：{cleanup}", tmp.display())));
+        }
+        return Err(error);
+    }
+    Ok(())
 }
 
 fn read_text(path: &Path) -> io::Result<String> {
@@ -390,6 +413,37 @@ mod tests {
         store.save_config(&config).unwrap();
         assert_eq!(store.load_config().page_size, 9);
         let _ = fs::remove_dir_all(store.dir());
+    }
+
+    #[test]
+    fn atomic_export_preserves_existing_sibling_files() {
+        let store = temp_store("atomic-siblings");
+        fs::create_dir_all(store.dir()).unwrap();
+        let target = store.dir().join("backup.json");
+        let sibling = store.dir().join("backup.tmp");
+        fs::write(&target, "old backup").unwrap();
+        fs::write(&sibling, "unrelated user file").unwrap();
+
+        write_atomic(&target, "new backup").unwrap();
+
+        assert_eq!(fs::read_to_string(&target).unwrap(), "new backup");
+        assert_eq!(fs::read_to_string(&sibling).unwrap(), "unrelated user file");
+        assert_eq!(fs::read_dir(store.dir()).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn failed_atomic_export_preserves_target_and_cleans_only_its_scratch() {
+        let store = temp_store("atomic-failure");
+        let target = store.dir().join("backup.json");
+        fs::create_dir_all(&target).unwrap();
+        let sibling = store.dir().join("backup.tmp");
+        fs::write(&sibling, "unrelated user file").unwrap();
+
+        assert!(write_atomic(&target, "new backup").is_err());
+
+        assert!(target.is_dir());
+        assert_eq!(fs::read_to_string(&sibling).unwrap(), "unrelated user file");
+        assert_eq!(fs::read_dir(store.dir()).unwrap().count(), 2);
     }
 
     #[test]

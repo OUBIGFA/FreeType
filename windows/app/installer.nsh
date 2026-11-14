@@ -14,7 +14,13 @@ LangString FT_STOP_FAILED ${LANG_SIMPCHINESE} "无法结束安装目录中的 Fr
 LangString FT_STOP_FAILED ${LANG_TRADCHINESE} "無法結束安裝目錄中的 FreeType 處理程序。檔案尚未取代；請關閉 FreeType 後重新執行安裝程式。"
 LangString FT_STOP_FAILED ${LANG_ENGLISH} "FreeType could not stop its processes in the installation directory. No files were replaced. Close FreeType and run the installer again."
 
-Section "-FreeType preparation"
+LangString FT_ENABLE_FAILED ${LANG_SIMPCHINESE} "无法将 FreeType 加入当前用户的输入法列表。安装尚未完成，请重新运行安装器；问题持续时请查看服务日志。"
+LangString FT_ENABLE_FAILED ${LANG_TRADCHINESE} "無法將 FreeType 加入目前使用者的輸入法清單。安裝尚未完成，請重新執行安裝程式；問題持續時請查看服務日誌。"
+LangString FT_ENABLE_FAILED ${LANG_ENGLISH} "FreeType could not enable the input method for this user. Installation is incomplete. Run the installer again; if it still fails, check the service log."
+
+; 安装和卸载共用按安装路径检查的停止步骤，不按进程名结束其他实例。
+!macro FreeTypePrepareFunction Prefix
+Function ${Prefix}FreeTypePrepare
   InitPluginsDir
   SetOutPath "$PLUGINSDIR"
   File /oname=prepare-install.ps1 "${__FILEDIR__}\prepare-install.ps1"
@@ -32,7 +38,25 @@ Section "-FreeType preparation"
     SetErrorLevel 2
     Quit
   prepared:
+FunctionEnd
+!macroend
+
+!insertmacro FreeTypePrepareFunction ""
+!insertmacro FreeTypePrepareFunction "un."
+
+Section "-FreeType preparation"
+  Call FreeTypePrepare
 SectionEnd
+
+Function FreeTypeEnableForUser
+  nsExec::Exec '"$INSTDIR\bin\FreeTypeServer.exe" --enable'
+  Pop $0
+  StrCmp $0 "0" enabled
+    MessageBox MB_ICONSTOP|MB_OK "$(FT_ENABLE_FAILED)" /SD IDOK
+    SetErrorLevel 4
+    Quit
+  enabled:
+FunctionEnd
 
 ; 完成页由 mygo 无参数启动程序；进程环境标记保证它和这里的启动使用相同选项。
 ; 只设置安装器自己的环境，不写入用户或系统环境变量。
@@ -42,17 +66,18 @@ Function FreeTypeLaunchAfterInstall
 FunctionEnd
 
 !macro customInstall
-  Delete "$TEMP\freetype-register.ok"
-  ExecShellWait "runas" "$INSTDIR\bin\FreeTypeServer.exe" '--register-tsf "$INSTDIR\bin" --marker "$TEMP\freetype-register.ok"' SW_HIDE
-  IfFileExists "$TEMP\freetype-register.ok" registered 0
+  InitPluginsDir
+  Delete "$PLUGINSDIR\freetype-register.ok"
+  ExecShellWait "runas" "$INSTDIR\bin\FreeTypeServer.exe" '--register-tsf "$INSTDIR\bin" --marker "$PLUGINSDIR\freetype-register.ok"' SW_HIDE
+  IfFileExists "$PLUGINSDIR\freetype-register.ok" registered 0
     MessageBox MB_ICONEXCLAMATION|MB_OK "$(FT_REGISTER_FAILED)" /SD IDOK
     ; Keep pending.json for a retry; do not launch an incompletely updated app.
     SetErrorLevel 3
     Quit
   registered:
-  Delete "$TEMP\freetype-register.ok"
+  Delete "$PLUGINSDIR\freetype-register.ok"
   ; 加进当前用户的输入法列表，开机时放托盘图标并启动输入法服务
-  nsExec::Exec '"$INSTDIR\bin\FreeTypeServer.exe" --enable'
+  Call FreeTypeEnableForUser
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "FreeType" '"$INSTDIR\FreeType.exe" --background'
   ; The verified update is complete only after all input-method components register.
   Delete "$APPDATA\FreeType\updates\pending.json"
@@ -60,8 +85,7 @@ FunctionEnd
 !macroend
 
 !macro customUnInstall
-  nsExec::Exec 'taskkill /F /IM FreeType.exe'
-  nsExec::Exec '"$INSTDIR\bin\FreeTypeServer.exe" --stop'
+  Call un.FreeTypePrepare
   nsExec::Exec '"$INSTDIR\bin\FreeTypeServer.exe" --disable'
   ExecShellWait "runas" "$INSTDIR\bin\FreeTypeServer.exe" "--unregister-tsf" SW_HIDE
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "FreeType"

@@ -217,3 +217,73 @@ fn common_phrases_and_all_settings_backup_round_trip_through_real_pipe() {
     let mut conn = server.connect();
     assert_eq!(conn.call(&Request::ListCommonPhrases).common_phrases.unwrap(), vec!["打tag\n下一行"]);
 }
+
+struct LowIntegrity;
+
+impl LowIntegrity {
+    fn enter() -> Self {
+        use windows::core::w;
+        use windows::Win32::Foundation::{CloseHandle, LocalFree, HANDLE, HLOCAL};
+        use windows::Win32::Security::Authorization::ConvertStringSidToSidW;
+        use windows::Win32::Security::{
+            ImpersonateSelf, SetTokenInformation, SecurityImpersonation, TokenIntegrityLevel,
+            PSID, SID_AND_ATTRIBUTES, TOKEN_ADJUST_DEFAULT, TOKEN_MANDATORY_LABEL, TOKEN_QUERY,
+        };
+        use windows::Win32::System::SystemServices::SE_GROUP_INTEGRITY;
+        use windows::Win32::System::Threading::{GetCurrentThread, OpenThreadToken};
+        unsafe {
+            ImpersonateSelf(SecurityImpersonation).unwrap();
+            let guard = Self;
+            let mut token = HANDLE::default();
+            OpenThreadToken(GetCurrentThread(), TOKEN_QUERY | TOKEN_ADJUST_DEFAULT, true, &mut token).unwrap();
+            let mut sid = PSID::default();
+            ConvertStringSidToSidW(w!("S-1-16-4096"), &mut sid).unwrap();
+            let label = TOKEN_MANDATORY_LABEL {
+                Label: SID_AND_ATTRIBUTES { Sid: sid, Attributes: SE_GROUP_INTEGRITY as u32 },
+            };
+            let result = SetTokenInformation(
+                token, TokenIntegrityLevel, (&label as *const TOKEN_MANDATORY_LABEL).cast(),
+                std::mem::size_of::<TOKEN_MANDATORY_LABEL>() as u32,
+            );
+            let _ = LocalFree(Some(HLOCAL(sid.0)));
+            CloseHandle(token).unwrap();
+            result.unwrap();
+            guard
+        }
+    }
+}
+
+impl Drop for LowIntegrity {
+    fn drop(&mut self) {
+        unsafe { windows::Win32::Security::RevertToSelf().unwrap() };
+    }
+}
+
+#[test]
+fn low_integrity_clients_can_type_but_cannot_manage_or_export_user_data() {
+    let server = Server::start("low-integrity");
+    let mut normal = server.connect();
+    let started = Instant::now();
+    loop {
+        let status = normal.call(&Request::Hello { session: true, app: "test.exe".into() }).status.unwrap();
+        if status.ready { break; }
+        assert!(started.elapsed() < Duration::from_secs(20), "词库未载入：{:?}", status.error);
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let target = server.root.join("outside-data.json");
+    {
+        let _identity = LowIntegrity::enter();
+        let mut restricted = server.connect();
+        assert!(restricted.call(&Request::Hello { session: true, app: "sandbox.exe".into() }).ok);
+        for letter in "nihao".chars() { assert!(restricted.key(letter).handled); }
+        assert_eq!(restricted.key(' ').commit.as_deref(), Some("你好"));
+        let export = restricted.call(&Request::ExportSettings { path: target.display().to_string() });
+        assert!(!export.ok, "低完整性进程不应借服务进程写入用户文件");
+        for request in [Request::GetConfig, Request::ListUserWords, Request::ClearLearned, Request::Shutdown] {
+            assert!(!restricted.call(&request).ok, "低完整性客户端不应执行 {request:?}");
+        }
+    }
+    assert!(!target.exists());
+    assert!(normal.call(&Request::ExportSettings { path: target.display().to_string() }).ok);
+    assert!(target.is_file(), "正常设置客户端仍可导出备份");
+}

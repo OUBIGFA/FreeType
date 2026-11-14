@@ -10,7 +10,7 @@
     output/release/build-info.json
 
   Toolchains are taken from .local/toolchains when present (Rust via rustup,
-  Go 1.27.3). Dictionary data must already be in .local/data (see
+  Go 1.27.4). Dictionary data must already be in .local/data (see
   docs/WINDOWS.md). Nothing is installed or registered on this machine.
 
 .PARAMETER SkipTests
@@ -55,6 +55,22 @@ function Write-Utf8([string]$Path, [string]$Text) {
 
 function Sha256([string]$Path) { (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant() }
 
+function Find-NsisCompiler {
+    # Follow mygo v0.9.0's selection so the tests and record use the actual compiler.
+    $Command = Get-Command makensis -CommandType Application -ErrorAction SilentlyContinue
+    if ($Command) { return $Command.Source }
+    $Candidates = @(
+        (Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe'),
+        (Join-Path $env:ProgramFiles 'NSIS\makensis.exe'),
+        (Join-Path $env:LOCALAPPDATA 'mygo\nsis-3.13\Bin\makensis.exe'),
+        (Join-Path $env:LOCALAPPDATA 'mygo\nsis-3.13\makensis.exe')
+    )
+    foreach ($Candidate in $Candidates) {
+        if (Test-Path -LiteralPath $Candidate -PathType Leaf) { return $Candidate }
+    }
+    throw 'Cannot locate the NSIS compiler used by mygo'
+}
+
 function Recycle-GeneratedDirectory([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path)) { return }
     $Resolved = (Resolve-Path -LiteralPath $Path).Path
@@ -77,16 +93,17 @@ if (Test-Path (Join-Path $Toolchains 'cargo\bin\cargo.exe')) {
     $env:CARGO_HOME = Join-Path $Toolchains 'cargo'
     $env:PATH = (Join-Path $Toolchains 'cargo\bin') + ';' + $env:PATH
 }
-$LocalGo = Join-Path $Toolchains 'go1.27.3'
+$LocalGo = Join-Path $Toolchains 'go1.27.4'
 if (Test-Path (Join-Path $LocalGo 'bin\go.exe')) {
     $env:GOROOT = $LocalGo
     $env:PATH = (Join-Path $LocalGo 'bin') + ';' + $env:PATH
     $env:GOPATH = Join-Path $Root '.local\gopath'
 }
 $env:GOTOOLCHAIN = 'local'
-$env:GOFLAGS = '-modcacherw'
+$env:GOFLAGS = '-modcacherw -mod=readonly'
 
 Step 'Checking inputs'
+Invoke-Native python @('-X', 'utf8', 'tools/check_repo.py')
 foreach ($name in 'lexicon.tsv', 'words.lm', 'english.txt', 'LICENSE', 'SOURCE.txt', 'VERSION', 'MANIFEST.json', 'WANXIANG-LICENSE-SCOPE.md', 'WANXIANG-NOTICE.md') {
     if (-not (Test-Path (Join-Path $Data $name))) {
         throw "Missing .local\data\$name. Run python -X utf8 tools/make_default_data.py first (docs/WINDOWS.md)."
@@ -94,7 +111,7 @@ foreach ($name in 'lexicon.tsv', 'words.lm', 'english.txt', 'LICENSE', 'SOURCE.t
 }
 Invoke-Native python @('-X', 'utf8', 'tools/make_default_data.py', '--check')
 $GoVersion = (& go version)
-if ($GoVersion -notmatch 'go1\.27\.3') { throw "Go 1.27.3 is required for mygo $MygoVersion, found: $GoVersion" }
+if ($GoVersion -notmatch '^go version go1\.27\.4 windows/amd64$') { throw "Go 1.27.4 windows/amd64 is required, found: $GoVersion" }
 $GoMod = Get-Content -Raw (Join-Path $AppDir 'go.mod')
 if ($GoMod -notmatch "github.com/egoist/mygo $([regex]::Escape($MygoVersion))") { throw "windows/app/go.mod must pin mygo $MygoVersion" }
 if ($GoMod -notmatch "github.com/creativeprojects/go-selfupdate $([regex]::Escape($SelfUpdateVersion))") { throw "windows/app/go.mod must pin go-selfupdate $SelfUpdateVersion" }
@@ -103,20 +120,24 @@ New-Item -ItemType Directory -Force -Path $Scratch | Out-Null
 $env:TEMP = $Scratch
 $env:TMP = $Scratch
 $env:FREETYPE_TEST_TEMP = $Scratch
+$Source = Invoke-Native python @('-X', 'utf8', 'tools/capture_build_source.py', '--index', (Join-Path $Scratch 'source-before.index')) | ConvertFrom-Json
+$SourceTree = $Source.tree
+$Head = $Source.baseCommit
 
 if (-not $SkipTests) {
     Step 'Running tests'
+    Invoke-Native python @('-X', 'utf8', '-m', 'unittest', 'discover', '-s', 'tests/repository', '-v')
     Invoke-Native python @('-X', 'utf8', '-m', 'unittest', 'discover', '-s', 'tests/data', '-v')
-    Invoke-Native cargo @('test', '-p', 'wowtype-core', '--no-default-features')
-    Invoke-Native cargo @('test', '-p', 'freetype-protocol', '-p', 'freetype-server', '-p', 'freetype-tsf')
+    Invoke-Native cargo @('test', '--locked', '-p', 'wowtype-core', '--no-default-features')
+    Invoke-Native cargo @('test', '--locked', '-p', 'freetype-protocol', '-p', 'freetype-server', '-p', 'freetype-tsf')
     Invoke-Native go @('vet', './...') $AppDir
     Invoke-Native go @('test', './...') $AppDir
 }
 
 Step 'Building Rust components'
-Invoke-Native cargo @('build', '--release', '-p', 'freetype-server', '-p', 'freetype-tsf')
+Invoke-Native cargo @('build', '--locked', '--release', '-p', 'freetype-server', '-p', 'freetype-tsf')
 Invoke-Native rustup @('target', 'add', 'i686-pc-windows-msvc')
-Invoke-Native cargo @('build', '--release', '-p', 'freetype-tsf', '--target', 'i686-pc-windows-msvc')
+Invoke-Native cargo @('build', '--locked', '--release', '-p', 'freetype-tsf', '--target', 'i686-pc-windows-msvc')
 
 Step 'Staging app resources'
 Recycle-GeneratedDirectory $Resources
@@ -140,11 +161,17 @@ Recycle-GeneratedDirectory $AppBuild
 Invoke-Native go @('tool', 'mygo', 'build') $AppDir
 $Built = Get-ChildItem -Recurse -File $AppBuild -Filter "freetype-setup-$Version-*.exe" | Select-Object -First 1
 if (-not $Built) { throw "mygo build produced no installer under $AppBuild" }
+$NsisCompiler = Find-NsisCompiler
+$NsisVersion = (Invoke-Native $NsisCompiler @('/VERSION')).Trim()
+$env:FREETYPE_MAKENSIS = $NsisCompiler
 
 if (-not $SkipTests) {
     Step 'Testing installer preparation with disposable processes'
     Invoke-Native python @('-X', 'utf8', '-m', 'unittest', 'discover', '-s', 'tests/windows', '-v')
 }
+
+Step 'Verifying the source snapshot has not changed'
+Invoke-Native python @('-X', 'utf8', 'tools/capture_build_source.py', '--index', (Join-Path $Scratch 'source-after.index'), '--expect-tree', $SourceTree, '--expect-commit', $Head) | Out-Null
 
 Step 'Recording the release'
 New-Item -ItemType Directory -Force -Path $Release | Out-Null
@@ -152,17 +179,6 @@ Copy-Item $Built.FullName $Installer -Force
 $InstallerHash = Sha256 $Installer
 Write-Utf8 "$Installer.sha256" "$InstallerHash *FreeType-$Version-Setup.exe`n"
 
-# Source snapshot: the tree Git would commit from the working directory now.
-$TempIndex = Join-Path $Root "_temp\build-$BuildNumber\index"
-$env:GIT_INDEX_FILE = $TempIndex
-try {
-    Invoke-Native git @('read-tree', 'HEAD')
-    Invoke-Native git @('-c', 'core.safecrlf=false', 'add', '-A')
-    $SourceTree = (& git write-tree).Trim()
-} finally {
-    Remove-Item Env:\GIT_INDEX_FILE
-}
-$Head = (& git rev-parse HEAD).Trim()
 $DataManifest = Get-Content -Raw -Encoding UTF8 (Join-Path $Data 'MANIFEST.json') | ConvertFrom-Json
 $Pillow = (& python -c 'import PIL; print(PIL.__version__)').Trim()
 
@@ -180,8 +196,15 @@ $Info = [ordered]@{
         go     = $GoVersion.Trim()
         mygo   = $MygoVersion
         goSelfUpdate = $SelfUpdateVersion
+        nsis = $NsisVersion
+        nsisSha256 = Sha256 $NsisCompiler
         python = (& python --version).Trim()
         pillow = $Pillow
+    }
+    dependencies   = [ordered]@{
+        cargoLockSha256 = Sha256 (Join-Path $Root 'Cargo.lock')
+        goModSha256 = Sha256 (Join-Path $AppDir 'go.mod')
+        goSumSha256 = Sha256 (Join-Path $AppDir 'go.sum')
     }
     components     = [ordered]@{
         'FreeType.exe'                 = Sha256 (Join-Path $AppBuild 'windows-amd64\FreeType.exe')

@@ -13,11 +13,13 @@
 | WowType 词级语言模型 `words.lm` | 构建时下载并校验 SHA-256 | 整句排序 | CC BY-SA 4.0（见 `data/SOURCE.txt`） |
 | Rust 依赖（含 `windows` 0.62.2、`serde`） | `Cargo.lock`，清单见 [cargo-lock.json](manifests/cargo-lock.json) | 引擎、服务进程、输入法 DLL | 各包声明的许可证，多为 MIT 或 Apache-2.0 |
 | Go 依赖 | `windows/app/go.mod`、`go.sum` | mygo 及其传递依赖、`golang.org/x/sys` | 各模块声明的许可证 |
+| Go 工具链 | `1.27.4` | Windows 设置程序与构建工具；mygo 的最低要求仍为 1.27.3 | BSD-3-Clause |
 | NSIS 3.13 | mygo 构建时下载并校验 SHA-256，不入库 | 生成安装器 | zlib/libpng 许可 |
 
 ## 待核项
 
 - WowType 许可证文本缺失。正式对外分发前需上游补齐或书面确认。
+- 公开安装器还需核对实际链接的 Rust/Go 依赖及其随包许可文本；依赖清单中的许可证名称不能代替完整声明。
 - `voice/src/wtlocal` 经原作者同意引入，见其 `NOTICE.md`。
 - 白霜为 GPL-3.0，其上游雾凇及其他词表来源保留在白霜的数据头部。固定测试安装器随附许可文本和来源登记；正式发布前需复核整体分发许可。
 - 万象的 CC BY 4.0 适用于其原创字词数据，不覆盖处理脚本或第三方组件。仅合入六张默认核心数据表；随包保留 `WANXIANG-LICENSE-SCOPE.md`、`WANXIANG-NOTICE.md`，并在 `SOURCE.txt` 标明 amzxyz 署名及转换改动。

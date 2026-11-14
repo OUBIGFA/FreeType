@@ -16,6 +16,8 @@ A local Windows Chinese input method. Your input stays on your computer.
 
 FreeType is a local Chinese input method. The input engine, dictionaries, and learning data run on your computer. Normal Chinese input needs no network. FreeType does not send the text that you type to a server.
 
+FreeType is in pre-release validation and has no public release yet. See the [Windows validation scope](docs/WINDOWS.md#验证范围) for tested and untested behavior.
+
 ## Software preview
 
 These images come from the FreeType installation on this computer. The General page is first.
@@ -68,6 +70,7 @@ The candidate window has four selected-candidate styles:
 - Clipboard history is off by default.
 - When enabled, clipboard history keeps the latest 20 items in memory.
 - A learning backup contains personal input habits. Do not share it in public.
+- Update checks connect to GitHub, and downloads use its release asset servers. Automatic updates are off by default. Update requests do not include typed text or learning data.
 
 ## System requirements
 

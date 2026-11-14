@@ -11,23 +11,26 @@ use freetype_protocol::{decode, encode, Request, Response};
 use windows::core::{HSTRING, PWSTR};
 use windows::Win32::Foundation::{
     CloseHandle, GetLastError, LocalFree, ERROR_ALREADY_EXISTS, ERROR_PIPE_CONNECTED, GENERIC_READ,
-    GENERIC_WRITE, HANDLE, HLOCAL, INVALID_HANDLE_VALUE,
+    GENERIC_WRITE, HANDLE, HLOCAL, INVALID_HANDLE_VALUE, ERROR_INSUFFICIENT_BUFFER,
 };
 use windows::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
 };
 use windows::Win32::Security::{
-    GetTokenInformation, TokenUser, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER,
+    GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, RevertToSelf, TokenIntegrityLevel,
+    TokenIsAppContainer, TokenUser, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES, TOKEN_INFORMATION_CLASS,
+    TOKEN_MANDATORY_LABEL, TOKEN_QUERY, TOKEN_USER,
 };
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, FlushFileBuffers, ReadFile, WriteFile, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_NONE,
     OPEN_EXISTING, PIPE_ACCESS_DUPLEX,
 };
 use windows::Win32::System::Pipes::{
-    ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS,
+    ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, ImpersonateNamedPipeClient, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS,
     PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
 };
-use windows::Win32::System::Threading::{CreateMutexW, GetCurrentProcess, OpenProcessToken};
+use windows::Win32::System::SystemServices::SECURITY_MANDATORY_MEDIUM_RID;
+use windows::Win32::System::Threading::{CreateMutexW, GetCurrentProcess, GetCurrentThread, OpenProcessToken, OpenThreadToken};
 
 use crate::host::ClientId;
 
@@ -41,30 +44,76 @@ pub enum Message {
     Disconnected(ClientId),
 }
 
-/// 当前用户的 SID（S-1-5-21-...）。
-pub fn current_user_sid() -> io::Result<String> {
+struct Token(HANDLE);
+
+impl Drop for Token {
+    fn drop(&mut self) {
+        unsafe { let _ = CloseHandle(self.0); }
+    }
+}
+
+fn token_information(token: HANDLE, class: TOKEN_INFORMATION_CLASS) -> io::Result<Vec<usize>> {
+    let mut length = 0;
     unsafe {
-        let mut token = HANDLE::default();
-        OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token)?;
-        let mut len = 0u32;
-        let _ = GetTokenInformation(token, TokenUser, None, 0, &mut len);
-        let mut buf = vec![0u8; len as usize];
-        let result = GetTokenInformation(
-            token,
-            TokenUser,
-            Some(buf.as_mut_ptr() as *mut c_void),
-            len,
-            &mut len,
-        );
-        let _ = CloseHandle(token);
-        result?;
-        let user = &*(buf.as_ptr() as *const TOKEN_USER);
+        if let Err(error) = GetTokenInformation(token, class, None, 0, &mut length) {
+            if error.code() != ERROR_INSUFFICIENT_BUFFER.to_hresult() { return Err(error.into()); }
+        }
+        // TOKEN_USER 等结构含指针，缓冲区需满足指针对齐，而不仅是字节对齐。
+        let mut buffer = vec![0usize; (length as usize).div_ceil(std::mem::size_of::<usize>())];
+        GetTokenInformation(token, class, Some(buffer.as_mut_ptr().cast()), length, &mut length)?;
+        Ok(buffer)
+    }
+}
+
+fn token_sid(token: HANDLE) -> io::Result<String> {
+    let buffer = token_information(token, TokenUser)?;
+    unsafe {
+        let user = &*buffer.as_ptr().cast::<TOKEN_USER>();
         let mut text = PWSTR::null();
         ConvertSidToStringSidW(user.User.Sid, &mut text)?;
         let sid = text.to_string().map_err(io::Error::other);
         let _ = LocalFree(Some(HLOCAL(text.0 as *mut c_void)));
         sid
     }
+}
+
+/// 当前用户的 SID（S-1-5-21-...）。
+pub fn current_user_sid() -> io::Result<String> {
+    let mut handle = HANDLE::default();
+    unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut handle)?; }
+    let token = Token(handle);
+    token_sid(token.0)
+}
+
+fn client_can_manage(pipe: HANDLE, owner: &str) -> io::Result<bool> {
+    // 只用操作系统提供的客户端令牌，不相信 Hello 中的应用名称或 session 标志。
+    unsafe { ImpersonateNamedPipeClient(pipe)?; }
+    let mut handle = HANDLE::default();
+    let opened = unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, true, &mut handle) };
+    let token = Token(handle);
+    // 在解析请求或交给引擎之前恢复身份；失败时调用方必须结束此连接线程。
+    unsafe { RevertToSelf()?; }
+    opened?;
+    let sid = token_sid(token.0)?;
+    if sid != owner && sid != "S-1-5-18" {
+        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "客户端不是当前用户"));
+    }
+    let integrity = token_information(token.0, TokenIntegrityLevel)?;
+    let container = token_information(token.0, TokenIsAppContainer)?;
+    unsafe {
+        let label = &*integrity.as_ptr().cast::<TOKEN_MANDATORY_LABEL>();
+        let count = *GetSidSubAuthorityCount(label.Label.Sid);
+        let level = *GetSidSubAuthority(label.Label.Sid, u32::from(count) - 1);
+        let app_container = *container.as_ptr().cast::<u32>() != 0;
+        Ok(level >= SECURITY_MANDATORY_MEDIUM_RID as u32 && !app_container)
+    }
+}
+
+fn input_request(request: &Request) -> bool {
+    matches!(request,
+        Request::Hello { .. } | Request::Key { .. } | Request::Select { .. } | Request::Page { .. }
+        | Request::Forget { .. } | Request::Reset { .. } | Request::Focus { .. }
+        | Request::ToggleMode { .. } | Request::Command { .. } | Request::Status)
 }
 
 /// 同一登录会话里只跑一个服务进程。返回 false 表示已经有一个了。
@@ -133,11 +182,21 @@ impl LineReader {
     }
 }
 
-fn serve(pipe: Pipe, id: ClientId, engine: Sender<Message>) {
+fn serve(pipe: Pipe, id: ClientId, engine: Sender<Message>, owner: &str) {
     let _ = engine.send(Message::Connected(id));
     let mut reader = LineReader { buf: Vec::new() };
     while let Some(line) = reader.next_line(pipe.0) {
+        let can_manage = match client_can_manage(pipe.0, owner) {
+            Ok(allowed) => allowed,
+            Err(error) => {
+                crate::log(&format!("管道客户端身份检查失败：{error}"));
+                break;
+            }
+        };
         let response = match decode::<Request>(&line) {
+            Ok(request) if !can_manage && !input_request(&request) => {
+                Response::error("受限应用只能发送输入请求，不能管理或导出用户数据")
+            }
             Ok(request) => {
                 let (tx, rx) = mpsc::channel();
                 if engine.send(Message::Request(id, request, tx)).is_err() {
@@ -213,9 +272,10 @@ pub fn listen(name: &str, sid: &str, engine: Sender<Message>) -> io::Result<()> 
         let id = next_id;
         next_id += 1;
         let engine = engine.clone();
+        let owner = sid.to_string();
         std::thread::Builder::new()
             .name(format!("pipe-{id}"))
-            .spawn(move || serve(pipe, id, engine))?;
+            .spawn(move || serve(pipe, id, engine, &owner))?;
     }
 }
 

@@ -34,6 +34,8 @@ class InstallerPreparationTests(unittest.TestCase):
             ' if (args.Length > 0 && args[0] == "--stop") {'
             ' System.IO.File.WriteAllText(System.IO.Path.Combine('
             ' System.AppDomain.CurrentDomain.BaseDirectory, "stop-requested.txt"), "requested"); return 0; }'
+            ' if (args.Length > 0 && args[0] == "--enable") {'
+            ' return int.Parse(System.Environment.GetEnvironmentVariable("FREETYPE_TEST_ENABLE_EXIT") ?? "0"); }'
             ' if (System.Environment.GetEnvironmentVariable("FREETYPE_INSTALL_COMPLETED") == "1") {'
             ' string name = args.Length > 0 ? "after-install.txt" : "finish-page.txt";'
             ' System.IO.File.WriteAllText(System.IO.Path.Combine('
@@ -68,7 +70,7 @@ class InstallerPreparationTests(unittest.TestCase):
         self.processes.append(process)
         return process
 
-    def run_preparation(self, extra=""):
+    def run_preparation(self, extra="", expected_code=0, environment=None):
         installer = self.directory / "preparation.exe"
         script = self.directory / "preparation.nsi"
         script.write_text(
@@ -85,9 +87,15 @@ class InstallerPreparationTests(unittest.TestCase):
         )
         compiled = subprocess.run([str(self.compiler), "-V2", str(script)], capture_output=True, timeout=30)
         self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
-        result = subprocess.run([str(installer), "/S"], capture_output=True, timeout=45)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual((self.target / "prepared.txt").read_text(), "ready")
+        result = subprocess.run(
+            [str(installer), "/S"], capture_output=True, timeout=45,
+            env={**os.environ, **(environment or {})},
+        )
+        self.assertEqual(result.returncode, expected_code, result.stdout + result.stderr)
+        if expected_code == 0:
+            self.assertEqual((self.target / "prepared.txt").read_text(), "ready")
+        else:
+            self.assertFalse((self.target / "prepared.txt").exists(), "Failure must stop installation")
 
     def test_stops_only_target_installation_before_copying(self):
         tray = self.start(self.target / "FreeType.exe")
@@ -103,6 +111,52 @@ class InstallerPreparationTests(unittest.TestCase):
 
     def test_fresh_install_does_not_require_running_processes(self):
         self.run_preparation()
+
+    def test_enable_failure_stops_installation_before_reporting_success(self):
+        (self.target / "bin").mkdir()
+        shutil.copyfile(self.fixture, self.target / "bin" / "FreeTypeServer.exe")
+        self.run_preparation(
+            "Call FreeTypeEnableForUser\n", expected_code=4,
+            environment={"FREETYPE_TEST_ENABLE_EXIT": "23"},
+        )
+
+    def test_enable_success_allows_installation_to_continue(self):
+        (self.target / "bin").mkdir()
+        shutil.copyfile(self.fixture, self.target / "bin" / "FreeTypeServer.exe")
+        self.run_preparation("Call FreeTypeEnableForUser\n")
+
+    def test_uninstall_preparation_preserves_other_installations(self):
+        installer = self.directory / "make-uninstaller.exe"
+        uninstaller = self.directory / "uninstall.exe"
+        script = self.directory / "uninstall.nsi"
+        script.write_text(
+            'Unicode true\nRequestExecutionLevel user\nSilentInstall silent\nSilentUnInstall silent\n'
+            f'Name "FreeType uninstall preparation test"\nOutFile "{installer}"\nInstallDir "{self.target}"\n'
+            '!include "MUI2.nsh"\n'
+            '!insertmacro MUI_LANGUAGE "SimpChinese"\n'
+            '!insertmacro MUI_LANGUAGE "TradChinese"\n'
+            '!insertmacro MUI_LANGUAGE "English"\n'
+            f'!include "{INCLUDE}"\n'
+            f'Section\nWriteUninstaller "{uninstaller}"\nSectionEnd\n'
+            'Section "Uninstall"\nCall un.FreeTypePrepare\n'
+            'FileOpen $0 "$INSTDIR\\uninstall-prepared.txt" w\nFileWrite $0 "ready"\nFileClose $0\nSectionEnd\n',
+            encoding="utf-8-sig",
+        )
+        compiled = subprocess.run([str(self.compiler), "-V2", str(script)], capture_output=True, timeout=30)
+        self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
+        subprocess.run([str(installer), "/S"], check=True, capture_output=True, timeout=45)
+        tray = self.start(self.target / "FreeType.exe")
+        server = self.start(self.target / "bin" / "FreeTypeServer.exe")
+        unrelated = self.start(self.directory / "other" / "FreeType.exe")
+        # NSIS requires _?= last and unquoted; this is a process command line, not a shell.
+        result = subprocess.run(
+            f'"{uninstaller}" /S _?={self.target}', capture_output=True, timeout=45,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.target / "uninstall-prepared.txt").read_text(), "ready")
+        self.assertIsNotNone(tray.poll())
+        self.assertIsNotNone(server.poll())
+        self.assertIsNone(unrelated.poll(), "Uninstall must not kill another FreeType installation")
 
     def test_install_completion_marks_automatic_and_finish_page_launches(self):
         shutil.copyfile(self.fixture, self.target / "FreeType.exe")
