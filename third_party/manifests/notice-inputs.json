@@ -1,0 +1,35 @@
+{
+  "licenseTexts": [
+    {
+      "file": "third_party/licenses/OpenCC-LICENSE.txt",
+      "source": "https://raw.githubusercontent.com/BYVoid/OpenCC/master/LICENSE",
+      "gitBlob": "9f7a310eb2b143dfc4b73551ea60ca17eb2b981f",
+      "sha256": "b534e465949558eec2597b04f5092b5e161236a68dfbfd04d547592ac3964308"
+    },
+    {
+      "file": "third_party/licenses/OpenCC-AUTHORS.txt",
+      "source": "https://raw.githubusercontent.com/BYVoid/OpenCC/master/AUTHORS",
+      "gitBlob": "e0ab40e9b8563a26e750d7f256fd2e07c1ba9f38",
+      "sha256": "c9c94437ca9b62a1eb2a5c15b08f833964dc7489855fbc87d37168150dd7912a"
+    },
+    {
+      "file": "third_party/licenses/MPL-2.0.txt",
+      "source": "https://raw.githubusercontent.com/spdx/license-list-data/31846481de7ea17d92f2f46fad76abe58b2e9bb0/text/MPL-2.0.txt",
+      "gitBlob": "ee6256cdb62a765749a71aae3abea32884301cd1",
+      "sha256": "66a3107d5ad6a058aab753eaac2047ccb2ed0e39465dd0fe5844da3e300d5172"
+    }
+  ],
+  "nsisSource": {
+    "version": "3.13",
+    "url": "https://sourceforge.net/projects/nsis/files/NSIS%203/3.13/nsis-3.13-src.tar.bz2/download",
+    "sha256": "a8ffe024602d46b6d766f9e1ce30c324ad2a24daeacd3efc2642d436a0c157ac",
+    "verification": "Project-pinned digest of the release source archive; COPYING matches the mygo-pinned binary distribution, not a publisher signature"
+  },
+  "publicSuffix": {
+    "module": "golang.org/x/net",
+    "moduleVersion": "v0.62.0",
+    "revision": "d6c92f1bbb7433e5db7b8405c25d4035fb8ff376",
+    "url": "https://raw.githubusercontent.com/publicsuffix/list/d6c92f1bbb7433e5db7b8405c25d4035fb8ff376/public_suffix_list.dat",
+    "sha256": "a5638281157e8c902b127a5376f9ea2d024bf2ee11524133a6a76cd1d14ee7be"
+  }
+}

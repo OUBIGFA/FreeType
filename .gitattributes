@@ -8,3 +8,5 @@
 *.sh text eol=lf
 *.svg text eol=lf
 *.png binary
+# Preserve mirrored upstream license text, including its original whitespace.
+third_party/licenses/*.txt -whitespace

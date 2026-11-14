@@ -2,9 +2,13 @@
 name = "freetype-tsf"
 version = "0.0.1"
 edition = "2021"
+build = "../version-resource.rs"
 description = "FreeType 的 TSF 文本服务（输入法 DLL）"
 license = "MIT OR Apache-2.0"
 publish = false
+
+[build-dependencies]
+embed-resource = "=3.0.12"
 
 [lib]
 name = "freetype_tsf"

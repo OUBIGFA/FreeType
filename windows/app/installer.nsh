@@ -6,6 +6,15 @@
 ; 安装器的语言跟随系统显示语言（简体中文、繁体中文、英文，见 locales\）；
 ; 下面自己的提示也按这三种语言各写一份。
 
+VIProductVersion "0.0.1.0"
+VIFileVersion "0.0.1.0"
+VIAddVersionKey /LANG=1033 "ProductName" "FreeType"
+VIAddVersionKey /LANG=1033 "ProductVersion" "0.0.1"
+VIAddVersionKey /LANG=1033 "FileVersion" "0.0.1"
+VIAddVersionKey /LANG=1033 "CompanyName" "FreeType"
+VIAddVersionKey /LANG=1033 "FileDescription" "FreeType Setup"
+VIAddVersionKey /LANG=1033 "OriginalFilename" "FreeType-0.0.1-Setup.exe"
+
 LangString FT_REGISTER_FAILED ${LANG_SIMPCHINESE} "输入法组件注册失败。请重新运行安装器，并在系统提示时允许管理员操作。"
 LangString FT_REGISTER_FAILED ${LANG_TRADCHINESE} "輸入法元件註冊失敗。請重新執行安裝程式，並在系統提示時允許系統管理員操作。"
 LangString FT_REGISTER_FAILED ${LANG_ENGLISH} "FreeType could not register its input method components. Run the installer again and allow the administrator request."

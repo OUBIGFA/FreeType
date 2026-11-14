@@ -155,6 +155,10 @@ foreach ($name in 'lexicon.tsv', 'words.lm', 'english.txt', 'LICENSE', 'SOURCE.t
 }
 Copy-Item 'core\data\s2t.tsv' (Join-Path $Resources 'data')
 
+Step 'Collecting third-party notices and corresponding source'
+Invoke-Native python @('-X', 'utf8', 'tools/make_third_party_notices.py', '--out', (Join-Path $Resources 'third-party'))
+Copy-Item (Join-Path $Root 'third_party\NOTICE.md') (Join-Path $Resources 'THIRD-PARTY-NOTICES.txt')
+
 Step "Building the mygo app and installer (mygo $MygoVersion)"
 $AppBuild = Join-Path $AppDir 'build'
 Recycle-GeneratedDirectory $AppBuild
@@ -163,7 +167,50 @@ $Built = Get-ChildItem -Recurse -File $AppBuild -Filter "freetype-setup-$Version
 if (-not $Built) { throw "mygo build produced no installer under $AppBuild" }
 $NsisCompiler = Find-NsisCompiler
 $NsisVersion = (Invoke-Native $NsisCompiler @('/VERSION')).Trim()
+$NoticeInputs = Get-Content -Raw -Encoding UTF8 (Join-Path $Root 'third_party\manifests\notice-inputs.json') | ConvertFrom-Json
+if ($NsisVersion -ne "v$($NoticeInputs.nsisSource.version)") {
+    throw "NSIS $NsisVersion does not match the bundled source and notices ($($NoticeInputs.nsisSource.version))"
+}
 $env:FREETYPE_MAKENSIS = $NsisCompiler
+
+Step 'Checking Windows version resources and bundled notices'
+$Stage = Join-Path $AppBuild 'windows-amd64'
+$ArtifactPaths = [ordered]@{
+    'FreeType.exe' = Join-Path $Stage 'FreeType.exe'
+    'bin/FreeTypeServer.exe' = Join-Path $Stage 'bin\FreeTypeServer.exe'
+    'bin/freetype_tsf.dll' = Join-Path $Stage 'bin\freetype_tsf.dll'
+    'bin/x86/freetype_tsf.dll' = Join-Path $Stage 'bin\x86\freetype_tsf.dll'
+    "FreeType-$Version-Setup.exe" = $Built.FullName
+}
+$VersionResources = [ordered]@{}
+foreach ($Artifact in $ArtifactPaths.GetEnumerator()) {
+    $Metadata = (Get-Item -LiteralPath $Artifact.Value).VersionInfo
+    if ($Metadata.ProductName -ne 'FreeType' -or $Metadata.ProductVersion -ne $Version -or
+        $Metadata.FileVersion -ne $Version -or -not $Metadata.FileDescription -or
+        $Metadata.OriginalFilename -ne [IO.Path]::GetFileName($Artifact.Key)) {
+        throw "Missing or inconsistent Windows version resource: $($Artifact.Key)"
+    }
+    $VersionResources[$Artifact.Key] = [ordered]@{
+        product = $Metadata.ProductName
+        productVersion = $Metadata.ProductVersion
+        fileVersion = $Metadata.FileVersion
+        description = $Metadata.FileDescription
+        originalFilename = $Metadata.OriginalFilename
+    }
+}
+$NoticeDirectory = Join-Path $Stage 'third-party'
+$NoticeManifestPath = Join-Path $NoticeDirectory 'manifest.json'
+$NoticeManifest = Get-Content -Raw -Encoding UTF8 $NoticeManifestPath | ConvertFrom-Json
+foreach ($NoticeFile in $NoticeManifest.files.PSObject.Properties) {
+    if ((Sha256 (Join-Path $NoticeDirectory $NoticeFile.Name)) -ne $NoticeFile.Value) {
+        throw "Bundled third-party file hash mismatch: $($NoticeFile.Name)"
+    }
+}
+$NoticeHash = Sha256 (Join-Path $Stage 'THIRD-PARTY-NOTICES.txt')
+if ($NoticeHash -ne (Sha256 (Join-Path $Root 'third_party\NOTICE.md'))) { throw 'Bundled notice text does not match its source' }
+if ($NoticeManifest.unresolved.Count -gt 0) {
+    Write-Warning 'The local test package still has unresolved upstream permissions. Do not distribute it publicly.'
+}
 
 if (-not $SkipTests) {
     Step 'Testing installer preparation with disposable processes'
@@ -205,6 +252,14 @@ $Info = [ordered]@{
         cargoLockSha256 = Sha256 (Join-Path $Root 'Cargo.lock')
         goModSha256 = Sha256 (Join-Path $AppDir 'go.mod')
         goSumSha256 = Sha256 (Join-Path $AppDir 'go.sum')
+    }
+    versionResources = $VersionResources
+    thirdParty     = [ordered]@{
+        noticeSha256 = $NoticeHash
+        manifestSha256 = Sha256 $NoticeManifestPath
+        componentCount = $NoticeManifest.components.Count
+        fileCount = @($NoticeManifest.files.PSObject.Properties).Count
+        unresolved = @($NoticeManifest.unresolved)
     }
     components     = [ordered]@{
         'FreeType.exe'                 = Sha256 (Join-Path $AppBuild 'windows-amd64\FreeType.exe')
