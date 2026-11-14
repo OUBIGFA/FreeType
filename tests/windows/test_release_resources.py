@@ -9,7 +9,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-APP = ROOT / "windows" / "app"
+APP = Path(os.environ.get("FREETYPE_BUILD_APP", ROOT / "windows" / "app")).resolve()
 
 
 @unittest.skipUnless(os.name == "nt", "Windows resource test")
@@ -26,6 +26,7 @@ class ReleaseResourceTests(unittest.TestCase):
                          cls.stage / "bin" / "x86" / "freetype_tsf.dll", installers[0]]
 
     def test_all_components_expose_matching_product_and_file_versions(self):
+        self.assertEqual(self.config["version"], os.environ.get("FREETYPE_BUILD_VERSION", self.config["version"]))
         script = (
             "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); "
             "$paths = $env:FREETYPE_RESOURCE_TEST_PATHS | ConvertFrom-Json; "
@@ -63,8 +64,13 @@ class ReleaseResourceTests(unittest.TestCase):
         identifiers = {component["id"] for component in manifest["components"]}
         self.assertTrue({"go:github.com/egoist/mygo", "rust:windows", "toolchain:go",
                          "toolchain:rust", "installer:nsis", "data:public-suffix-list",
-                         "data:opencc", "asset:octicons"}.issubset(identifiers))
-        self.assertIn("WowType", {entry["name"] for entry in manifest["unresolved"]})
+                         "data:opencc", "asset:octicons", "engine:wowtype-core", "data:unicode-cldr",
+                         "model:word-lm", "data:default"}.issubset(identifiers))
+        self.assertEqual(manifest["unresolved"], [])
+        self.assertEqual(manifest["authorizationRecordSha256"], hashlib.sha256(
+            (ROOT / "third_party/manifests/authorization.json").read_bytes()).hexdigest())
+        data = next(component for component in manifest["components"] if component["id"] == "data:default")
+        self.assertTrue(any(name.endswith("default-data-sources.zip") for name in data["sourceFiles"]))
         for relative, expected in manifest["files"].items():
             with self.subTest(file=relative):
                 path = directory / relative

@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -34,8 +35,14 @@ class InstallerPreparationTests(unittest.TestCase):
             ' if (args.Length > 0 && args[0] == "--stop") {'
             ' System.IO.File.WriteAllText(System.IO.Path.Combine('
             ' System.AppDomain.CurrentDomain.BaseDirectory, "stop-requested.txt"), "requested"); return 0; }'
-            ' if (args.Length > 0 && args[0] == "--enable") {'
-            ' return int.Parse(System.Environment.GetEnvironmentVariable("FREETYPE_TEST_ENABLE_EXIT") ?? "0"); }'
+            ' if (args.Length > 0 && (args[0] == "--enable" || args[0] == "--disable" || args[0] == "--unregister-tsf")) {'
+            ' System.IO.File.AppendAllText(System.IO.Path.Combine('
+            ' System.AppDomain.CurrentDomain.BaseDirectory, "setup-calls.txt"), args[0] + "\\n");'
+            ' string variable = args[0] == "--enable" ? "ENABLE" : args[0] == "--disable" ? "DISABLE" : "UNREGISTER";'
+            ' int code = int.Parse(System.Environment.GetEnvironmentVariable("FREETYPE_TEST_" + variable + "_EXIT") ?? "0");'
+            ' int marker = System.Array.IndexOf(args, "--marker");'
+            ' if (code == 0 && args[0] == "--unregister-tsf" && marker >= 0 && marker + 1 < args.Length) {'
+            ' System.IO.File.WriteAllText(args[marker + 1], "ok"); } return code; }'
             ' if (System.Environment.GetEnvironmentVariable("FREETYPE_INSTALL_COMPLETED") == "1") {'
             ' string name = args.Length > 0 ? "after-install.txt" : "finish-page.txt";'
             ' System.IO.File.WriteAllText(System.IO.Path.Combine('
@@ -171,6 +178,94 @@ class InstallerPreparationTests(unittest.TestCase):
             time.sleep(0.02)
         self.assertEqual(automatic.read_text(encoding="utf-8"), "1|--after-install")
         self.assertEqual((self.target / "finish-page.txt").read_text(encoding="utf-8"), "1|")
+
+    def run_uninstall(self, expected_code, expected_calls, *, cancelled=False, stale_marker=False, environment=None):
+        import winreg
+
+        server = self.target / "bin" / "FreeTypeServer.exe"
+        server.parent.mkdir()
+        shutil.copyfile(self.fixture, server)
+        user_data = self.target / "user-data.txt"
+        user_data.write_text("retained", encoding="utf-8")
+        registry = "Software\\FreeTypeInstallerTests-" + self.directory.name
+        include = self.directory / "installer.nsh"
+        content = INCLUDE.read_text(encoding="utf-8").replace(
+            "Software\\Microsoft\\Windows\\CurrentVersion\\Run", registry)
+
+        # Keep the real macro, replacing only elevation and the user's startup key.
+        def without_elevation(match):
+            if "--unregister-tsf" not in match[4]:
+                return match[0]
+            if cancelled:
+                return match[1] + "SetErrors"
+            return match[1] + f"ExecWait '{match[2]} {match[4]}' $0"
+
+        content = re.sub(r'^(\s*)ExecShellWait "runas" ("[^"]+") ([\'\"])(.*?)\3 SW_HIDE$',
+                         without_elevation, content, flags=re.M)
+        self.assertNotRegex(content, r'ExecShellWait[^\n]*--unregister-tsf')
+        include.write_text(content, encoding="utf-8-sig")
+        shutil.copyfile(INCLUDE.with_name("prepare-install.ps1"), include.with_name("prepare-install.ps1"))
+        installer = self.directory / "make-uninstaller.exe"
+        uninstaller = self.directory / "uninstall.exe"
+        script = self.directory / "uninstall.nsi"
+        stale = ('InitPluginsDir\nFileOpen $0 "$PLUGINSDIR\\freetype-unregister.ok" w\n'
+                 'FileWrite $0 "old"\nFileClose $0\n') if stale_marker else ""
+        script.write_text(
+            'Unicode true\nRequestExecutionLevel user\nSilentInstall silent\nSilentUnInstall silent\n'
+            f'Name "FreeType uninstall test"\nOutFile "{installer}"\nInstallDir "{self.target}"\n'
+            '!include "MUI2.nsh"\n'
+            '!insertmacro MUI_LANGUAGE "SimpChinese"\n'
+            '!insertmacro MUI_LANGUAGE "TradChinese"\n'
+            '!insertmacro MUI_LANGUAGE "English"\n'
+            f'!include "{include}"\nSection\nWriteUninstaller "{uninstaller}"\nSectionEnd\n'
+            'Section "Uninstall"\n' + stale + '!insertmacro customUnInstall\n'
+            'Delete "$INSTDIR\\bin\\FreeTypeServer.exe"\n'
+            'FileOpen $0 "$INSTDIR\\uninstalled.txt" w\nFileWrite $0 "done"\nFileClose $0\nSectionEnd\n',
+            encoding="utf-8-sig",
+        )
+        compiled = subprocess.run([str(self.compiler), "-V2", str(script)], capture_output=True, timeout=30)
+        self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
+        subprocess.run([str(installer), "/S"], check=True, capture_output=True, timeout=45)
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, registry, 0,
+                                winreg.KEY_WRITE | winreg.KEY_WOW64_32KEY) as key:
+            winreg.SetValueEx(key, "FreeType", 0, winreg.REG_SZ, "startup")
+        try:
+            result = subprocess.run(f'"{uninstaller}" /S _?={self.target}', capture_output=True, timeout=45,
+                                    env={**os.environ, **(environment or {})})
+            self.assertEqual(result.returncode, expected_code, result.stdout + result.stderr)
+            self.assertEqual((server.parent / "setup-calls.txt").read_text().splitlines(), expected_calls)
+            self.assertEqual(server.exists(), expected_code != 0, "Failure must keep the program for repair")
+            self.assertEqual((self.target / "uninstalled.txt").exists(), expected_code == 0)
+            self.assertEqual(user_data.read_text(encoding="utf-8"), "retained")
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, registry, 0,
+                                winreg.KEY_READ | winreg.KEY_WOW64_32KEY) as key:
+                if expected_code == 0:
+                    with self.assertRaises(FileNotFoundError):
+                        winreg.QueryValueEx(key, "FreeType")
+                else:
+                    self.assertEqual(winreg.QueryValueEx(key, "FreeType")[0], "startup")
+        finally:
+            winreg.DeleteKeyEx(winreg.HKEY_CURRENT_USER, registry, winreg.KEY_WOW64_32KEY)
+
+    def test_uninstall_disable_failure_preserves_installation(self):
+        self.run_uninstall(5, ["--disable"], environment={"FREETYPE_TEST_DISABLE_EXIT": "23"})
+
+    def test_uninstall_cancelled_uac_preserves_installation_and_reenables_user(self):
+        self.run_uninstall(6, ["--disable", "--enable"], cancelled=True)
+
+    def test_uninstall_failed_unregister_preserves_installation(self):
+        self.run_uninstall(6, ["--disable", "--unregister-tsf", "--enable"],
+                           environment={"FREETYPE_TEST_UNREGISTER_EXIT": "23"})
+
+    def test_uninstall_failed_restore_is_reported(self):
+        self.run_uninstall(7, ["--disable", "--enable"], cancelled=True,
+                           environment={"FREETYPE_TEST_ENABLE_EXIT": "23"})
+
+    def test_uninstall_ignores_stale_success_marker(self):
+        self.run_uninstall(6, ["--disable", "--enable"], cancelled=True, stale_marker=True)
+
+    def test_uninstall_success_allows_cleanup(self):
+        self.run_uninstall(0, ["--disable", "--unregister-tsf"])
 
 
 if __name__ == "__main__":

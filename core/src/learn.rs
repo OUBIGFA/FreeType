@@ -1,3 +1,4 @@
+// Modified by FreeType; compare with WowType 5656e136 for the original implementation.
 //! 从用户自己的输入里学：选过的词有多「热」，哪两个词常挨着用。
 //!
 //! 照着微信输入法的思路（`SelectedHistory`、`history_hot_val`、`context_bigram_score`）：

@@ -1,3 +1,4 @@
+// Modified by FreeType; compare with WowType 5656e136 for the original implementation.
 //! Emoji：打字时推荐，以及表情面板里的搜索。
 //!
 //! 数据编进库里：`emoji/cldr.tsv`（Unicode CLDR 的中英文关键词，scripts/make-emoji.py 生成）

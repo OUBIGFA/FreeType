@@ -81,6 +81,18 @@ def scale_frequencies(entries, total):
             entries[key] *= factor
 
 
+def snapshot_sources(directory, sources):
+    directory = directory.resolve()
+    record = json.loads((directory / "source-manifest.json").read_text(encoding="utf-8"))
+    if record["sources"] != sources:
+        raise ValueError("数据源码快照的修订与构建配置不一致。")
+    for relative, expected in record["files"].items():
+        path = directory / relative
+        if not path.resolve().is_relative_to(directory) or not path.is_file() or sha256(path) != expected:
+            raise ValueError(f"数据源码快照校验失败：{relative}")
+    return [directory / source["name"] for source in sources]
+
+
 def input_record(manifest, hotwords):
     return {
         "configurationSha256": sha256(manifest),
@@ -115,13 +127,20 @@ def build_data(args):
     model = args.model or args.output / "words.lm"
     if model.is_file() and sha256(model) != model_info["sha256"]:
         raise ValueError("words.lm 的 SHA-256 不匹配，未替换已有词库。")
-    model_license = checked_download(archives / "CC-BY-SA-4.0.txt", model_info["licenseUrl"],
-                                     model_info["licenseSha256"])
+    if args.snapshot_root:
+        snapshots = snapshot_sources(args.snapshot_root, manifest["sources"])
+        model_license = args.snapshot_root / "licenses/CC-BY-SA-4.0.txt"
+        if sha256(model_license) != model_info["licenseSha256"]:
+            raise ValueError("数据源码快照的模型许可文本不匹配。")
+    else:
+        model_license = checked_download(archives / "CC-BY-SA-4.0.txt", model_info["licenseUrl"],
+                                         model_info["licenseSha256"])
     parent = Path(os.environ.get("FREETYPE_TEST_TEMP", ROOT / "_temp" / "default-data"))
     parent.mkdir(parents=True, exist_ok=True)
     scratch = Path(tempfile.mkdtemp(prefix="data-", dir=parent))
     sources = manifest["sources"]
-    snapshots = [source_snapshot(source, archives, scratch) for source in sources]
+    if not args.snapshot_root:
+        snapshots = [source_snapshot(source, archives, scratch) for source in sources]
     primary, supplement = sources
     frost, wanxiang = snapshots
     entries = load_entries(frost / primary["dictionary"], set(), skip=tuple(primary["skipImports"]),
@@ -207,6 +226,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--source-root", type=Path, default=ROOT / ".local" / "data-src")
+    parser.add_argument("--snapshot-root", type=Path, help="从随包的已校验数据源码快照重建，不下载上游归档")
     parser.add_argument("--output", type=Path, default=ROOT / ".local" / "data")
     parser.add_argument("--model", type=Path, default=os.environ.get("WOWTYPE_LM_FILE"))
     parser.add_argument("--hotwords", type=Path, default=ROOT / "data" / "hotwords.tsv")

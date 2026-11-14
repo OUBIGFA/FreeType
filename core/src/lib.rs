@@ -1,3 +1,4 @@
+// Modified by FreeType; compare with WowType 5656e136 for the original implementation.
 //! WowType 拼音引擎骨架。
 //!
 //! 流水线：

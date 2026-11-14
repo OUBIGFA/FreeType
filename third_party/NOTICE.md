@@ -1,8 +1,8 @@
 # FreeType 第三方声明
 
-本文件随本地测试安装器安装为 `THIRD-PARTY-NOTICES.txt`。完整许可原文和需要提供的源码位于安装目录的 `third-party/`；默认词库的原有声明也保留在 `data/`。
+本文件随安装器安装为 `THIRD-PARTY-NOTICES.txt`。完整许可原文和需要提供的源码位于安装目录的 `third-party/`；默认词库的原有声明也保留在 `data/`。
 
-**这份声明不为 FreeType 整包授予许可证，也不表示已经取得所有上游授权。WowType 缺少许可证文本或书面许可，公开分发仍受阻。** 补齐声明、测试通过或标为预发布，都不能代替该授权。
+**程序、词库、模型和图标保留各自的许可，不将 FreeType 整包改称为一种许可证。** 本次核对以固定修订和随包材料为边界；不包含未打包的模型、私人词库或上游其他平台组件。
 
 ## 1. 如何核对本包
 
@@ -21,7 +21,11 @@
 
 FreeType 复用其 Rust 引擎、C ABI 和行为测试，并增加 Windows 服务、TSF 输入法和设置程序。原有内部 crate 名与 `wowtype_` ABI 前缀为保持上游兼容而保留。
 
-截至 2026-11-14，固定修订及核对时的上游均未提供根目录许可证。`core/Cargo.toml` 的 `MIT OR Apache-2.0` 字段不是完整许可文本，不足以解除这个发布阻塞。需取得上游许可证或明确的书面授权后再复核分发范围；本项目不代上游补写版权授权。
+2026-11-14 复核固定修订的 README，原文明确“代码按 MIT 或 Apache-2.0 双许可证发布，任选其一。”同修订 `core/Cargo.toml` 声明 `MIT OR Apache-2.0`。根目录没有 LICENSE 文件，不等于缺少公开授权。
+
+本次分发选择上游允许的 Apache-2.0 选项。`third-party/engine/wowtype-core@<修订>/` 提供标准许可全文、上游完整 README 和 Cargo 声明；来源、Git blob 和 SHA-256 见源码仓库的 `third_party/manifests/authorization.json`。保留原有双许可声明，不代上游编造版权人或授权年份。
+
+本次 Windows 构建所用的已修改上游引擎与转换源码带有明确修改标识，具体差异可与该固定修订比较。原有署名、许可及归属声明保留；Apache-2.0 不授予上游商标权。默认词库、模型、OpenCC 和 Unicode 数据的独立许可不由这项代码授权代替。
 
 ### Rust 与 Go 模块
 
@@ -43,10 +47,13 @@ FreeType 复用其 Rust 引擎、C ABI 和行为测试，并增加 Windows 服�
 - 白霜主库来自 `gaboolic/rime-frost` 修订 `555a736932de245d7f59f640a98bd58f368792b3`，采用 GPL-3.0。其上游词表来源需与固定输入一并核对。
 - 万象补充来自 `amzxyz/rime-wanxiang-data` 修订 `4b50697bc3fa45ea7f79faebcc731fb42a3b6d8c`。作者为 amzxyz，其原创字词数据采用 CC BY 4.0；此范围不覆盖其程序代码及第三方组件。只合入字表、基础词、兼容读音、地名、名人和艺人六张核心表，不复制万象程序或 `.gram` 模型。
 - 数据转换包括去除拼音声调、将 ü 转为 v、按引擎量级归一化词频、白霜优先去重、万象补缺，以及合入项目热词。原始来源、转换输入摘要和改动说明见 `data/SOURCE.txt`、`data/MANIFEST.json`；生成脚本及固定输入配置位于 FreeType 源码仓库的 `tools/make_default_data.py` 和 `third_party/manifests/default-data.json`。
-- 词级语言模型 `words.lm` 来自 WowType 的 `lm-2026.11.09` 数据发布，采用 CC BY-SA 4.0。本包未修改模型内容；下载来源和摘要见默认数据清单。该数据许可不补足 WowType 程序代码的授权。
-- GPL-3.0、CC BY 4.0、CC BY-SA 4.0 原文在 `data/LICENSE`；万象的原始许可范围和第三方声明在 `data/WANXIANG-LICENSE-SCOPE.md`、`data/WANXIANG-NOTICE.md`。`third-party/data/default@<数据版本>/` 另保留这些声明。公开分发前仍须复核 GPL 数据的对应源码及转换输入提供方式和组合分发义务，不能只保留一个许可证名称。
+- `third-party/data/default@<数据版本>/source/default-data-sources.zip` 随包提供原始词表、完整头部声明、GPL 和万象许可范围、热词、固定配置及转换工具。解压后按其中的 `README.txt` 重建，无须重新下载上游词库归档。白霜及其派生词表的分发保留 GPL-3.0 条件；万象原始数据的 CC BY 4.0 署名和范围仍须保留。
+- 词级语言模型 `words.lm` 来自 WowType 的 `lm-2026.11.09` 数据发布，采用 CC BY-SA 4.0，署名为 WowType contributors。本包未修改模型内容，SHA-256 为 `42cb7c4a7cededa29b1a9ff105530085529fefff96535cc051341ebd51605dbe`。训练语料署名包括 LCCC（thu-coai，MIT）和中文维基百科（CC BY-SA 4.0）；发布说明和许可全文位于 `third-party/model/word-lm@lm-2026.11.09/`。再次分发须保留署名、许可及改动说明；改编模型时遵守相同方式共享条件，不将其套用为程序代码许可。
+- GPL-3.0、CC BY 4.0、CC BY-SA 4.0 原文在 `data/LICENSE`；万象的原始许可范围和第三方声明在 `data/WANXIANG-LICENSE-SCOPE.md`、`data/WANXIANG-NOTICE.md`。`third-party/data/default@<数据版本>/` 另保留这些声明。词库和模型以独立数据文件分发。保留 GPL 派生词表的义务，不将独立程序与未修改模型混称为同一衍生作品，也不能因同包分发而省略任一来源的义务。
 - `data/s2t.tsv` 是由 WowType 固定修订带入的 OpenCC 字符级简繁映射，不含 OpenCC 程序。本包保留映射内容；上游转换脚本为 `tools/opencc2tsv.py`。历史生成时的 OpenCC 包版本未在上游记录，因此不冒称来自某个 OpenCC 发行版。OpenCC 项目为 `https://github.com/BYVoid/OpenCC`，采用 Apache-2.0；完整许可和作者名单在 `third-party/data/opencc@wowtype-5656e136/`，转换后的表也在其 `source/` 内提供。
 - 关于页的 GitHub 标志来自 `primer/octicons` 修订 `68ec2de8d0ddfcbb7497da01d0b7d98eb5593020`，采用 MIT 许可。FreeType 只调整 SVG 填充以跟随文字颜色，许可原文在 `third-party/asset/octicons@<修订>/`。
+
+- 编入引擎的 emoji 关键词来自 WowType 的 `core/src/emoji/cldr.tsv`，使用 Unicode emoji-test.txt 18.0 和 CLDR 中英文数据，按原脚本筛选 emoji 15.0 及以前条目。原文件声明 `Copyright © 1991-2026 Unicode, Inc.`，适用 Unicode License v3；许可和带原始头部的数据位于 `third-party/data/unicode-cldr@wowtype-5656e136/`。许可镜像还提及 LDML 规范文档；本包使用的是数据，不分发该规范文档，不能把数据许可扩张为规范文档许可。
 
 ## 4. NSIS 安装器
 
@@ -60,4 +67,4 @@ NSIS `COPYING` 区分通用代码的 zlib/libpng 许可、bzip2 压缩模块的 
 
 升级依赖、替换图标、改动词库或修改上游代码后，重新运行统一构建入口。构建从锁定依赖提取原文；缺许可文件、缺 MPL 对应源码、数据修订不匹配或摘要不符时停止，不能复用另一份安装器的声明。
 
-项目来源登记为 `https://github.com/OUBIGFA/FreeType/tree/main/third_party`。公开发布前还必须解决本文件列出的授权和分发条件，并完成隔离环境安装验收。
+项目来源登记为 `https://github.com/OUBIGFA/FreeType/tree/main/third_party`。公开发布前核对本次包的许可清单没有未解决项，并完成隔离环境安装验收；本声明本身不是安装验收结论。

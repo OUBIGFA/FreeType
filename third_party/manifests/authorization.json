@@ -1,0 +1,43 @@
+{
+  "format": 1,
+  "reviewedOn": "2026-11-14",
+  "wowtype": {
+    "revision": "5656e136e9f5fc32837c87bc1a2242ec159a32d7",
+    "licenseExpression": "MIT OR Apache-2.0",
+    "distributionLicense": "Apache-2.0",
+    "declaration": "代码按 MIT 或 Apache-2.0 双许可证发布，任选其一。",
+    "scope": "Upstream code; dictionary, model, OpenCC and Unicode data retain their separate licenses",
+    "readme": {
+      "file": "third_party/licenses/WowType-README.txt",
+      "source": "https://github.com/Gloridust/WowType/blob/5656e136e9f5fc32837c87bc1a2242ec159a32d7/README.md",
+      "gitBlob": "6a9ade08975cfdbc65b8b33489517e11757cc626",
+      "sha256": "ea98fa68fb9e5061f358017ace7cd05f4e2e76e704ed26454091e0aabc8050f9"
+    },
+    "package": {
+      "file": "third_party/licenses/WowType-Cargo.toml.txt",
+      "source": "https://github.com/Gloridust/WowType/blob/5656e136e9f5fc32837c87bc1a2242ec159a32d7/core/Cargo.toml",
+      "gitBlob": "e88171ee95ec2130b3060ba7c89a90ab2b4cd760",
+      "sha256": "73d82f9a7293cccc52f9f550fa2b06cf202dc71c9a114a01d67aadd97404874d"
+    },
+    "licenseText": "third_party/licenses/Apache-2.0-LICENSE.txt"
+  },
+  "wordModel": {
+    "tag": "lm-2026.11.09",
+    "license": "CC-BY-SA-4.0",
+    "sha256": "42cb7c4a7cededa29b1a9ff105530085529fefff96535cc051341ebd51605dbe",
+    "attribution": "WowType contributors; LCCC (thu-coai, MIT); Chinese Wikipedia contributors (CC BY-SA 4.0)",
+    "notice": {
+      "file": "third_party/licenses/WowType-MODEL-NOTICE.txt",
+      "source": "https://github.com/Gloridust/WowType/releases/tag/lm-2026.11.09",
+      "sha256": "b96a674800c4f039230ab4edae95168f0895b440e344d223f753cf7fa12c09c5"
+    }
+  },
+  "unicode": {
+    "license": "Unicode-3.0",
+    "source": "core/src/emoji/cldr.tsv",
+    "copyright": "Copyright © 1991-2026 Unicode, Inc.",
+    "sourceSha256": "d78a02c5953f6a39ce541c907b70004825f4307ab11a2dd702389111f4631d88",
+    "licenseText": "third_party/licenses/Unicode-LICENSE.txt",
+    "scope": "Emoji data only; the LDML specification is not distributed"
+  }
+}

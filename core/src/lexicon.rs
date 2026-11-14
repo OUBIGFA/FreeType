@@ -1,3 +1,4 @@
+// Modified by FreeType; compare with WowType 5656e136 for the original implementation.
 //! 词典抽象与内存实现。
 //!
 //! 真实 WeType 词库是 LOUDS trie + 音节 ID 编码，后续解析器只需实现

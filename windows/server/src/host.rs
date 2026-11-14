@@ -417,7 +417,7 @@ impl Host {
     fn status(&self) -> Status {
         Status {
             protocol: PROTOCOL_VERSION,
-            version: env!("CARGO_PKG_VERSION").to_string(),
+            version: option_env!("FREETYPE_BUILD_VERSION").unwrap_or(env!("CARGO_PKG_VERSION")).to_string(),
             ready: self.engine.is_some(),
             mode: self.current_mode(),
             chinese_punct: self.config.fullwidth_punct,

@@ -1,3 +1,4 @@
+// Modified by FreeType; compare with WowType 5656e136 for the original implementation.
 //! 中英文之间自动补空格（`你好Linux` → `你好 Linux`、`第5章` → `第 5 章`）。
 //!
 //! 只看「光标前一个字」和「要上屏的第一个字」这一处边界：词里本来就有的字母

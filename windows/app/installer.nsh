@@ -6,14 +6,17 @@
 ; 安装器的语言跟随系统显示语言（简体中文、繁体中文、英文，见 locales\）；
 ; 下面自己的提示也按这三种语言各写一份。
 
-VIProductVersion "0.0.1.0"
-VIFileVersion "0.0.1.0"
+!ifndef FREETYPE_VERSION
+  !define FREETYPE_VERSION "0.0.1"
+!endif
+VIProductVersion "${FREETYPE_VERSION}.0"
+VIFileVersion "${FREETYPE_VERSION}.0"
 VIAddVersionKey /LANG=1033 "ProductName" "FreeType"
-VIAddVersionKey /LANG=1033 "ProductVersion" "0.0.1"
-VIAddVersionKey /LANG=1033 "FileVersion" "0.0.1"
+VIAddVersionKey /LANG=1033 "ProductVersion" "${FREETYPE_VERSION}"
+VIAddVersionKey /LANG=1033 "FileVersion" "${FREETYPE_VERSION}"
 VIAddVersionKey /LANG=1033 "CompanyName" "FreeType"
 VIAddVersionKey /LANG=1033 "FileDescription" "FreeType Setup"
-VIAddVersionKey /LANG=1033 "OriginalFilename" "FreeType-0.0.1-Setup.exe"
+VIAddVersionKey /LANG=1033 "OriginalFilename" "FreeType-${FREETYPE_VERSION}-Setup.exe"
 
 LangString FT_REGISTER_FAILED ${LANG_SIMPCHINESE} "输入法组件注册失败。请重新运行安装器，并在系统提示时允许管理员操作。"
 LangString FT_REGISTER_FAILED ${LANG_TRADCHINESE} "輸入法元件註冊失敗。請重新執行安裝程式，並在系統提示時允許系統管理員操作。"
@@ -26,6 +29,18 @@ LangString FT_STOP_FAILED ${LANG_ENGLISH} "FreeType could not stop its processes
 LangString FT_ENABLE_FAILED ${LANG_SIMPCHINESE} "无法将 FreeType 加入当前用户的输入法列表。安装尚未完成，请重新运行安装器；问题持续时请查看服务日志。"
 LangString FT_ENABLE_FAILED ${LANG_TRADCHINESE} "無法將 FreeType 加入目前使用者的輸入法清單。安裝尚未完成，請重新執行安裝程式；問題持續時請查看服務日誌。"
 LangString FT_ENABLE_FAILED ${LANG_ENGLISH} "FreeType could not enable the input method for this user. Installation is incomplete. Run the installer again; if it still fails, check the service log."
+
+LangString FT_DISABLE_FAILED ${LANG_SIMPCHINESE} "无法将 FreeType 移出当前用户的输入法列表。卸载已停止，程序和用户数据保留。请重新运行安装器修复后再卸载。"
+LangString FT_DISABLE_FAILED ${LANG_TRADCHINESE} "無法將 FreeType 移出目前使用者的輸入法清單。解除安裝已停止，程式和使用者資料保留。請重新執行安裝程式修復後再解除安裝。"
+LangString FT_DISABLE_FAILED ${LANG_ENGLISH} "FreeType could not disable the input method for this user. Uninstall stopped; the program and user data are kept. Run the installer to repair it before uninstalling again."
+
+LangString FT_UNREGISTER_FAILED ${LANG_SIMPCHINESE} "管理员操作已取消或输入法组件注销失败。卸载已停止，程序、启动项和用户数据保留。请重试卸载；若输入法不能使用，请重新运行安装器修复。"
+LangString FT_UNREGISTER_FAILED ${LANG_TRADCHINESE} "系統管理員操作已取消或輸入法元件取消註冊失敗。解除安裝已停止，程式、啟動項目和使用者資料保留。請重試；若輸入法無法使用，請重新執行安裝程式修復。"
+LangString FT_UNREGISTER_FAILED ${LANG_ENGLISH} "The administrator request was cancelled or input method removal failed. Uninstall stopped; the program, startup entry and user data are kept. Retry uninstalling. If the input method does not work, run the installer to repair it."
+
+LangString FT_RESTORE_FAILED ${LANG_SIMPCHINESE} "输入法组件未确认注销，且无法恢复当前用户的输入法列表。卸载已停止，程序、启动项和用户数据保留。请重新运行安装器修复后再卸载。"
+LangString FT_RESTORE_FAILED ${LANG_TRADCHINESE} "輸入法元件尚未確認取消註冊，且無法還原目前使用者的輸入法清單。解除安裝已停止，程式、啟動項目和使用者資料保留。請重新執行安裝程式修復後再解除安裝。"
+LangString FT_RESTORE_FAILED ${LANG_ENGLISH} "Input method removal was not confirmed, and FreeType could not restore the user's input method entry. Uninstall stopped; the program, startup entry and user data are kept. Run the installer to repair it before uninstalling again."
 
 ; 安装和卸载共用按安装路径检查的停止步骤，不按进程名结束其他实例。
 !macro FreeTypePrepareFunction Prefix
@@ -77,8 +92,10 @@ FunctionEnd
 !macro customInstall
   InitPluginsDir
   Delete "$PLUGINSDIR\freetype-register.ok"
+  IfFileExists "$PLUGINSDIR\freetype-register.ok" register_failed 0
   ExecShellWait "runas" "$INSTDIR\bin\FreeTypeServer.exe" '--register-tsf "$INSTDIR\bin" --marker "$PLUGINSDIR\freetype-register.ok"' SW_HIDE
-  IfFileExists "$PLUGINSDIR\freetype-register.ok" registered 0
+  IfFileExists "$PLUGINSDIR\freetype-register.ok" registered register_failed
+  register_failed:
     MessageBox MB_ICONEXCLAMATION|MB_OK "$(FT_REGISTER_FAILED)" /SD IDOK
     ; Keep pending.json for a retry; do not launch an incompletely updated app.
     SetErrorLevel 3
@@ -96,6 +113,29 @@ FunctionEnd
 !macro customUnInstall
   Call un.FreeTypePrepare
   nsExec::Exec '"$INSTDIR\bin\FreeTypeServer.exe" --disable'
-  ExecShellWait "runas" "$INSTDIR\bin\FreeTypeServer.exe" "--unregister-tsf" SW_HIDE
+  Pop $0
+  StrCmp $0 "0" disabled
+    MessageBox MB_ICONSTOP|MB_OK "$(FT_DISABLE_FAILED)" /SD IDOK
+    SetErrorLevel 5
+    Quit
+  disabled:
+  ; ExecShellWait has no exit-code output. Only this invocation's marker permits cleanup.
+  Delete "$PLUGINSDIR\freetype-unregister.ok"
+  IfFileExists "$PLUGINSDIR\freetype-unregister.ok" unregister_failed 0
+  ExecShellWait "runas" "$INSTDIR\bin\FreeTypeServer.exe" '--unregister-tsf --marker "$PLUGINSDIR\freetype-unregister.ok"' SW_HIDE
+  IfFileExists "$PLUGINSDIR\freetype-unregister.ok" unregistered unregister_failed
+  unregister_failed:
+    nsExec::Exec '"$INSTDIR\bin\FreeTypeServer.exe" --enable'
+    Pop $0
+    StrCmp $0 "0" user_reenabled
+      MessageBox MB_ICONSTOP|MB_OK "$(FT_RESTORE_FAILED)" /SD IDOK
+      SetErrorLevel 7
+      Quit
+    user_reenabled:
+    MessageBox MB_ICONSTOP|MB_OK "$(FT_UNREGISTER_FAILED)" /SD IDOK
+    SetErrorLevel 6
+    Quit
+  unregistered:
+  Delete "$PLUGINSDIR\freetype-unregister.ok"
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "FreeType"
 !macroend

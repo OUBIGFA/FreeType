@@ -1,0 +1,19 @@
+WowType 词级语言模型 `words.lm`，由词库包 `wowtype-data-rime-ice` 构建时下载并打包进去，一般不需要单独下载。
+
+- 格式：WowType 自己的二进制格式（`WTLM` 版本 1），读取代码见 `core/src/wordlm.rs`
+- 内容：34.6 万个词、400 万个「前词 → 后词」搭配
+- `words.lm` sha256：`42cb7c4a7cededa29b1a9ff105530085529fefff96535cc051341ebd51605dbe`
+
+训练语料：
+- [LCCC](https://huggingface.co/datasets/thu-coai/lccc)（清华大学 CoAI 组的中文对话语料），MIT 许可
+- [中文维基百科](https://zh.wikipedia.org/)（Hugging Face `wikimedia/wikipedia` 的 zh 分片 0–4），CC BY-SA 4.0
+
+许可证：本模型是从上述语料统计出来的，按 **CC BY-SA 4.0** 发布，需署名并以相同方式共享。
+
+用 `wowtype-lmbuild` 生成（词库为 rime-ice 2026-10-31 + `data/hotwords.tsv`）：
+
+```bash
+cargo run --release -p wowtype-core --bin wowtype-lmbuild -- \
+    --lexicon lexicon.tsv --s2t /usr/share/wowtype/s2t.tsv \
+    --max-bigrams 4000000 --out words.lm lccc.txt wiki.txt
+```

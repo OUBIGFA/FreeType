@@ -1,3 +1,4 @@
+// Modified by FreeType; compare with WowType 5656e136 for the original implementation.
 //! 本地翻译模型的运行时：按需起一个 `llama-server`，闲置一段时间后停掉。
 //!
 //! 不把 llama.cpp 编进插件：`llama-server` 用系统里装的（发行版的 llama.cpp 包），没有就用

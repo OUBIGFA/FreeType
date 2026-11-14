@@ -1,0 +1,56 @@
+[package]
+name = "wowtype-core"
+version = "0.3.11"
+edition = "2021"
+rust-version = "1.70"
+description = "WeType 风格拼音输入法引擎骨架（音节图 + 束搜索 + 排序）"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "wowtype_core"
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[[bin]]
+name = "wowtype-demo"
+path = "src/bin/demo.rs"
+
+[[bin]]
+name = "wowtype-bench"
+path = "src/bin/bench.rs"
+
+[[bin]]
+name = "wowtype-eval"
+path = "src/bin/eval.rs"
+
+[[bin]]
+name = "wowtype-check"
+path = "src/bin/check.rs"
+
+[[bin]]
+name = "wowtype-train"
+path = "src/bin/train.rs"
+
+[[bin]]
+name = "wowtype-show"
+path = "src/bin/show.rs"
+
+[[bin]]
+name = "wowtype-lmbuild"
+path = "src/bin/lmbuild.rs"
+
+[[bin]]
+name = "wowtype-probe"
+path = "src/bin/probe.rs"
+
+[dependencies]
+anyhow = "1.0"
+# 会话读本地时间（日期时间候选）
+libc = "0.2"
+# 翻译：拼 OpenAI 格式的请求、解析流式返回
+serde_json = "1"
+# 语音输入（麦克风 + 微信离线识别模型）。Linux 需要 libasound2-dev
+wowtype-voice = { path = "../voice", features = ["capture"], optional = true }
+
+[features]
+default = ["voice"]
+voice = ["dep:wowtype-voice"]

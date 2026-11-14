@@ -17,8 +17,12 @@ import (
 
 // Serve the real GitHub API shapes; version selection, validation and file
 // replacement still go through the production update library.
-func updateFeed(t *testing.T, payload []byte, digest string) *httptest.Server {
+func updateFeed(t *testing.T, payload []byte, digest string, tags ...string) *httptest.Server {
 	t.Helper()
+	tag := "freetype-0.2.0"
+	if len(tags) > 0 {
+		tag = tags[0]
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
@@ -27,7 +31,7 @@ func updateFeed(t *testing.T, payload []byte, digest string) *httptest.Server {
 				map[string]any{"id": 9, "tag_name": "freetype-9.0.0", "draft": true, "assets": []any{map[string]any{"id": 9, "name": "FreeType-9.0.0-Setup.exe", "size": len(payload)}}},
 				map[string]any{"id": 8, "tag_name": "freetype-8.0.0", "prerelease": true, "assets": []any{map[string]any{"id": 8, "name": "FreeType-8.0.0-Setup.exe", "size": len(payload)}}},
 				map[string]any{"id": 7, "tag_name": "v7.0.0", "assets": []any{map[string]any{"id": 7, "name": "FreeType-7.0.0-Setup.exe", "size": len(payload)}}},
-				map[string]any{"id": 1, "tag_name": "freetype-0.2.0", "body": "更新说明", "assets": []any{map[string]any{"id": 1, "name": "FreeType-0.2.0-Setup.exe", "size": len(payload), "digest": digest}}},
+				map[string]any{"id": 1, "tag_name": tag, "body": "更新说明", "assets": []any{map[string]any{"id": 1, "name": "FreeType-0.2.0-Setup.exe", "size": len(payload), "digest": digest}}},
 			})
 		case "/repos/OUBIGFA/FreeType/releases/assets/1":
 			if r.Header.Get("Accept") == "application/octet-stream" {
@@ -79,6 +83,28 @@ func TestUpdatesUseOnlyFreeTypeStableInstallerAndVerifyDownload(t *testing.T) {
 	}
 	if err := manager.verifyPending(); err == nil {
 		t.Fatal("下次启动也必须拒绝已损坏的安装器")
+	}
+}
+
+func TestUpdatesAcceptOnlyMatchingNumericOrFreeTypeTags(t *testing.T) {
+	for _, test := range []struct{ tag, want string }{
+		{"0.2.0", "0.2.0"}, {"freetype-0.2.0", "0.2.0"},
+		{"v0.2.0", ""}, {"0.2", ""}, {"00.2.0", ""},
+		{"0.2.0-rc.1", ""}, {"0.2.0+metadata", ""}, {"0.3.0", ""},
+	} {
+		t.Run(test.tag, func(t *testing.T) {
+			server := updateFeed(t, []byte("unused installer"), "", test.tag)
+			manager, err := newUpdates(t.TempDir(), "0.0.1", server.Client(), server.URL+"/")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := manager.check(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if state := manager.snapshot(); state.Version != test.want {
+				t.Fatalf("tag %s: got version %q, want %q", test.tag, state.Version, test.want)
+			}
+		})
 	}
 }
 

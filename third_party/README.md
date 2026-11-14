@@ -7,7 +7,7 @@
 
 | 来源 | 固定修订 | 用途 | 许可状态 |
 | --- | --- | --- | --- |
-| WowType | `5656e136e9f5fc32837c87bc1a2242ec159a32d7` | 保留历史；Rust 引擎、C ABI 和行为测试 | 仓库未附许可证文本，`core/Cargo.toml` 声明 `MIT OR Apache-2.0`，待上游确认 |
+| WowType | `5656e136e9f5fc32837c87bc1a2242ec159a32d7` | 保留历史；Rust 引擎、C ABI 和行为测试 | README 明确 MIT 或 Apache-2.0 任选；本次选择 Apache-2.0，原文和依据见 [authorization.json](manifests/authorization.json) |
 | mygo | `v0.9.0`（`4811a2869b5a66d2b7e21a9eb5993fcff544460b`） | Windows 托盘、设置窗口和安装器 | MIT |
 | msime-windows | `26796f3ed646e2ce75ba39bca6f1352caca9fd67` | 参照词库、快捷短语批量文件格式，以及单按 Shift、成对标点后挪光标的处理思路；本地对照副本在 `.local/references/msime-windows`（不入库） | GPL-3.0；未复制代码或数据 |
 | rime-frost（白霜） | `555a736932de245d7f59f640a98bd58f368792b3` | 默认中文主库、细胞词库、字表与英文词表；由雾凇发展而来，不另叠加雾凇整库 | GPL-3.0，许可证随数据分发 |
@@ -17,16 +17,18 @@
 | Go 依赖 | `windows/app/go.mod`、`go.sum` | mygo 及其传递依赖、`golang.org/x/sys` | 各模块声明的许可证 |
 | Go 工具链 | `1.27.4` | Windows 设置程序与构建工具；mygo 的最低要求仍为 1.27.3 | BSD-3-Clause |
 | OpenCC 字符映射 | 由 WowType 固定修订带入；原始 OpenCC 版本未记录 | 字符级简繁转换，不包含 OpenCC 程序 | Apache-2.0；随包保留许可、作者名单及转换后的表 |
+| Unicode CLDR emoji | WowType 固定修订的 `core/src/emoji/cldr.tsv` | 编入引擎的中英文 emoji 关键词 | Unicode-3.0；保留 Unicode 版权声明、原始数据及许可全文，不分发 LDML 规范文档 |
 | 公共后缀数据 | `d6c92f1bbb7433e5db7b8405c25d4035fb8ff376`，对应 `golang.org/x/net v0.62.0` | 域名公共后缀判断 | MPL-2.0；随包保留原始数据和许可 |
 | NSIS 3.13 | mygo 固定二进制下载摘要；项目另固定源码归档摘要，不入库 | 生成安装器 | 通用代码 zlib/libpng、bzip2 模块 bzip2、LZMA 模块 CPL-1.0（含链接例外）；保留完整 COPYING 与源码 |
 
-## 待核项
+## 分发核对
 
-- WowType 许可证文本缺失。正式对外分发前需上游补齐或书面确认。
-- 构建已归集选定 Windows Rust 依赖图及实际导入的 Go 模块原文，不以许可名称代替正文。Go 的三个 Hashicorp MPL 模块附原始模块 zip，NSIS 附对应源码，公共后缀数据附原始文件；改动或升级后需重新核对。它们不代替 WowType 授权，也不证明整包组合分发已获许可。
-- `voice/src/wtlocal` 经原作者同意引入，见其 `NOTICE.md`。
-- 白霜为 GPL-3.0，其上游雾凇及其他词表来源保留在白霜的数据头部。固定测试安装器随附许可文本和来源登记；正式发布前需复核整体分发许可。
-- 正式发布前还须确认 GPL 数据的对应源码、原始头部声明及转换输入提供方式；OpenCC 映射的历史生成版本未记录，不将其冒称为已查明的具体版本。
+- 固定修订的 README 与 Cargo 声明共同记录 WowType 的双许可；根目录缺少 LICENSE 不再作为“没有公开授权”的依据。本次选择 Apache-2.0，保留标准全文、原文证据、修改标识和原有署名。构建校验依据摘要，改动时必须重新核对。
+- 构建归集选定 Windows Rust 依赖图及实际导入的 Go 模块原文，不以许可名称代替正文。Go 的三个 Hashicorp MPL 模块附原始模块 zip，NSIS 附对应源码，公共后缀数据附原始文件；改动或升级后需重新核对。
+- `voice/src/wtlocal` 经原作者同意引入，见其 `NOTICE.md`；该上游语音组件不属于本次 Windows 安装包。
+- 白霜为 GPL-3.0。随包 `default-data-sources.zip` 提供含上游雾凇等来源头部的原始词表、转换工具、配置和热词，保留派生词表的 GPL 分发条件，不仅提供许可证名称。可用 `--snapshot-root` 从这些材料重建。
+- 未修改的词级模型单独按 CC BY-SA 4.0 分发，保留 WowType contributors、LCCC 和中文维基百科署名及发布说明。程序、模型和数据分别登记，不宣称整包统一采用某一种许可。
+- OpenCC 映射的历史生成版本未记录，不冒称某个具体版本；本次提供的是 WowType 固定修订中的完整映射及原有许可归属。
 - 万象的 CC BY 4.0 适用于其原创字词数据，不覆盖处理脚本或第三方组件。仅合入六张默认核心数据表；随包保留 `WANXIANG-LICENSE-SCOPE.md`、`WANXIANG-NOTICE.md`，并在 `SOURCE.txt` 标明 amzxyz 署名及转换改动。
 
 ## mygo 版本约定

@@ -5,7 +5,7 @@
       "repository": "https://github.com/Gloridust/WowType",
       "revision": "5656e136e9f5fc32837c87bc1a2242ec159a32d7",
       "use": "保留的提交历史与 Rust 引擎、C ABI、行为测试基线",
-      "license": "仓库未附许可证文本；core/Cargo.toml 声明 MIT OR Apache-2.0；待上游确认",
+      "license": "MIT OR Apache-2.0；固定修订 README 明确任选其一，本次按 Apache-2.0 分发；证据见 authorization.json",
       "gitArchive": {
         "bytes": 3450880,
         "sha256": "1d1b843e2a710d22d00a26374b20529483ccf6b9698cac25aabcf82b7bfb28df"

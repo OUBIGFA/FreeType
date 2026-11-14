@@ -76,6 +76,8 @@ mod app {
 
     pub fn run() -> i32 {
         let args: Vec<String> = std::env::args().skip(1).collect();
+        let marker = args.iter().position(|arg| arg == "--marker")
+            .and_then(|index| args.get(index + 1)).map(PathBuf::from);
         match args.first().map(String::as_str) {
             Some("--register-tsf") => {
                 let bin = args
@@ -83,24 +85,15 @@ mod app {
                     .filter(|a| !a.starts_with("--"))
                     .map(PathBuf::from)
                     .or_else(|| std::env::current_exe().ok()?.parent().map(PathBuf::from));
-                let marker = args
-                    .iter()
-                    .position(|a| a == "--marker")
-                    .and_then(|i| args.get(i + 1))
-                    .map(PathBuf::from);
-                let code = match bin {
-                    Some(bin) => report(setup::register_tsf(&bin), "注册输入法"),
-                    None => 1,
+                let result = match bin {
+                    Some(bin) => setup::register_tsf(&bin),
+                    None => Err("找不到输入法组件目录".to_string()),
                 };
-                // 安装器靠这个文件知道注册成功了（提权运行拿不到退出码）
-                if code == 0 {
-                    if let Some(marker) = marker {
-                        let _ = std::fs::write(marker, "ok");
-                    }
-                }
-                return code;
+                return report(setup::record_setup_result(result, marker.as_deref()), "注册输入法");
             }
-            Some("--unregister-tsf") => return report(setup::unregister_tsf(), "注销输入法"),
+            Some("--unregister-tsf") => {
+                return report(setup::record_setup_result(setup::unregister_tsf(), marker.as_deref()), "注销输入法");
+            }
             Some("--enable") => return report(setup::enable_for_user(true), "加入输入法列表"),
             Some("--disable") => return report(setup::enable_for_user(false), "移出输入法列表"),
             Some("--stop") => {

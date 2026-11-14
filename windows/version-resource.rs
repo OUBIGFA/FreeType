@@ -5,7 +5,9 @@ fn main() {
         return;
     }
     let package = env::var("CARGO_PKG_NAME").unwrap();
-    let version = env::var("CARGO_PKG_VERSION").unwrap();
+    println!("cargo:rerun-if-env-changed=FREETYPE_BUILD_VERSION");
+    let version = env::var("FREETYPE_BUILD_VERSION")
+        .unwrap_or_else(|_| env::var("CARGO_PKG_VERSION").unwrap());
     let numbers: Vec<u16> = version
         .split('.')
         .map(|part| part.parse().unwrap())

@@ -27,6 +27,16 @@ const DLL_NAME: &str = "freetype_tsf.dll";
 const ICON_NAME: &str = "freetype.ico";
 pub const REGISTRY_KEY: &str = r"SOFTWARE\FreeType";
 
+/// 提权调用拿不到退出码；只在操作成功后创建本次私有目录中的标记，不覆盖已有文件。
+pub fn record_setup_result(result: Result<(), String>, marker: Option<&Path>) -> Result<(), String> {
+    result?;
+    if let Some(marker) = marker {
+        std::fs::OpenOptions::new().write(true).create_new(true).open(marker)
+            .map_err(|error| format!("无法创建安装结果标记 {}：{error}", marker.display()))?;
+    }
+    Ok(())
+}
+
 fn program_files(x86: bool) -> PathBuf {
     let var = if x86 { "ProgramFiles(x86)" } else { "ProgramW6432" };
     std::env::var_os(var)
@@ -220,6 +230,42 @@ pub fn enable_for_user(enable: bool) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    fn marker_path() -> std::path::PathBuf {
+        let root = std::env::var_os("FREETYPE_TEST_TEMP")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../_temp/setup-tests"));
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let directory = root.join(format!("marker-{}-{stamp}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        directory.join("setup.ok")
+    }
+
+    #[test]
+    fn setup_marker_is_created_only_for_success() {
+        let marker = marker_path();
+        assert_eq!(super::record_setup_result(Err("unregister failed".into()), Some(&marker)),
+                   Err("unregister failed".into()));
+        assert!(!marker.exists());
+        assert_eq!(super::record_setup_result(Ok(()), Some(&marker)), Ok(()));
+        assert!(marker.is_file());
+    }
+
+    #[test]
+    fn setup_marker_does_not_overwrite_existing_files() {
+        let marker = marker_path();
+        std::fs::write(&marker, "existing").unwrap();
+        assert!(super::record_setup_result(Ok(()), Some(&marker)).is_err());
+        assert_eq!(std::fs::read_to_string(marker).unwrap(), "existing");
+    }
+
+    #[test]
+    fn setup_marker_creation_failure_is_not_success() {
+        let marker = marker_path().join("missing/setup.ok");
+        assert!(super::record_setup_result(Ok(()), Some(&marker)).is_err());
+        assert!(!marker.exists());
+        assert_eq!(super::record_setup_result(Ok(()), None), Ok(()));
+    }
+
     #[test]
     fn tip_string_layout() {
         assert_eq!(

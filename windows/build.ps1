@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Build the FreeType fixed test installer.
+  Build a FreeType test installer, release candidate or approved release tag.
 
 .DESCRIPTION
   Runs the tests, builds the Rust server and TSF DLLs (x64 and x86), the mygo
@@ -14,9 +14,23 @@
   docs/WINDOWS.md). Nothing is installed or registered on this machine.
 
 .PARAMETER SkipTests
-  Build without running the test suites.
+  Build without running the test suites (not allowed with ReleaseTag).
+
+.PARAMETER Version
+  Product version. 0.0.1 keeps the fixed test output; other versions use
+  output/candidates/<version> and a temporary copy of the app configuration.
+
+.PARAMETER ReleaseTag
+  Build an existing matching tag from a clean checkout into output/releases/<version>.
+  This does not create tags, publish a release or install the application.
 #>
-param([switch]$SkipTests)
+[CmdletBinding()]
+param(
+    [ValidatePattern('^(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})$')]
+    [string]$Version = '0.0.1',
+    [string]$ReleaseTag = '',
+    [switch]$SkipTests
+)
 
 $OutputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $env:PYTHONUTF8 = '1'
@@ -24,15 +38,30 @@ $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
 
-$Version = '0.0.1'
+if (@($Version.Split('.') | Where-Object { [int]$_ -gt 65535 }).Count -gt 0) {
+    throw 'Each Windows version component must be between 0 and 65535'
+}
+if ($ReleaseTag -and ($ReleaseTag -notin @($Version, "freetype-$Version") -or $Version -eq '0.0.1' -or $SkipTests)) {
+    throw 'ReleaseTag must match a non-test Version, and release builds must run all tests'
+}
 $Identifier = 'io.github.oubigfa.freetype'
 $MygoVersion = 'v0.9.0'
 $SelfUpdateVersion = 'v1.7.1'
 $BuildNumber = Get-Date -Format 'yyyyMMddHHmmss'
 $AppDir = Join-Path $Root 'windows\app'
+$SourceAppDir = $AppDir
 $Resources = Join-Path $AppDir 'resources'
 $Data = Join-Path $Root '.local\data'
 $Release = Join-Path $Root 'output\release'
+$BuildKind = 'fixed-test'
+if ($Version -ne '0.0.1') {
+    $BuildKind = 'candidate'
+    $Release = Join-Path $Root "output\candidates\$Version"
+}
+if ($ReleaseTag) {
+    $BuildKind = 'release'
+    $Release = Join-Path $Root "output\releases\$Version"
+}
 $Installer = Join-Path $Release "FreeType-$Version-Setup.exe"
 $Scratch = Join-Path $Root "_temp\build-$BuildNumber"
 
@@ -103,6 +132,13 @@ $env:GOTOOLCHAIN = 'local'
 $env:GOFLAGS = '-modcacherw -mod=readonly'
 
 Step 'Checking inputs'
+if ($ReleaseTag) {
+    $TagCommit = Invoke-Native git @('rev-parse', '--verify', "refs/tags/$ReleaseTag^{commit}")
+    $CurrentCommit = Invoke-Native git @('rev-parse', 'HEAD')
+    if ($TagCommit -ne $CurrentCommit -or (Invoke-Native git @('status', '--porcelain', '--untracked-files=all'))) {
+        throw 'Release builds require a clean checkout of the exact approved tag'
+    }
+}
 Invoke-Native python @('-X', 'utf8', 'tools/check_repo.py')
 foreach ($name in 'lexicon.tsv', 'words.lm', 'english.txt', 'LICENSE', 'SOURCE.txt', 'VERSION', 'MANIFEST.json', 'WANXIANG-LICENSE-SCOPE.md', 'WANXIANG-NOTICE.md') {
     if (-not (Test-Path (Join-Path $Data $name))) {
@@ -123,6 +159,26 @@ $env:FREETYPE_TEST_TEMP = $Scratch
 $Source = Invoke-Native python @('-X', 'utf8', 'tools/capture_build_source.py', '--index', (Join-Path $Scratch 'source-before.index')) | ConvertFrom-Json
 $SourceTree = $Source.tree
 $Head = $Source.baseCommit
+
+if ($Version -ne '0.0.1') {
+    Step "Preparing isolated app configuration for $Version"
+    $AppDir = Join-Path $Scratch 'app'
+    foreach ($Tracked in (Invoke-Native git @('-c', 'core.quotepath=false', 'ls-files', '--', 'windows/app'))) {
+        $Relative = $Tracked.Substring('windows/app/'.Length)
+        $Destination = Join-Path $AppDir $Relative
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Destination) | Out-Null
+        Copy-Item -LiteralPath (Join-Path $Root $Tracked) -Destination $Destination
+    }
+    $ConfigPath = Join-Path $AppDir 'mygo.json'
+    $Config = Get-Content -Raw -Encoding UTF8 $ConfigPath | ConvertFrom-Json
+    $Config.version = $Version
+    Write-Utf8 $ConfigPath (($Config | ConvertTo-Json -Depth 8) + "`n")
+    $IncludePath = Join-Path $AppDir 'installer.nsh'
+    Write-Utf8 $IncludePath ("!define FREETYPE_VERSION $Version`n" + (Get-Content -Raw -Encoding UTF8 $IncludePath))
+    $Resources = Join-Path $AppDir 'resources'
+}
+$env:FREETYPE_BUILD_VERSION = $Version
+$env:FREETYPE_BUILD_APP = $AppDir
 
 if (-not $SkipTests) {
     Step 'Running tests'
@@ -163,8 +219,9 @@ Step "Building the mygo app and installer (mygo $MygoVersion)"
 $AppBuild = Join-Path $AppDir 'build'
 Recycle-GeneratedDirectory $AppBuild
 Invoke-Native go @('tool', 'mygo', 'build') $AppDir
-$Built = Get-ChildItem -Recurse -File $AppBuild -Filter "freetype-setup-$Version-*.exe" | Select-Object -First 1
-if (-not $Built) { throw "mygo build produced no installer under $AppBuild" }
+$Installers = @(Get-ChildItem -Recurse -File $AppBuild -Filter "freetype-setup-$Version-*.exe")
+if ($Installers.Count -ne 1) { throw "mygo must produce exactly one $Version installer under $AppBuild" }
+$Built = $Installers[0]
 $NsisCompiler = Find-NsisCompiler
 $NsisVersion = (Invoke-Native $NsisCompiler @('/VERSION')).Trim()
 $NoticeInputs = Get-Content -Raw -Encoding UTF8 (Join-Path $Root 'third_party\manifests\notice-inputs.json') | ConvertFrom-Json
@@ -209,7 +266,7 @@ foreach ($NoticeFile in $NoticeManifest.files.PSObject.Properties) {
 $NoticeHash = Sha256 (Join-Path $Stage 'THIRD-PARTY-NOTICES.txt')
 if ($NoticeHash -ne (Sha256 (Join-Path $Root 'third_party\NOTICE.md'))) { throw 'Bundled notice text does not match its source' }
 if ($NoticeManifest.unresolved.Count -gt 0) {
-    Write-Warning 'The local test package still has unresolved upstream permissions. Do not distribute it publicly.'
+    throw 'Unresolved third-party permissions prevent packaging this build'
 }
 
 if (-not $SkipTests) {
@@ -234,8 +291,15 @@ $Info = [ordered]@{
     version        = $Version
     identifier     = $Identifier
     buildNumber    = $BuildNumber
+    buildKind      = $BuildKind
+    releaseTag     = $ReleaseTag
     builtAt        = (Get-Date).ToString('o')
     source         = [ordered]@{ baseCommit = $Head; tree = $SourceTree }
+    configuration  = [ordered]@{
+        sourceAppSha256 = Sha256 (Join-Path $SourceAppDir 'mygo.json')
+        builtAppSha256 = Sha256 (Join-Path $AppDir 'mygo.json')
+        productVersion = $Version
+    }
     installer      = [ordered]@{ file = "FreeType-$Version-Setup.exe"; bytes = (Get-Item $Installer).Length; sha256 = $InstallerHash }
     toolchain      = [ordered]@{
         rustc  = (& rustc --version).Trim()

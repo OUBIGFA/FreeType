@@ -1,3 +1,4 @@
+// Modified by FreeType; compare with WowType 5656e136 for the original implementation.
 //! 输入会话的按键测试：从 fcitx5-addon/test/key_harness.cpp 搬过来的用例，
 //! 用纯 Rust 驱动 [`wowtype_core::session::Session`]，macOS 的 CI 也跑。
 //!

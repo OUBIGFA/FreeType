@@ -148,6 +148,38 @@ class DefaultDataTests(unittest.TestCase):
         self.assertEqual(rows[("chong pao", "重跑")], 30000)
         self.assertEqual(rows[("xin ci", "新词")], 30000)
 
+    def test_corresponding_source_snapshot_rebuilds_and_rejects_modified_inputs(self):
+        result = self.build()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        snapshot = self.scratch / "snapshot"
+        files = {}
+        for source, entries in zip(self.manifest["sources"], [self.frost_files, self.wanxiang_files]):
+            for name, content in entries.items():
+                if name.endswith(".py"):
+                    continue
+                relative = source["name"] + "/" + name
+                path = snapshot / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content.encode("utf-8"))
+                files[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+        license_path = snapshot / "licenses/CC-BY-SA-4.0.txt"
+        license_path.parent.mkdir(parents=True)
+        license_path.write_bytes(self.model_license.read_bytes())
+        files["licenses/CC-BY-SA-4.0.txt"] = hashlib.sha256(license_path.read_bytes()).hexdigest()
+        (snapshot / "source-manifest.json").write_text(
+            json.dumps({"sources": self.manifest["sources"], "files": files}), encoding="utf-8")
+        rebuilt = self.scratch / "rebuilt"
+        arguments = [sys.executable, "-X", "utf8", str(BUILDER), "--manifest", str(self.scratch / "manifest.json"),
+                     "--snapshot-root", str(snapshot), "--output", str(rebuilt),
+                     "--model", str(self.model), "--hotwords", str(self.hotwords)]
+        result = subprocess.run(arguments, cwd=ROOT, capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((rebuilt / "lexicon.tsv").read_bytes(), (self.output / "lexicon.tsv").read_bytes())
+        (snapshot / "rime-frost/cn_dicts/base.dict.yaml").write_text("modified", encoding="utf-8")
+        result = subprocess.run(arguments, cwd=ROOT, capture_output=True, text=True, encoding="utf-8")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("快照", result.stderr)
+
     def test_scaling_preserves_base_order_and_rare_character_weights(self):
         self.manifest["frequencyTotal"] = 320
         result = self.build()

@@ -1,3 +1,4 @@
+// Modified by FreeType; compare with WowType 5656e136 for the original implementation.
 //! 互译：打中文出外文（或反过来），调用户自己配置的大模型（OpenAI 格式 chat/completions）。
 //!
 //! 输入法插件把「要翻译的原文」交给 [`Translator::start`]，之后定时调 [`Translator::poll`]

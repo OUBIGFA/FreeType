@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/Masterminds/semver/v3"
 	selfupdate "github.com/creativeprojects/go-selfupdate"
 	"github.com/google/go-github/v93/github"
 )
@@ -55,11 +56,12 @@ func (source *githubUpdates) ListReleases(ctx context.Context, _ selfupdate.Repo
 		if err != nil {
 			return nil, err
 		}
-		if !strings.HasPrefix(release.GetTagName(), "freetype-") {
+		version, parseErr := semver.StrictNewVersion(strings.TrimPrefix(release.GetTagName(), "freetype-"))
+		if parseErr != nil || version.Prerelease() != "" || version.Metadata() != "" {
 			continue
 		}
 		// A tag and its installer version must agree; unrelated assets stay out.
-		name := "FreeType-" + strings.TrimPrefix(release.GetTagName(), "freetype-") + "-Setup.exe"
+		name := "FreeType-" + version.String() + "-Setup.exe"
 		var assets []*github.ReleaseAsset
 		for _, asset := range release.Assets {
 			if asset.GetName() == name && asset.GetID() > 0 && asset.GetSize() > 0 {

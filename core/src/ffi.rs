@@ -1,3 +1,4 @@
+// Modified by FreeType; compare with WowType 5656e136 for the original implementation.
 //! C ABI：供 fcitx5 的 C++ 插件通过 cdylib 调用。
 //!
 //! 设计成“不透明句柄 + 候选句柄”，避免 C++ 侧解析 JSON。字符串一律 UTF-8。

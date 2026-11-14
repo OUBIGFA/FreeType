@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Modified by FreeType; compare with WowType 5656e136 for the original implementation.
 """把 Rime 词库（.dict.yaml）转成 WowType 的 lexicon TSV。
 
 用法：
