@@ -19,8 +19,6 @@ FreeType 是一个本地中文输入法。输入引擎、词库和学习记录�
 
 ## 软件预览
 
-下面的图片来自本机安装版 FreeType。常规页放在第一张。
-
 <table>
 <tr>
 <td><img src="windows/assets/readme/settings-general-installed.png" width="420" alt="FreeType 常规设置页"><br>常规</td>

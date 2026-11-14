@@ -20,8 +20,6 @@ FreeType is in pre-release validation and has no public release yet. See the [Wi
 
 ## Software preview
 
-These images come from the FreeType installation on this computer. The General page is first.
-
 <table>
 <tr>
 <td><img src="windows/assets/readme/settings-general-installed.png" width="420" alt="FreeType General settings page"><br>General</td>
