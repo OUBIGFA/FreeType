@@ -12,12 +12,6 @@
 
 </div>
 
-## 开源协议
-
-FreeType 本次代码分发选择 [Apache-2.0](third_party/licenses/Apache-2.0-LICENSE.txt)。WowType 上游原始代码的 `MIT OR Apache-2.0` 双许可保持不变，授权依据见 [第三方来源与许可](third_party/README.md)。
-
-词库、语言模型、图标及其他第三方组件保留各自的许可，不因同包分发而统一改为 Apache-2.0。原文、署名及源码提供方式见 [第三方声明](third_party/NOTICE.md)。
-
 ## FreeType 是什么
 
 FreeType 是一个本地中文输入法。输入引擎、词库和学习记录都在本机运行。普通中文输入不需要网络，也不会把正在输入的内容发送到服务器。
@@ -115,3 +109,9 @@ FreeType 支持 Windows 10/11 x64。
 - [输入法技术文档](docs/README.md)
 
 FreeType 基于 [WowType](https://github.com/Gloridust/WowType)。Windows 设置窗口和托盘程序使用 [mygo](https://github.com/egoist/mygo)。
+
+## 开源协议
+
+FreeType 本次代码分发选择 [Apache-2.0](third_party/licenses/Apache-2.0-LICENSE.txt)。WowType 上游原始代码的 `MIT OR Apache-2.0` 双许可保持不变，授权依据见 [第三方来源与许可](third_party/README.md)。
+
+词库、语言模型、图标及其他第三方组件保留各自的许可，不因同包分发而统一改为 Apache-2.0。原文、署名及源码提供方式见 [第三方声明](third_party/NOTICE.md)。

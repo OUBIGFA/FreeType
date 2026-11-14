@@ -12,12 +12,6 @@ A local Windows Chinese input method. Your input stays on your computer.
 
 </div>
 
-## License
-
-FreeType selects [Apache-2.0](third_party/licenses/Apache-2.0-LICENSE.txt) for this code distribution. WowType's original `MIT OR Apache-2.0` dual license is preserved. See [third-party sources and licenses](third_party/README.md) for the authorization record.
-
-Dictionaries, language models, icons, and other third-party components keep their own licenses; bundling them does not relicense them under Apache-2.0. See the [third-party notices](third_party/NOTICE.md) for license texts, attribution, and corresponding source.
-
 ## What FreeType is
 
 FreeType is a local Chinese input method. The input engine, dictionaries, and learning data run on your computer. Normal Chinese input needs no network. FreeType does not send the text that you type to a server.
@@ -115,3 +109,9 @@ Open **FreeType Settings → Learned Words** and click **Export**. After you mov
 - [Input method documentation](docs/README.en.md)
 
 FreeType is based on [WowType](https://github.com/Gloridust/WowType). The Windows settings window and tray program use [mygo](https://github.com/egoist/mygo).
+
+## License
+
+FreeType selects [Apache-2.0](third_party/licenses/Apache-2.0-LICENSE.txt) for this code distribution. WowType's original `MIT OR Apache-2.0` dual license is preserved. See [third-party sources and licenses](third_party/README.md) for the authorization record.
+
+Dictionaries, language models, icons, and other third-party components keep their own licenses; bundling them does not relicense them under Apache-2.0. See the [third-party notices](third_party/NOTICE.md) for license texts, attribution, and corresponding source.
