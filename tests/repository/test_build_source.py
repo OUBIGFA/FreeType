@@ -17,7 +17,7 @@ class BuildSourceTests(unittest.TestCase):
     def setUp(self):
         scratch = Path(os.environ.get("FREETYPE_TEST_TEMP", ROOT / "_temp" / "repository-tests"))
         scratch.mkdir(parents=True, exist_ok=True)
-        self.repo = Path(tempfile.mkdtemp(prefix="source-", dir=scratch))
+        self.repo = Path(tempfile.mkdtemp(prefix="source-", dir=scratch)).resolve()
         self.sequence = 0
         self.git("init", "-q")
         self.git("config", "core.autocrlf", "false")
