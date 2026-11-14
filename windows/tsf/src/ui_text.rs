@@ -75,6 +75,19 @@ pub struct Text {
     offset: Vector2,
 }
 
+#[cfg(test)]
+impl Text {
+    pub(super) fn cluster_lengths(&self, capacity: usize) -> Result<Vec<u16>> {
+        use windows::Win32::Graphics::DirectWrite::DWRITE_CLUSTER_METRICS;
+
+        let mut metrics = vec![DWRITE_CLUSTER_METRICS::default(); capacity];
+        let mut count = 0;
+        unsafe { self.layout.GetClusterMetrics(Some(&mut metrics), &mut count)? };
+        metrics.truncate(count as usize);
+        Ok(metrics.into_iter().map(|cluster| cluster.length).collect())
+    }
+}
+
 impl Font {
     pub fn text(&self, text: &str) -> Result<Text> {
         unsafe {

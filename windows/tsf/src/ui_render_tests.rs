@@ -158,12 +158,22 @@ fn emoji_and_text_fit_in_all_candidate_layouts_fonts_and_scales() {
             for emoji in ["1️⃣", "8️⃣", "🔟", "👍🏽", "❤️", "👨‍👩‍👧‍👦", "🧑🏽‍💻"]
             {
                 let text = fonts.main.text(emoji).unwrap();
-                assert!(
-                    text.size.cx as f32 <= 18.0 * scale * 1.8,
-                    "完整表情不能拆成多个字符：{family} {scale} {emoji} {:?}",
-                    text.size
+                let length = emoji.encode_utf16().count();
+                // Shaping must keep the emoji together; glyph width varies between system fonts.
+                assert_eq!(
+                    text.cluster_lengths(length).unwrap(),
+                    vec![length as u16],
+                    "完整表情必须保持单一排版簇：{family} {scale} {emoji} {:?}",
+                    text.size,
                 );
             }
+            let separate = "1️⃣8️⃣";
+            assert_eq!(
+                fonts.main.text(separate).unwrap()
+                    .cluster_lengths(separate.encode_utf16().count()).unwrap(),
+                vec![3, 3],
+                "两个独立表情不能被合并成同一排版簇：{family} {scale}",
+            );
             for (name, vertical, panel) in [
                 ("row", false, Panel::Normal),
                 ("column", true, Panel::Normal),
