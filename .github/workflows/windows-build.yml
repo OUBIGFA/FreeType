@@ -1,0 +1,104 @@
+name: FreeType Windows installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Product version for a non-publishing build
+        required: true
+        default: '0.1.0'
+        type: string
+  push:
+    tags:
+      - '0.1.0'
+      - 'freetype-*'
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    env:
+      PYTHONUTF8: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out exact source with history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve build version and tag
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          $Version = $env:INPUT_VERSION
+          $ReleaseTag = ''
+          if ($env:GITHUB_EVENT_NAME -eq 'push') {
+            $ReleaseTag = $env:GITHUB_REF_NAME
+            $Version = $ReleaseTag -replace '^freetype-', ''
+          }
+          if ($Version -notmatch '^(0|[1-9][0-9]{0,4})[.](0|[1-9][0-9]{0,4})[.](0|[1-9][0-9]{0,4})$' -or
+              @($Version.Split('.') | Where-Object { [int]$_ -gt 65535 }).Count -gt 0) {
+            throw 'Invalid product version'
+          }
+          if ($ReleaseTag -and ($ReleaseTag -notin @($Version, "freetype-$Version") -or $Version -eq '0.0.1')) {
+            throw 'Invalid release tag'
+          }
+          $Output = "output/candidates/$Version"
+          if ($ReleaseTag) { $Output = "output/releases/$Version" }
+          elseif ($Version -eq '0.0.1') { $Output = 'output/release' }
+          "version=$Version" >> $env:GITHUB_OUTPUT
+          "tag=$ReleaseTag" >> $env:GITHUB_OUTPUT
+          "output=$Output" >> $env:GITHUB_OUTPUT
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.11.9'
+      - name: Set up pinned Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.4'
+          cache: false
+      - name: Prepare project-local tools
+        run: ./windows/prepare-ci.ps1
+      - name: Rebuild pinned public dictionary and model inputs
+        run: python -X utf8 tools/make_default_data.py
+      - name: Run full Windows build and tests
+        env:
+          FREETYPE_VERSION: ${{ steps.version.outputs.version }}
+          FREETYPE_RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          $Parameters = @{ Version = $env:FREETYPE_VERSION }
+          if ($env:FREETYPE_RELEASE_TAG) { $Parameters.ReleaseTag = $env:FREETYPE_RELEASE_TAG }
+          & ./windows/build.ps1 @Parameters
+      - name: Check uploaded installer identity and checksum
+        env:
+          FREETYPE_VERSION: ${{ steps.version.outputs.version }}
+          FREETYPE_OUTPUT: ${{ steps.version.outputs.output }}
+        run: |
+          $Info = Get-Content -LiteralPath "$env:FREETYPE_OUTPUT/build-info.json" -Raw -Encoding UTF8 | ConvertFrom-Json
+          $File = "FreeType-$env:FREETYPE_VERSION-Setup.exe"
+          $Hash = (Get-FileHash -LiteralPath "$env:FREETYPE_OUTPUT/$File" -Algorithm SHA256).Hash.ToLowerInvariant()
+          $Commit = (git rev-parse HEAD).Trim()
+          $Tree = (git rev-parse 'HEAD^{tree}').Trim()
+          if ($Info.version -ne $env:FREETYPE_VERSION -or $Info.installer.file -ne $File -or
+              $Info.installer.sha256 -ne $Hash -or $Info.source.baseCommit -ne $Commit -or $Info.source.tree -ne $Tree) {
+            throw 'Installer does not match this workflow source and build record'
+          }
+      - name: Save installer and CI verification records
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: FreeType-${{ steps.version.outputs.version }}-${{ github.run_id }}
+          path: |
+            ${{ steps.version.outputs.output }}/FreeType-${{ steps.version.outputs.version }}-Setup.exe
+            ${{ steps.version.outputs.output }}/FreeType-${{ steps.version.outputs.version }}-Setup.exe.sha256
+            ${{ steps.version.outputs.output }}/build-info.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
