@@ -16,7 +16,7 @@
 | Rust 依赖（含 `windows` 0.62.2、`serde`） | `Cargo.lock`，清单见 [cargo-lock.json](manifests/cargo-lock.json) | 引擎、服务进程、输入法 DLL | 各包声明的许可证，多为 MIT 或 Apache-2.0 |
 | Go 依赖 | `windows/app/go.mod`、`go.sum` | mygo 及其传递依赖、`golang.org/x/sys` | 各模块声明的许可证 |
 | Go 工具链 | `1.27.4` | Windows 设置程序与构建工具；mygo 的最低要求仍为 1.27.3 | BSD-3-Clause |
-| OpenCC 字符映射 | 由 WowType 固定修订带入；原始 OpenCC 版本未记录 | 字符级简繁转换，不包含 OpenCC 程序 | Apache-2.0；随包保留许可、作者名单及转换后的表 |
+| OpenCC 字符与词组映射 | `1.4.1`；生成表固定在 `core/data/s2t.tsv` | 字符与词组级简繁转换，不包含 OpenCC 程序 | Apache-2.0；随包保留许可、作者名单及转换后的表 |
 | Unicode CLDR emoji | WowType 固定修订的 `core/src/emoji/cldr.tsv` | 编入引擎的中英文 emoji 关键词 | Unicode-3.0；保留 Unicode 版权声明、原始数据及许可全文，不分发 LDML 规范文档 |
 | 公共后缀数据 | `d6c92f1bbb7433e5db7b8405c25d4035fb8ff376`，对应 `golang.org/x/net v0.62.0` | 域名公共后缀判断 | MPL-2.0；随包保留原始数据和许可 |
 | NSIS 3.13 | mygo 固定二进制下载摘要；项目另固定源码归档摘要，不入库 | 生成安装器 | 通用代码 zlib/libpng、bzip2 模块 bzip2、LZMA 模块 CPL-1.0（含链接例外）；保留完整 COPYING 与源码 |
@@ -28,7 +28,7 @@
 - `voice/src/wtlocal` 经原作者同意引入，见其 `NOTICE.md`；该上游语音组件不属于本次 Windows 安装包。
 - 白霜为 GPL-3.0。随包 `default-data-sources.zip` 提供含上游雾凇等来源头部的原始词表、转换工具、配置和热词，保留派生词表的 GPL 分发条件，不仅提供许可证名称。可用 `--snapshot-root` 从这些材料重建。
 - 未修改的词级模型单独按 CC BY-SA 4.0 分发，保留 WowType contributors、LCCC 和中文维基百科署名及发布说明。程序、模型和数据分别登记，不宣称整包统一采用某一种许可。
-- OpenCC 映射的历史生成版本未记录，不冒称某个具体版本；本次提供的是 WowType 固定修订中的完整映射及原有许可归属。
+- 当前 OpenCC 映射由 `tools/opencc2tsv.py` 按 1.4.1 的字符与完整词组数据生成；原始词组输入和生成步骤见脚本说明。生成表、许可及作者名单随包提供，不分发 OpenCC 程序。
 - 万象的 CC BY 4.0 适用于其原创字词数据，不覆盖处理脚本或第三方组件。仅合入六张默认核心数据表；随包保留 `WANXIANG-LICENSE-SCOPE.md`、`WANXIANG-NOTICE.md`，并在 `SOURCE.txt` 标明 amzxyz 署名及转换改动。
 
 ## mygo 版本约定
