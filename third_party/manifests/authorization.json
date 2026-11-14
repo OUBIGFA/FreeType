@@ -36,7 +36,7 @@
     "license": "Unicode-3.0",
     "source": "core/src/emoji/cldr.tsv",
     "copyright": "Copyright © 1991-2026 Unicode, Inc.",
-    "sourceSha256": "d78a02c5953f6a39ce541c907b70004825f4307ab11a2dd702389111f4631d88",
+    "sourceSha256": "ef485070dbe394a13a4c479358ea60a7cc4f2c6eb2ddc77b3320c8ad3131b575",
     "licenseText": "third_party/licenses/Unicode-LICENSE.txt",
     "scope": "Emoji data only; the LDML specification is not distributed"
   }

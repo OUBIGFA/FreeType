@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import sys
 import shutil
+import subprocess
 import tarfile
 import tempfile
 import unittest
@@ -68,6 +69,11 @@ class ThirdPartyNoticeTests(unittest.TestCase):
         record = self.collector.check_authorization(ROOT)
         self.assertEqual(record["wowtype"]["distributionLicense"], "Apache-2.0")
         self.assertEqual(record["wowtype"]["revision"], "5656e136e9f5fc32837c87bc1a2242ec159a32d7")
+
+    def test_unicode_authorization_matches_tracked_source(self):
+        record = json.loads((ROOT / "third_party/manifests/authorization.json").read_text(encoding="utf-8"))
+        source = subprocess.check_output(["git", "show", ":" + record["unicode"]["source"]], cwd=ROOT)
+        self.assertEqual(hashlib.sha256(source).hexdigest(), record["unicode"]["sourceSha256"])
 
     def test_changed_authorization_evidence_is_rejected(self):
         self.assertTrue(hasattr(self.collector, "check_authorization"), "Authorization verification is missing")
