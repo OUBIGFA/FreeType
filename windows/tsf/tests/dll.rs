@@ -13,9 +13,8 @@ type GetClassObject = unsafe extern "system" fn(*const GUID, *const GUID, *mut *
 type CanUnload = unsafe extern "system" fn() -> HRESULT;
 
 fn dll_path() -> std::path::PathBuf {
-    // target\<profile>\deps\dll-xxxx.exe -> target\<profile>\freetype_tsf.dll
     let exe = std::env::current_exe().unwrap();
-    exe.parent().unwrap().parent().unwrap().join("freetype_tsf.dll")
+    exe.parent().unwrap().join("freetype_tsf.dll")
 }
 
 #[test]

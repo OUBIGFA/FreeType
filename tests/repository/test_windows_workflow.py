@@ -22,7 +22,7 @@ class WindowsWorkflowTests(unittest.TestCase):
         self.assertIn("workflow_dispatch:", self.workflow)
         self.assertIn("- '0.1.0'", self.workflow)
         self.assertIn("- 'freetype-*'", self.workflow)
-        self.assertIn("runs-on: windows-2022", self.workflow)
+        self.assertIn("runs-on: windows-2025", self.workflow)
         self.assertIn("contents: read", self.workflow)
         self.assertIn("persist-credentials: false", self.workflow)
         self.assertNotIn("contents: write", self.workflow)

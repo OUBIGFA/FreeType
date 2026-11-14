@@ -13,7 +13,7 @@
 - 日常代码任务仍按固定测试安装器约定交付：版本 `0.0.1`，路径 `output/release/FreeType-0.0.1-Setup.exe`，同时更新校验文件与构建记录，再提交并普通推送 `origin/main`。这不自动授权公开发布。
 - 正式版本与固定测试版本使用同一构建入口的不同参数及输出位置。正式版本通过临时构建配置注入，应用显示版本、安装器版本和 Release 版本一致；不修改已经打 tag 的源码，不把旧固定测试包改名上传。
 - 已实现入口：`windows/build.ps1 -Version X.Y.Z` 构建本地候选；`-Version X.Y.Z -ReleaseTag <已批准标签>` 仅接受该标签的干净检出且强制运行测试。输出分别为 `output/candidates/X.Y.Z/` 和 `output/releases/X.Y.Z/`。脚本不会创建标签、Release 或上传安装器。
-- 线上入口为 `.github/workflows/windows-build.yml`（FreeType Windows installer）。手动运行指定版本时只构建候选；推送 `0.1.0` 或 `freetype-X.Y.Z` 标签时调用同一脚本的精确标签模式。工作流在 Windows Server 2022 上准备项目内固定工具链、重建公开词库并运行全部测试。
+- 线上入口为 `.github/workflows/windows-build.yml`（FreeType Windows installer）。手动运行指定版本时只构建候选；推送 `0.1.0` 或 `freetype-X.Y.Z` 标签时调用同一脚本的精确标签模式。工作流在 Windows Server 2025 上准备项目内固定工具链、重建公开词库并运行全部测试。
 - 线上任务只读仓库，不创建 Release。其 CI Artifact 仅保存对应安装器、SHA-256 文件和 `build-info.json`，用于下载后核对；GitHub Release 的公开附件仍只有安装器。构建成功不表示 Windows 10/11 的真实安装、升级或 UAC 验收通过。
 
 ## 1. 先提供对话中的 Release 草稿
