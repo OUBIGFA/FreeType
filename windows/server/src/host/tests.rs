@@ -1253,3 +1253,126 @@ fn import_bare_words_and_add_user_word_use_lexicon_readings() {
     let _ = std::fs::remove_file(lexicon);
     cleanup(&host);
 }
+
+#[test]
+fn new_fuzzy_groups_and_yong_iong_match() {
+    use freetype_protocol::fuzzy;
+    let mut host = host("fuzzy-new");
+    let lexicon = wowtype_core::MemoryLexicon::from_tsv_str(
+        "gai\t改\t100\nwang\t望\t100\nxiong\t兄\t100\ndeng\t灯\t100\nyong\t用\t100\n",
+    )
+    .unwrap();
+    let engine = Engine::new(
+        std::sync::Arc::new(lexicon),
+        std::sync::Arc::new(wowtype_core::BigramLm::default()),
+    );
+    host.install_engine(Ok(engine));
+    configure(&mut host, |c| {
+        c.fuzzy = true;
+        c.fuzzy_groups = fuzzy::AN_AI | fuzzy::HUANG_WANG | fuzzy::UN_IONG | fuzzy::ENG_ONG;
+    });
+
+    assert!(typing(&mut host, "gan").candidates.iter().any(|c| c == "改"));
+    press(&mut host, keysym::ESCAPE);
+    assert!(typing(&mut host, "huang").candidates.iter().any(|c| c == "望"));
+    press(&mut host, keysym::ESCAPE);
+    assert!(typing(&mut host, "xun").candidates.iter().any(|c| c == "兄"));
+    press(&mut host, keysym::ESCAPE);
+    assert!(typing(&mut host, "dong").candidates.iter().any(|c| c == "灯"));
+    press(&mut host, keysym::ESCAPE);
+    assert!(typing(&mut host, "yun").candidates.iter().any(|c| c == "用"));
+    cleanup(&host);
+}
+
+#[test]
+fn arrow_keys_caret_and_shuangpin_show_keys() {
+    let mut host = host("caret-shuangpin");
+    configure(&mut host, |c| c.arrow_keys = "caret".into());
+
+    let f = typing(&mut host, "nihao");
+    assert_eq!(f.preedit, "ni'hao");
+    assert_eq!(f.preedit_cursor, 6);
+
+    // 左移三次依次越过 o、a、h，回到 ni 后面（' 会随分节缩回去）
+    let f = press(&mut host, keysym::LEFT);
+    assert_eq!(f.preedit_cursor, 5);
+    let f = press(&mut host, keysym::LEFT);
+    assert_eq!(f.preedit_cursor, 4);
+    let f = press(&mut host, keysym::LEFT);
+    assert_eq!(f.preedit_cursor, 2);
+    assert_eq!(f.candidates.first().map(String::as_str), Some("你好"));
+
+    // OnTestKeyDown 预判也必须接收 Home / End / Delete
+    let preview_home = host
+        .handle(
+            1,
+            Request::Key {
+                key: Key {
+                    keysym: keysym::HOME,
+                    modifiers: 0,
+                    test: true,
+                },
+                before: None,
+            },
+        )
+        .frame
+        .unwrap();
+    assert!(preview_home.handled);
+    let f = press(&mut host, keysym::HOME);
+    assert_eq!(f.preedit_cursor, 0);
+    let f = press(&mut host, keysym::DELETE);
+    assert_eq!(f.preedit, "ihao");
+    assert_eq!(f.preedit_cursor, 0);
+    let f = press(&mut host, keysym::END);
+    assert_eq!(f.preedit_cursor, 4);
+    press(&mut host, keysym::ESCAPE);
+
+    // 双拼展示键位 + 双拼下大写 V 计算器
+    configure(&mut host, |c| {
+        c.shuangpin = true;
+        c.shuangpin_show_keys = false;
+    });
+    let plain = typing(&mut host, "nihc");
+    assert_eq!(plain.preedit, "ni'hao");
+    press(&mut host, keysym::ESCAPE);
+
+    configure(&mut host, |c| c.shuangpin_show_keys = true);
+    let with_keys = typing(&mut host, "nihc");
+    assert_eq!(with_keys.preedit, "nihc");
+    press(&mut host, keysym::ESCAPE);
+
+    let calc = typing(&mut host, "V1+2");
+    assert!(calc.candidates.iter().any(|c| c == "3"), "cands={:?}", calc.candidates);
+    cleanup(&host);
+}
+
+#[test]
+fn traditional_phrase_conversion_and_learning() {
+    let mut host = host("trad-learn");
+    let lexicon = wowtype_core::MemoryLexicon::from_tsv_str(
+        "shen me\t什么\t100\nshen me\t神么\t200\n",
+    )
+    .unwrap();
+    let engine = Engine::new(
+        std::sync::Arc::new(lexicon),
+        std::sync::Arc::new(wowtype_core::BigramLm::default()),
+    );
+    let s2t = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../core/data/s2t.tsv");
+    engine.load_conversion(s2t).unwrap();
+    host.install_engine(Ok(engine));
+    configure(&mut host, |c| c.traditional = true);
+
+    for _ in 0..3 {
+        let f = typing(&mut host, "shenme");
+        let idx = f.candidates.iter().position(|c| c == "什麼").expect("应包含 OpenCC 繁体候选 什麼");
+        let chosen = press(&mut host, b'1' as u32 + idx as u32);
+        assert_eq!(chosen.commit.as_deref(), Some("什麼"));
+    }
+
+    // 学到的词在后台词库按简体 什么 记录，后续无论繁简都能提升排序。
+    let words = host.handle(1, Request::ListUserWords).user_words.unwrap();
+    assert!(words.iter().any(|w| w.word == "什么"), "{words:?}");
+    let again = typing(&mut host, "shenme");
+    assert_eq!(again.candidates.first().map(String::as_str), Some("什麼"));
+    cleanup(&host);
+}

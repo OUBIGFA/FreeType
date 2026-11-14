@@ -1,3 +1,4 @@
+// Modified by FreeType; compare with WowType 5656e136 for the original implementation.
 //! 输入会话的 C 接口（`wowtype_session_*`），见 core/include/wowtype_core.h 和 docs/ABI.md。
 //!
 //! 会话返回的指针（`WowtypeFrame` 和里面的字符串、过渡函数返回的字符串）归会话所有，
@@ -110,6 +111,7 @@ impl WowtypeSessionConfig {
                 _ => SelectKeys::Off,
             },
             pick_char: self.pick_char != 0,
+            ..Config::default()
         }
     }
 }

@@ -1,3 +1,4 @@
+// Modified by FreeType; compare with WowType 5656e136 for the original implementation.
 //! 排序评测：给定 (输入, 期望) 的 TSV，统计 top-1 / top-3 命中率。
 //!
 //! ```
@@ -5,7 +6,8 @@
 //!     --lexicon lexicon.tsv --eval cases.tsv [--weights coverage_score=1.5,prob=0]
 //! ```
 //!
-//! 用例格式：输入<TAB>期望词（多个可接受答案用 | 分隔）。
+//! 用例格式：输入<TAB>期望词（多个可接受答案用 | 分隔）[<TAB>上文]。
+//! 第三列可选，是光标前已经上屏的文字（`tools/make_sentence_eval.py --context` 生成）。
 //! 这是调排序权重时唯一靠谱的依据——没有数据就是盲调。
 
 use std::sync::Arc;
@@ -284,6 +286,8 @@ fn main() {
             continue;
         };
         let accepted: Vec<&str> = expected.split('|').map(str::trim).collect();
+        // 第三列（可选）是光标前已经上屏的文字：测「接着前文打」时的排序
+        engine.set_context(cols.next().unwrap_or(""));
         let candidates = engine.input(input);
         total += 1;
         let texts: Vec<&str> = candidates.iter().map(|c| c.text.as_str()).collect();

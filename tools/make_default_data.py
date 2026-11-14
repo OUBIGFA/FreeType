@@ -18,7 +18,13 @@ from rime2tsv import add_extra_chars, load_entries
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = ROOT / "third_party" / "manifests" / "default-data.json"
-TOOL_INPUTS = ("tools/make_default_data.py", "tools/rime2tsv.py", "tools/add_hotwords.py")
+TOOL_INPUTS = (
+    "tools/make_default_data.py",
+    "tools/rime2tsv.py",
+    "tools/add_hotwords.py",
+    "tools/blend-freq.py",
+    "tools/lexdata.py",
+)
 
 
 def sha256(path):
@@ -93,18 +99,51 @@ def snapshot_sources(directory, sources):
     return [directory / source["name"] for source in sources]
 
 
-def input_record(manifest, hotwords):
-    return {
-        "configurationSha256": sha256(manifest),
+def resolve_relative(path_text, snapshot_root=None):
+    candidate = Path(path_text)
+    if candidate.is_absolute():
+        return candidate
+    if snapshot_root is not None:
+        snapped = snapshot_root / candidate
+        if snapped.is_file():
+            return snapped
+    return ROOT / candidate
+
+
+def resolve_data_inputs(manifest, snapshot_root=None):
+    blocklist = None
+    if manifest.get("blocklist"):
+        blocklist = resolve_relative(manifest["blocklist"], snapshot_root)
+        if not blocklist.is_file():
+            raise ValueError(f"缺少过滤词表：{blocklist}")
+    corpus_config = manifest.get("corpusFreq")
+    corpus_freq = None
+    if corpus_config:
+        corpus_freq = resolve_relative(corpus_config["file"], snapshot_root)
+        if not corpus_freq.is_file():
+            raise ValueError(f"缺少语料词频表：{corpus_freq}")
+    return blocklist, corpus_config, corpus_freq
+
+
+def input_record(manifest_path, manifest, hotwords, blocklist=None, corpus_freq=None):
+    record = {
+        "configurationSha256": sha256(manifest_path),
         "hotwordsSha256": sha256(hotwords),
         "tools": {name: sha256(ROOT / name) for name in TOOL_INPUTS},
     }
+    if blocklist is not None:
+        record["blocklistSha256"] = sha256(blocklist)
+    if corpus_freq is not None:
+        record["corpusFreqSha256"] = sha256(corpus_freq)
+    return record
 
 
 def check_data(output, manifest_path, hotwords):
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    blocklist, _, corpus_freq = resolve_data_inputs(manifest)
     record = json.loads((output / "MANIFEST.json").read_text(encoding="utf-8"))
-    if record["version"] != manifest["version"] or record["inputs"] != input_record(manifest_path, hotwords):
+    expected_inputs = input_record(manifest_path, manifest, hotwords, blocklist, corpus_freq)
+    if record["version"] != manifest["version"] or record["inputs"] != expected_inputs:
         raise ValueError("默认词库输入已变化；先运行 python -X utf8 tools/make_default_data.py。")
     expected = [(source["name"], source["revision"], source["archiveSha256"]) for source in manifest["sources"]]
     actual = [(source["name"], source["revision"], source["archiveSha256"]) for source in record["sources"]]
@@ -168,11 +207,30 @@ def build_data(args):
             formatted = f"{weight:.1f}" if weight < 1 else str(int(round(weight)))
             output.write(f"{code}\t{word}\t{formatted}\n")
     del entries
+    blocklist, corpus_config, corpus_freq = resolve_data_inputs(manifest, args.snapshot_root)
+    lexicon_source = raw
+    if corpus_freq is not None:
+        blended = scratch / "blended.tsv"
+        subprocess.run(
+            [
+                sys.executable, "-X", "utf8", str(ROOT / "tools" / "blend-freq.py"),
+                str(raw), str(corpus_freq), str(blended),
+                "--weight", str(corpus_config.get("weight", 0.3)),
+                "--max-factor", str(corpus_config.get("maxFactor", 20)),
+                "--floor", str(corpus_config.get("floor", 1000)),
+                "--label", "语料",
+            ],
+            check=True,
+        )
+        lexicon_source = blended
     built = scratch / "output"
     built.mkdir()
+    hotword_cmd = [sys.executable, "-X", "utf8", str(ROOT / "tools" / "add_hotwords.py"),
+                   str(lexicon_source), str(args.hotwords)]
+    if blocklist is not None:
+        hotword_cmd.extend(["--block", str(blocklist)])
     with (built / "lexicon.tsv").open("w", encoding="utf-8", newline="\n") as output:
-        subprocess.run([sys.executable, "-X", "utf8", str(ROOT / "tools" / "add_hotwords.py"),
-                        str(raw), str(args.hotwords)], stdout=output, check=True)
+        subprocess.run(hotword_cmd, stdout=output, check=True)
     if not model.is_file():
         compressed = checked_download(archives / "words.lm.xz", model_info["url"])
         with lzma.open(compressed, "rb") as incoming, (built / "words.lm").open("wb") as outgoing:
@@ -198,7 +256,18 @@ def build_data(args):
         "改动：拼音去声调，ü 转 v；同音同词保留白霜权重，万象只补缺；两库分别归一化词频。",
         "白霜的 extthot 引用修正为 exthot；两张大字表只补缺字，频次小于 1。",
         "不收白霜 corrections 和万象 cuoyin 错音错字表：FreeType 没有 Rime 的纠音提示。",
-        "项目热词由 data/hotwords.tsv 合入，最低词频 30000。",
+        "项目热词由 data/hotwords.tsv 合入（默认最低词频 30000，支持按行词频与多读音）；过滤词由 blocklist 整词移除。",
+    ])
+    if corpus_config:
+        descriptions.append(
+            f"语料词频：已有两字及以上词融合 {corpus_config['file']}"
+            f"（权重 {corpus_config.get('weight', 0.3)}，封顶 {corpus_config.get('maxFactor', 20)} 倍，"
+            f"下限 {corpus_config.get('floor', 1000)}），不含原始句子。"
+            f"来源：{corpus_config['source']}（{corpus_config.get('export', '')}）；"
+            f"许可：{corpus_config['license']}（{corpus_config['licenseUrl']}）；"
+            f"署名：{corpus_config['attribution']}。"
+        )
+    descriptions.extend([
         "英文词表来自白霜；语言模型沿用 WowType words.lm（CC BY-SA 4.0）。",
         "模型来源：" + model_info["url"],
         "许可文本见 LICENSE；万象许可范围及第三方声明见 WANXIANG-LICENSE-SCOPE.md、WANXIANG-NOTICE.md。",
@@ -209,7 +278,7 @@ def build_data(args):
     record = {
         "version": manifest["version"],
         "sources": sources,
-        "inputs": input_record(manifest_path, args.hotwords),
+        "inputs": input_record(manifest_path, manifest, args.hotwords, blocklist, corpus_freq),
         "counts": {"base": base_count, "wanxiangAdded": added_count, "extraChars": extra_count, "entries": count},
         "files": {path.name: {"bytes": path.stat().st_size, "sha256": sha256(path)} for path in built.iterdir()},
     }

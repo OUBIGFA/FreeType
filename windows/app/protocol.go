@@ -12,18 +12,20 @@ type Config struct {
 	// CandidateStyle 是选中候选的样子：pink blue green sogou。
 	CandidateStyle string `json:"candidate_style"`
 
-	Fuzzy           bool   `json:"fuzzy"`
-	FuzzyGroups     int    `json:"fuzzy_groups"`
-	Shuangpin       bool   `json:"shuangpin"`
-	ShuangpinScheme string `json:"shuangpin_scheme"`
-	TypoCorrection  bool   `json:"typo_correction"`
-	RareChars       bool   `json:"rare_chars"`
-	Lexicon         string `json:"lexicon"`
+	Fuzzy             bool   `json:"fuzzy"`
+	FuzzyGroups       int    `json:"fuzzy_groups"`
+	Shuangpin         bool   `json:"shuangpin"`
+	ShuangpinScheme   string `json:"shuangpin_scheme"`
+	ShuangpinShowKeys bool   `json:"shuangpin_show_keys"`
+	TypoCorrection    bool   `json:"typo_correction"`
+	RareChars         bool   `json:"rare_chars"`
+	Lexicon           string `json:"lexicon"`
 
 	ShiftToggle string `json:"shift_toggle"`
 	PageKeys    int    `json:"page_keys"`
 	SelectKeys  string `json:"select_keys"`
 	PickChar    bool   `json:"pick_char"`
+	ArrowKeys   string `json:"arrow_keys"`
 	NumpadDot   bool   `json:"numpad_dot"`
 
 	FullwidthPunct   bool   `json:"fullwidth_punct"`
@@ -63,7 +65,7 @@ func defaultConfig() Config {
 	return Config{
 		PageSize: 7, Horizontal: true, FontSize: 18, FontFamily: "Microsoft YaHei", CandidateStyle: "pink",
 		FuzzyGroups: fuzzyDefault, ShuangpinScheme: "xiaohe", TypoCorrection: true,
-		ShiftToggle: "both", PageKeys: pageKeyMinus, SelectKeys: "off", PickChar: true, NumpadDot: true,
+		ShiftToggle: "both", PageKeys: pageKeyMinus, SelectKeys: "off", PickChar: true, ArrowKeys: "candidates", NumpadDot: true,
 		FullwidthPunct: true, AutoPair: true, Autospace: true, AutospaceLetters: true, AutospaceDigits: true,
 		DefaultMode: "chinese", ModeScope: "global",
 		QuickPhrases: true, EmojiSuggest: true, DateTime: true, Calculator: true, Toolbar: true, EmailCompletion: true,
@@ -89,6 +91,7 @@ var fuzzyRules = []struct {
 }{
 	{1, "z = zh"}, {2, "c = ch"}, {4, "s = sh"}, {8, "n = l"}, {16, "f = h"}, {32, "r = l"},
 	{64, "an = ang"}, {128, "en = eng"}, {256, "in = ing"}, {512, "ian = iang"}, {1024, "uan = uang"}, {2048, "un = ong"},
+	{4096, "an = ai"}, {8192, "huang = wang"}, {16384, "un = iong"}, {32768, "eng = ong"},
 }
 
 // QuickPhrase 是一条快捷短语。
@@ -194,6 +197,7 @@ var (
 	candidateStyleChoices = []choice{{"pink", "粉色（默认）"}, {"blue", "蓝色"}, {"green", "微信绿"}, {"sogou", "搜狗样式（无底色块）"}}
 	shiftToggles          = []choice{{"both", "左右 Shift 都可以"}, {"left", "只用左 Shift"}, {"right", "只用右 Shift"}, {"off", "不用 Shift 切换"}}
 	selectKeys            = []choice{{"off", "不用"}, {"semicolon", "分号选第 2 个"}, {"quote", "分号、引号选第 2、3 个"}}
+	arrowKeys             = []choice{{"candidates", "移动候选高亮"}, {"caret", "在拼音里移动光标"}}
 	modes                 = []choice{{"chinese", "中文"}, {"english", "英文"}, {"global", "全局"}}
 	modeScopes            = []choice{{"global", "所有应用一致"}, {"app", "每个应用分别记住"}}
 	positions             = []choice{

@@ -148,6 +148,43 @@ class DefaultDataTests(unittest.TestCase):
         self.assertEqual(rows[("chong pao", "重跑")], 30000)
         self.assertEqual(rows[("xin ci", "新词")], 30000)
 
+    def test_blocklist_and_corpus_freq_blend_without_touching_rare_chars(self):
+        self.frost_files["cn_dicts/base.dict.yaml"] += "去次\tqu ci\t88\n弃车保帅\tqi ju bao shuai\t50\n"
+        self.hotwords.write_text(
+            "chong pao\t重跑\n"
+            "qi ju bao shuai\t弃车保帅\t1000\n"
+            "qi che bao shuai\t弃车保帅\t1000\n",
+            encoding="utf-8",
+        )
+        blocklist = self.scratch / "blocklist.tsv"
+        blocklist.write_text("qu ci\t去次\n", encoding="utf-8")
+        corpus_freq = self.scratch / "corpus.tsv"
+        corpus_freq.write_text("你好\t100\n常用\t400\n", encoding="utf-8")
+        self.manifest["blocklist"] = str(blocklist)
+        self.manifest["corpusFreq"] = {
+            "file": str(corpus_freq),
+            "weight": 0.3,
+            "maxFactor": 20,
+            "floor": 1000,
+            "source": "https://example.invalid/tatoeba",
+            "export": "fixture",
+            "license": "CC-BY-2.0-FR",
+            "licenseUrl": "https://creativecommons.org/licenses/by/2.0/fr/",
+            "attribution": "Fixture contributors",
+        }
+        result = self.build()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rows = self.entries()
+        self.assertNotIn(("qu ci", "去次"), rows)
+        self.assertEqual(rows[("qi ju bao shuai", "弃车保帅")], 1000)
+        self.assertEqual(rows[("qi che bao shuai", "弃车保帅")], 1000)
+        self.assertGreater(rows[("chang yong", "常用")], 50)
+        self.assertEqual(rows[("hou", "㕈")], 0.8)
+        self.assertEqual(rows[("ji", "𠮷")], 0.7)
+        source_text = (self.output / "SOURCE.txt").read_text(encoding="utf-8")
+        self.assertIn("CC-BY-2.0-FR", source_text)
+        self.assertIn("Fixture contributors", source_text)
+
     def test_corresponding_source_snapshot_rebuilds_and_rejects_modified_inputs(self):
         result = self.build()
         self.assertEqual(result.returncode, 0, result.stderr)

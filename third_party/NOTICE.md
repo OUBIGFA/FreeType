@@ -46,11 +46,12 @@ FreeType 复用其 Rust 引擎、C ABI 和行为测试，并增加 Windows 服�
 
 - 白霜主库来自 `gaboolic/rime-frost` 修订 `555a736932de245d7f59f640a98bd58f368792b3`，采用 GPL-3.0。其上游词表来源需与固定输入一并核对。
 - 万象补充来自 `amzxyz/rime-wanxiang-data` 修订 `4b50697bc3fa45ea7f79faebcc731fb42a3b6d8c`。作者为 amzxyz，其原创字词数据采用 CC BY 4.0；此范围不覆盖其程序代码及第三方组件。只合入字表、基础词、兼容读音、地名、名人和艺人六张核心表，不复制万象程序或 `.gram` 模型。
-- 数据转换包括去除拼音声调、将 ü 转为 v、按引擎量级归一化词频、白霜优先去重、万象补缺，以及合入项目热词。原始来源、转换输入摘要和改动说明见 `data/SOURCE.txt`、`data/MANIFEST.json`；生成脚本及固定输入配置位于 FreeType 源码仓库的 `tools/make_default_data.py` 和 `third_party/manifests/default-data.json`。
-- `third-party/data/default@<数据版本>/source/default-data-sources.zip` 随包提供原始词表、完整头部声明、GPL 和万象许可范围、热词、固定配置及转换工具。解压后按其中的 `README.txt` 重建，无须重新下载上游词库归档。白霜及其派生词表的分发保留 GPL-3.0 条件；万象原始数据的 CC BY 4.0 署名和范围仍须保留。
+- 数据转换包括去除拼音声调、将 ü 转为 v、按引擎量级归一化词频、白霜优先去重、万象补缺、已有两字及以上词融合语料词频、合入项目热词，以及按过滤词表整词移除错条目。原始来源、转换输入摘要和改动说明见 `data/SOURCE.txt`、`data/MANIFEST.json`；生成脚本及固定输入配置位于 FreeType 源码仓库的 `tools/make_default_data.py` 和 `third_party/manifests/default-data.json`。
+- 语料词频 `data/tatoeba-freq.tsv` 来自 `https://tatoeba.org` 2026-11-05 导出的中文句子 `cmn_sentences.tsv.bz2`，采用 CC BY 2.0 FR（`https://creativecommons.org/licenses/by/2.0/fr/`），署名为 Tatoeba contributors（各句作者见 `tatoeba.org` 对应句子页面）。仓库与安装包仅包含统计词频及按权重 `0.3` 融合到默认词库已有词后的结果，不含原始句子；具体参数与过滤词说明保留在 `data/SOURCE.txt` 和 `third-party/data/default@<数据版本>/`。
+- `third-party/data/default@<数据版本>/source/default-data-sources.zip` 随包提供原始词表、完整头部声明、GPL 和万象许可范围、热词、过滤词、语料词频、固定配置及转换工具。解压后按其中的 `README.txt` 重建，无须重新下载上游词库归档。白霜及其派生词表的分发保留 GPL-3.0 条件；万象原始数据的 CC BY 4.0 署名和范围及 Tatoeba 的 CC BY 2.0 FR 署名仍须保留。
 - 词级语言模型 `words.lm` 来自 WowType 的 `lm-2026.11.09` 数据发布，采用 CC BY-SA 4.0，署名为 WowType contributors。本包未修改模型内容，SHA-256 为 `42cb7c4a7cededa29b1a9ff105530085529fefff96535cc051341ebd51605dbe`。训练语料署名包括 LCCC（thu-coai，MIT）和中文维基百科（CC BY-SA 4.0）；发布说明和许可全文位于 `third-party/model/word-lm@lm-2026.11.09/`。再次分发须保留署名、许可及改动说明；改编模型时遵守相同方式共享条件，不将其套用为程序代码许可。
 - GPL-3.0、CC BY 4.0、CC BY-SA 4.0 原文在 `data/LICENSE`；万象的原始许可范围和第三方声明在 `data/WANXIANG-LICENSE-SCOPE.md`、`data/WANXIANG-NOTICE.md`。`third-party/data/default@<数据版本>/` 另保留这些声明。词库和模型以独立数据文件分发。保留 GPL 派生词表的义务，不将独立程序与未修改模型混称为同一衍生作品，也不能因同包分发而省略任一来源的义务。
-- `data/s2t.tsv` 是由 WowType 固定修订带入的 OpenCC 字符级简繁映射，不含 OpenCC 程序。本包保留映射内容；上游转换脚本为 `tools/opencc2tsv.py`。历史生成时的 OpenCC 包版本未在上游记录，因此不冒称来自某个 OpenCC 发行版。OpenCC 项目为 `https://github.com/BYVoid/OpenCC`，采用 Apache-2.0；完整许可和作者名单在 `third-party/data/opencc@wowtype-5656e136/`，转换后的表也在其 `source/` 内提供。
+- `data/s2t.tsv` 是 OpenCC `1.4.1` 的字符与词组级简繁映射，不含 OpenCC 程序。本包保留映射内容；转换脚本为 `tools/opencc2tsv.py`。OpenCC 项目为 `https://github.com/BYVoid/OpenCC`，采用 Apache-2.0；完整许可和作者名单在 `third-party/data/opencc@1.4.1/`，转换后的表也在其 `source/` 内提供。
 - 关于页的 GitHub 标志来自 `primer/octicons` 修订 `68ec2de8d0ddfcbb7497da01d0b7d98eb5593020`，采用 MIT 许可。FreeType 只调整 SVG 填充以跟随文字颜色，许可原文在 `third-party/asset/octicons@<修订>/`。
 
 - 编入引擎的 emoji 关键词来自 WowType 的 `core/src/emoji/cldr.tsv`，使用 Unicode emoji-test.txt 18.0 和 CLDR 中英文数据，按原脚本筛选 emoji 15.0 及以前条目。原文件声明 `Copyright © 1991-2026 Unicode, Inc.`，适用 Unicode License v3；许可和带原始头部的数据位于 `third-party/data/unicode-cldr@wowtype-5656e136/`。许可镜像还提及 LDML 规范文档；本包使用的是数据，不分发该规范文档，不能把数据许可扩张为规范文档许可。

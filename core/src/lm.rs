@@ -1,3 +1,4 @@
+// Modified by FreeType; compare with WowType 5656e136 for the original implementation.
 //! 二元语言模型接口与内存实现。
 //!
 //! 打分使用自然对数概率（<= 0）；未登录词回退到 unigram，再对未知词使用
@@ -19,6 +20,11 @@ pub trait LanguageModel: Send + Sync {
     /// 避免回退到一元概率时用错分布（例如从二元计数反推的一元）。
     fn has_bigram(&self, _prev: &str, _cur: &str) -> bool {
         false
+    }
+
+    /// 词表里有没有这个词；None 表示这个模型没有词表可查（字级、测试用的模型）。
+    fn knows_word(&self, _word: &str) -> Option<bool> {
+        None
     }
 
     /// 一句话的累计对数概率。

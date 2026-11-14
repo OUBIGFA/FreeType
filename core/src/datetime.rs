@@ -1,3 +1,4 @@
+// Modified by FreeType; compare with WowType 5656e136 for the original implementation.
 //! 日期、时间候选：打 riqi / shijian / xingqi（或英文 date / time）时，在首选词后面
 //! 给出当前日期、时间的几种写法。
 //!
@@ -17,6 +18,16 @@ pub struct LocalTime {
 }
 
 const WEEKDAYS: [&str; 7] = ["日", "一", "二", "三", "四", "五", "六"];
+
+/// 触发词本身是哪个词（riqi -> 日期）：日期时间的写法挂在它后面，它要排第一。英文触发词没有。
+pub fn trigger_word(key: &str) -> Option<&'static str> {
+    match key {
+        "riqi" | "rq" => Some("日期"),
+        "shijian" | "sj" => Some("时间"),
+        "xingqi" => Some("星期"),
+        _ => None,
+    }
+}
 
 /// 触发词（拼音或英文，小写、不带隔音符）对应的候选；不是触发词时返回空。
 pub fn candidates(key: &str, now: &LocalTime) -> Vec<String> {

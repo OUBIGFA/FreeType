@@ -148,6 +148,11 @@ pub fn session_config(config: &Config) -> session::Config {
             _ => session::SelectKeys::Off,
         },
         pick_char: config.pick_char,
+        arrow_keys: match config.arrow_keys.as_str() {
+            "caret" => session::ArrowKeys::Caret,
+            _ => session::ArrowKeys::Candidates,
+        },
+        shuangpin_keys: config.shuangpin_show_keys,
     }
 }
 

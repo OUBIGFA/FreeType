@@ -248,6 +248,38 @@ func TestTypingPageFuzzyGroups(t *testing.T) {
 	if !b.config.Fuzzy || b.config.FuzzyGroups&8 == 0 || b.config.FuzzyGroups&1 == 0 {
 		t.Fatalf("模糊音分组没有保存：%+v", b.config)
 	}
+	if err := tt.Click("an = ai"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("eng = ong"); err != nil {
+		t.Fatal(err)
+	}
+	if b.config.FuzzyGroups&4096 == 0 || b.config.FuzzyGroups&32768 == 0 {
+		t.Fatalf("新增模糊音分组没有保存：%+v", b.config)
+	}
+	if err := tt.Click("双拼"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if err := tt.Click("双拼展示键位"); err != nil {
+		t.Fatal(err)
+	}
+	if !b.config.Shuangpin || !b.config.ShuangpinShowKeys {
+		t.Fatalf("双拼展示键位没有保存：%+v", b.config)
+	}
+	for _, control := range tt.AccessAll() {
+		if control.Name == "左右方向键" && control.Focusable {
+			r := control.Bounds
+			tt.ClickAt(r.X+r.W/2, r.Y+r.H/2)
+			if err := tt.Click("在拼音里移动光标"); err != nil {
+				t.Fatal(err)
+			}
+			break
+		}
+	}
+	if b.config.ArrowKeys != "caret" {
+		t.Fatalf("左右方向键设置没有保存：%+v", b.config)
+	}
 	if err := tt.Click("成对标点自动补全"); err != nil {
 		t.Fatal(err)
 	}
@@ -496,7 +528,7 @@ func TestSettingsSearchLocatesMatchingRowAcrossPages(t *testing.T) {
 }
 
 func TestSettingsSearchRevealsHiddenOptionsWithoutChangingConfig(t *testing.T) {
-	for _, title := range []string{"汉字和字母之间", "双拼方案", "自动隐藏", "中英文状态"} {
+	for _, title := range []string{"汉字和字母之间", "双拼方案", "双拼展示键位", "自动隐藏", "中英文状态"} {
 		s, b := newTestSettings()
 		s.config.Autospace, s.config.Shuangpin, s.config.StatusBar = false, false, false
 		s.config.DefaultMode = "global"

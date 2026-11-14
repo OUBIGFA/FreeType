@@ -1,7 +1,19 @@
 {
-  "version": "2026-11-13.1",
+  "version": "2026-11-14.1",
   "frequencyTotal": 7500000000,
   "minimumEntries": 500000,
+  "blocklist": "data/blocklist.tsv",
+  "corpusFreq": {
+    "file": "data/tatoeba-freq.tsv",
+    "weight": 0.3,
+    "maxFactor": 20,
+    "floor": 1000,
+    "source": "https://tatoeba.org",
+    "export": "cmn_sentences.tsv.bz2 (2026-11-05)",
+    "license": "CC-BY-2.0-FR",
+    "licenseUrl": "https://creativecommons.org/licenses/by/2.0/fr/",
+    "attribution": "Tatoeba contributors"
+  },
   "sources": [
     {
       "name": "rime-frost",

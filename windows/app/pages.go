@@ -352,10 +352,11 @@ func (s *settings) typingPage(c *ui.Context) {
 	changed := false
 	section(c, "拼音", func() {
 		changed = s.settingSwitch(c, "typing/双拼", false, &s.config.Shuangpin) || changed
-		if s.config.Shuangpin || s.showSetting("typing/双拼方案") {
+		if s.config.Shuangpin || s.showSetting("typing/双拼方案") || s.showSetting("typing/双拼展示键位") {
 			s.settingSubRow(c, "typing/双拼方案", func() {
 				changed = choose(c, "双拼方案", schemes, &s.config.ShuangpinScheme, 180) || changed
 			})
+			changed = s.settingSwitch(c, "typing/双拼展示键位", true, &s.config.ShuangpinShowKeys) || changed
 		}
 		changed = s.settingSwitch(c, "typing/模糊音", false, &s.config.Fuzzy) || changed
 		if s.config.Fuzzy || s.showSetting("typing/模糊音分组") {
@@ -397,6 +398,9 @@ func (s *settings) typingPage(c *ui.Context) {
 		})
 		s.settingRow(c, "typing/分号、引号选词", func() {
 			changed = choose(c, "分号、引号选词", selectKeys, &s.config.SelectKeys, 220) || changed
+		})
+		s.settingRow(c, "typing/左右方向键", func() {
+			changed = choose(c, "左右方向键", arrowKeys, &s.config.ArrowKeys, 200) || changed
 		})
 		changed = s.settingSwitch(c, "typing/以词定字", false, &s.config.PickChar) || changed
 	})

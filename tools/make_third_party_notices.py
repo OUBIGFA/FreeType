@@ -184,7 +184,8 @@ def archive_default_sources(archive, sources, snapshots, model_license):
             if not notice and (not relative.endswith(".dict.yaml") or (selected and relative not in selected)):
                 continue
             files[source["name"] + "/" + relative] = path
-    for name in [*TOOL_INPUTS, "data/hotwords.tsv", "third_party/manifests/default-data.json",
+    for name in [*TOOL_INPUTS, "data/hotwords.tsv", "data/blocklist.tsv", "data/tatoeba-freq.tsv",
+                 "third_party/manifests/default-data.json",
                  "third_party/licenses/Apache-2.0-LICENSE.txt", "third_party/licenses/WowType-README.txt"]:
         files[name] = ROOT / name
     files["licenses/CC-BY-SA-4.0.txt"] = model_license
@@ -248,7 +249,7 @@ def collect(output):
     components.append(nsis_component)
     components.append(copy_component(output, "asset:octicons", "68ec2de8d0ddfcbb7497da01d0b7d98eb5593020",
                                      APP / "assets", ["octicons-license.txt"]))
-    components.append(copy_component(output, "data:opencc", "wowtype-5656e136",
+    components.append(copy_component(output, "data:opencc", "1.4.1",
                                      ROOT / "third_party/licenses", ["OpenCC-LICENSE.txt", "OpenCC-AUTHORS.txt"],
                                      ROOT / "core/data/s2t.tsv"))
     licenses = ROOT / "third_party/licenses"

@@ -90,6 +90,10 @@ pub mod fuzzy {
     pub const IAN_IANG: u32 = 512;
     pub const UAN_UANG: u32 = 1024;
     pub const UN_ONG: u32 = 2048;
+    pub const AN_AI: u32 = 4096;
+    pub const HUANG_WANG: u32 = 8192;
+    pub const UN_IONG: u32 = 16384;
+    pub const ENG_ONG: u32 = 32768;
     /// 打开模糊音时默认的几组（和 WowType 一样）。
     pub const DEFAULT: u32 = Z_ZH | C_CH | S_SH | AN_ANG | EN_ENG | IN_ING | IAN_IANG | UAN_UANG;
 }
@@ -149,6 +153,8 @@ pub struct Config {
     /// 双拼及方案：ziranma xiaohe microsoft sogou abc ziguang pinyinjiajia。
     pub shuangpin: bool,
     pub shuangpin_scheme: String,
+    /// 在输入编码下方展示双拼键位参考。
+    pub shuangpin_show_keys: bool,
     /// 按错键纠错。
     pub typo_correction: bool,
     /// 也出 CJK 扩展 B 区以后的生僻单字（常见字体显示不了，默认不出）。
@@ -166,6 +172,8 @@ pub struct Config {
     pub select_keys: String,
     /// 以词定字：`[` 上屏候选的第一个字、`]` 最后一个字。
     pub pick_char: bool,
+    /// 左右方向键用途：`candidates` 移候选，`caret` 移编辑光标。
+    pub arrow_keys: String,
     /// 小键盘的点直接上屏半角「.」；打字途中按小键盘的点进入网址、邮箱输入。
     pub numpad_dot: bool,
 
@@ -242,6 +250,7 @@ impl Default for Config {
             fuzzy_groups: fuzzy::DEFAULT,
             shuangpin: false,
             shuangpin_scheme: "xiaohe".into(),
+            shuangpin_show_keys: false,
             typo_correction: true,
             rare_chars: false,
             lexicon: String::new(),
@@ -249,6 +258,7 @@ impl Default for Config {
             page_keys: page_keys::MINUS,
             select_keys: "off".into(),
             pick_char: true,
+            arrow_keys: "candidates".into(),
             numpad_dot: true,
             fullwidth_punct: true,
             auto_pair: true,
@@ -286,6 +296,7 @@ pub const SHUANGPIN_SCHEMES: [&str; 7] = ["ziranma", "xiaohe", "microsoft", "sog
 pub const CANDIDATE_STYLES: [&str; 4] = ["pink", "blue", "green", "sogou"];
 pub const SHIFT_TOGGLES: [&str; 4] = ["both", "left", "right", "off"];
 pub const SELECT_KEYS: [&str; 3] = ["off", "semicolon", "quote"];
+pub const ARROW_KEYS: [&str; 2] = ["candidates", "caret"];
 pub const MODE_SCOPES: [&str; 2] = ["global", "app"];
 pub const HINT_POSITIONS: [&str; 6] = ["top-left", "top", "top-right", "bottom-left", "bottom", "bottom-right"];
 pub const HOTKEYS_EMOJI: [&str; 3] = ["off", "ctrl+shift+e", "ctrl+alt+e"];
@@ -316,12 +327,13 @@ impl Config {
         if self.lexicon.len() > 1024 {
             self.lexicon.clear();
         }
-        self.fuzzy_groups &= 0xfff;
+        self.fuzzy_groups &= 0xffff;
         self.page_keys &= 0xf;
         pick(&mut self.candidate_style, &CANDIDATE_STYLES, &d.candidate_style);
         pick(&mut self.shuangpin_scheme, &SHUANGPIN_SCHEMES, &d.shuangpin_scheme);
         pick(&mut self.shift_toggle, &SHIFT_TOGGLES, &d.shift_toggle);
         pick(&mut self.select_keys, &SELECT_KEYS, &d.select_keys);
+        pick(&mut self.arrow_keys, &ARROW_KEYS, &d.arrow_keys);
         pick(&mut self.mode_scope, &MODE_SCOPES, &d.mode_scope);
         pick(&mut self.hint_position, &HINT_POSITIONS, &d.hint_position);
         pick(&mut self.hotkey_emoji, &HOTKEYS_EMOJI, &d.hotkey_emoji);
@@ -742,6 +754,16 @@ mod tests {
         assert_eq!(config.candidate_style, "pink");
         let sogou = Config { candidate_style: "sogou".into(), ..Config::default() }.sanitized();
         assert_eq!(sogou.candidate_style, "sogou");
+        let arrow = Config { arrow_keys: "other".into(), ..Config::default() }.sanitized();
+        assert_eq!(arrow.arrow_keys, "candidates");
+        let caret = Config { arrow_keys: "caret".into(), ..Config::default() }.sanitized();
+        assert_eq!(caret.arrow_keys, "caret");
+        let fuzzy = Config {
+            fuzzy_groups: fuzzy::AN_AI | fuzzy::ENG_ONG | (1 << 20),
+            ..Config::default()
+        }
+        .sanitized();
+        assert_eq!(fuzzy.fuzzy_groups, fuzzy::AN_AI | fuzzy::ENG_ONG);
     }
 
     #[test]

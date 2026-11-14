@@ -1,3 +1,4 @@
+// Modified by FreeType; compare with WowType 5656e136 for the original implementation.
 //! 候选特征、基础线性打分，以及 LTR 钩子。
 //!
 //! 特征名严格采用 WeType 排序链路中已确认的 23 个名字。默认权重只是让
@@ -133,8 +134,11 @@ impl Default for FeatureWeights {
             history_count: 0.0,
             complete_count: 0.2,
             history_time_diff: 0.0,
-            // 上下文二元分是 path.score 之外的新信息，权重给足
-            context_bigram_score: 2.0,
+            // 上下文二元分是 path.score 之外的新信息。以前给 2.0，是因为「我要」「不知道」这类
+            // 语料里被并成一个词的搭配分数偏低，得靠放大才压得过偶然见过的「我腰」；现在这些搭配
+            // 有保底分（MERGED_PAIR_SCORE），放大反而让低频偶然搭配（不 + 咬）压过字频。
+            // 实测逐词带上文 top1：2.0 → 86.1%，1.0 → 88.6%，0.5 → 88.4%
+            context_bigram_score: 1.0,
             user_word_rollback_score: 0.8,
             // 这一项已经计入 path.score，再叠加就是重复计权
             lm_score_with_previous_txt: 0.0,

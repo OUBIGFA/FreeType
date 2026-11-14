@@ -27,9 +27,9 @@ cargo run -p wowtype-core --bin wowtype-demo -- --lexicon lexicon.tsv nihao
 不会出现"打到一半没有候选"。
 
 支持**模糊音**（默认关闭）：`--fuzzy`（插件里在设置界面打开，或 `WOWTYPE_FUZZY=1`）开启后，
-`zidao` → 知道（zh/z）、`sangdian` → 商店（ang/an）。一共 12 组，可以分别开关
+`zidao` → 知道（zh/z）、`sangdian` → 商店（ang/an）。一共 16 组，可以分别开关
 （`Engine::set_fuzzy_groups` / `wowtype_engine_set_fuzzy_groups`，位掩码见 `syllable::fuzzy`）：
-z=zh、c=ch、s=sh、n=l、f=h、r=l、an=ang、en=eng、in=ing、ian=iang、uan=uang、un=ong，默认开平翘舌和前后鼻音这 8 组（un=ong 默认关）。
+z=zh、c=ch、s=sh、n=l、f=h、r=l、an=ang、en=eng、in=ing、ian=iang、uan=uang、un=ong、an=ai、huang=wang、un=iong、eng=ong，默认开平翘舌和前后鼻音这 8 组（其余默认关）。
 模糊索引只建一份：按「全部分组都打开」归并声母、韵母（`syllable::fuzzy_key`），查到以后再用
 `fuzzy_groups_between` 逐个音节检查用到的分组是不是都打开了（n 和 r 都归到 l，但 n/r 本身不算一组，会被过滤掉）。
 改开关不用重建 55 万词的索引。

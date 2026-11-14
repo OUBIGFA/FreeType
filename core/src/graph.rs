@@ -1,3 +1,4 @@
+// Modified by FreeType; compare with WowType 5656e136 for the original implementation.
 //! 音节图：把输入串切成所有合法音节序列（DAG）。
 //!
 //! 每条边消耗一个音节（全拼）或一个首字母（简拼）。隔音符产生的强制边界
@@ -49,6 +50,8 @@ pub struct Edge {
     pub kind: EdgeKind,
     /// 这条边是纠错得来的（与实际按键差一处）。
     pub typo: bool,
+    /// 纠错是「两键按反」（ie / ei、uo / ou），比按错一个键少罚，见 BeamConfig::swap_discount。
+    pub swap: bool,
     /// 补全边：音节比实际输入多出的字母数（0 表示不是补全）。
     pub completion: u8,
 }
@@ -245,10 +248,14 @@ impl SyllableGraph {
 fn add_edge(edges: &mut [Vec<Edge>], edge: Edge) {
     let bucket = &mut edges[edge.start];
     // 同一段、同一个音节只留一条：精确边先加，纠错边遇到同样的音节就不再加
-    if !bucket
-        .iter()
-        .any(|e| e.end == edge.end && e.kind == edge.kind)
+    if let Some(e) = bucket
+        .iter_mut()
+        .find(|e| e.end == edge.end && e.kind == edge.kind)
     {
+        if e.typo && edge.typo && edge.swap {
+            e.swap = true;
+        }
+    } else {
         bucket.push(edge);
     }
 }
@@ -259,6 +266,7 @@ fn full_edge(start: usize, end: usize, syllable: Syllable, erhua: bool) -> Edge 
         end,
         kind: EdgeKind::Full { syllable, erhua },
         typo: false,
+        swap: false,
         completion: 0,
     }
 }
@@ -376,7 +384,10 @@ fn build_typo_edges(input: &ParsedInput, edges: &mut [Vec<Edge>]) {
                     buf.extend_from_slice(text);
                     buf.swap(i, i + 1);
                     if let Some(s) = syllable_of(&buf) {
-                        add(edges, start, end, s);
+                        let mut edge = full_edge(start, end, s, false);
+                        edge.typo = true;
+                        edge.swap = true;
+                        add_edge(edges, edge);
                     }
                 }
             }
@@ -398,7 +409,10 @@ fn build_typo_edges(input: &ParsedInput, edges: &mut [Vec<Edge>]) {
                     buf.extend_from_slice(&text[..i]);
                     buf.extend_from_slice(&text[i + 1..]);
                     if let Some(s) = syllable_of(&buf) {
-                        add(edges, start, end, s);
+                        let mut edge = full_edge(start, end, s, false);
+                        edge.typo = true;
+                        edge.swap = true;
+                        add_edge(edges, edge);
                     }
                 }
             }
@@ -448,6 +462,7 @@ fn build_typo_edges(input: &ParsedInput, edges: &mut [Vec<Edge>]) {
                             end: b,
                             kind: EdgeKind::Pair { first, second },
                             typo: true,
+                            swap: true,
                             completion: 0,
                         },
                     );
@@ -498,6 +513,7 @@ fn build_jianpin_edges(input: &ParsedInput, edges: &mut [Vec<Edge>]) {
                             end: pos + 2,
                             kind: EdgeKind::Jianpin { letter: digraph },
                             typo: false,
+                            swap: false,
                             completion: 0,
                         },
                     );
@@ -512,6 +528,7 @@ fn build_jianpin_edges(input: &ParsedInput, edges: &mut [Vec<Edge>]) {
                     end: pos + 1,
                     kind: EdgeKind::Jianpin { letter },
                     typo: false,
+                    swap: false,
                     completion: 0,
                 },
             );
