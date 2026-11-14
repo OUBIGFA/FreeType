@@ -153,7 +153,7 @@ pub struct Config {
     /// 双拼及方案：ziranma xiaohe microsoft sogou abc ziguang pinyinjiajia。
     pub shuangpin: bool,
     pub shuangpin_scheme: String,
-    /// 在输入编码下方展示双拼键位参考。
+    /// 双拼时编辑区直接显示按下的键（如 `nihc`），不展开成全拼；默认展开。
     pub shuangpin_show_keys: bool,
     /// 按错键纠错。
     pub typo_correction: bool,
@@ -172,7 +172,8 @@ pub struct Config {
     pub select_keys: String,
     /// 以词定字：`[` 上屏候选的第一个字、`]` 最后一个字。
     pub pick_char: bool,
-    /// 左右方向键用途：`candidates` 移候选，`caret` 移编辑光标。
+    /// 左右方向键用途：`candidates` 移候选；`caret` 移拼音里的光标（Home、End、Delete 同管光标，
+    /// 上下键改为选词，横排也不再用下键展开面板）。
     pub arrow_keys: String,
     /// 小键盘的点直接上屏半角「.」；打字途中按小键盘的点进入网址、邮箱输入。
     pub numpad_dot: bool,

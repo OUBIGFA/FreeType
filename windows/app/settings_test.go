@@ -869,6 +869,8 @@ func TestNewSettingsLayoutsSnapshots(t *testing.T) {
 		{"after-update-min-window", "about/更新安装后显示设置页", "", 780, 540},
 		{"about-updates-ready", "about/检查更新", "", 1000, 540},
 		{"search-results", "", "中英 空格", 1000, 720},
+		{"typing-fuzzy-groups-min-window", "typing/模糊音分组", "", 780, 540},
+		{"typing-arrow-keys", "typing/左右方向键", "", 1000, 540},
 	} {
 		s, _ := newTestSettings()
 		s.config.Autospace = false
