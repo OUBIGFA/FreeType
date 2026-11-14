@@ -34,6 +34,13 @@ Section "-FreeType preparation"
   prepared:
 SectionEnd
 
+; 完成页由 mygo 无参数启动程序；进程环境标记保证它和这里的启动使用相同选项。
+; 只设置安装器自己的环境，不写入用户或系统环境变量。
+Function FreeTypeLaunchAfterInstall
+  System::Call 'Kernel32::SetEnvironmentVariable(t "FREETYPE_INSTALL_COMPLETED", t "1")'
+  Exec '"$INSTDIR\FreeType.exe" --after-install'
+FunctionEnd
+
 !macro customInstall
   Delete "$TEMP\freetype-register.ok"
   ExecShellWait "runas" "$INSTDIR\bin\FreeTypeServer.exe" '--register-tsf "$INSTDIR\bin" --marker "$TEMP\freetype-register.ok"' SW_HIDE
@@ -49,7 +56,7 @@ SectionEnd
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "FreeType" '"$INSTDIR\FreeType.exe" --background'
   ; The verified update is complete only after all input-method components register.
   Delete "$APPDATA\FreeType\updates\pending.json"
-  Exec '"$INSTDIR\FreeType.exe" --background'
+  Call FreeTypeLaunchAfterInstall
 !macroend
 
 !macro customUnInstall

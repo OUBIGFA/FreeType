@@ -1,10 +1,11 @@
-"""Execute the real NSIS preparation section against disposable processes only."""
+"""Execute the real NSIS preparation and launch hooks with disposable processes."""
 
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 
 
@@ -33,6 +34,11 @@ class InstallerPreparationTests(unittest.TestCase):
             ' if (args.Length > 0 && args[0] == "--stop") {'
             ' System.IO.File.WriteAllText(System.IO.Path.Combine('
             ' System.AppDomain.CurrentDomain.BaseDirectory, "stop-requested.txt"), "requested"); return 0; }'
+            ' if (System.Environment.GetEnvironmentVariable("FREETYPE_INSTALL_COMPLETED") == "1") {'
+            ' string name = args.Length > 0 ? "after-install.txt" : "finish-page.txt";'
+            ' System.IO.File.WriteAllText(System.IO.Path.Combine('
+            ' System.AppDomain.CurrentDomain.BaseDirectory, name),'
+            ' "1|" + string.Join(" ", args)); return 0; }'
             ' Thread.Sleep(Timeout.Infinite); return 0; } }',
             encoding="utf-8",
         )
@@ -62,7 +68,7 @@ class InstallerPreparationTests(unittest.TestCase):
         self.processes.append(process)
         return process
 
-    def run_preparation(self):
+    def run_preparation(self, extra=""):
         installer = self.directory / "preparation.exe"
         script = self.directory / "preparation.nsi"
         script.write_text(
@@ -73,7 +79,8 @@ class InstallerPreparationTests(unittest.TestCase):
             '!insertmacro MUI_LANGUAGE "TradChinese"\n'
             '!insertmacro MUI_LANGUAGE "English"\n'
             f'!include "{INCLUDE}"\n'
-            'Section\nFileOpen $0 "$INSTDIR\\prepared.txt" w\nFileWrite $0 "ready"\nFileClose $0\nSectionEnd\n',
+            'Section\n' + extra +
+            'FileOpen $0 "$INSTDIR\\prepared.txt" w\nFileWrite $0 "ready"\nFileClose $0\nSectionEnd\n',
             encoding="utf-8-sig",
         )
         compiled = subprocess.run([str(self.compiler), "-V2", str(script)], capture_output=True, timeout=30)
@@ -96,6 +103,20 @@ class InstallerPreparationTests(unittest.TestCase):
 
     def test_fresh_install_does_not_require_running_processes(self):
         self.run_preparation()
+
+    def test_install_completion_marks_automatic_and_finish_page_launches(self):
+        shutil.copyfile(self.fixture, self.target / "FreeType.exe")
+        self.run_preparation(
+            'Call FreeTypeLaunchAfterInstall\n'
+            # mygo's finish page launches without arguments; it must inherit the marker too.
+            'ExecWait \'"$INSTDIR\\FreeType.exe"\'\n'
+        )
+        automatic = self.target / "after-install.txt"
+        deadline = time.monotonic() + 5
+        while not automatic.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertEqual(automatic.read_text(encoding="utf-8"), "1|--after-install")
+        self.assertEqual((self.target / "finish-page.txt").read_text(encoding="utf-8"), "1|")
 
 
 if __name__ == "__main__":

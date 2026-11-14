@@ -62,6 +62,7 @@ var settingsItems = []settingItem{
 	{"about/问题反馈", "问题反馈", repositoryURL + "/issues", "关于", "GitHub 问题 bug 反馈"},
 	{"about/检查更新", "检查更新", "检查已发布的 Windows 安装器，并可立即下载和更新", "软件更新", "版本 下载 安装 手动 立即更新"},
 	{"about/自动更新", "自动更新", "默认关闭。开启后，每次启动检查更新，运行期间每 24 小时检查一次；有新版本时后台下载，下次启动 FreeType 时安装", "软件更新", "后台 下载 自动 重启 升级"},
+	{"about/更新安装后显示设置页", "更新安装后显示设置页", "默认关闭。开启后，安装或更新完成时自动打开设置页", "软件更新", "窗口 启动 弹出 升级 安装完成"},
 	{"about/开源信息", "开源信息", "查看项目的第三方来源、许可和使用范围", "来源与许可", "来源 授权"},
 	{"about/词库", "词库许可", "词库和语言模型的来源与许可保存在安装目录的 data 文件夹中", "来源与许可", "LICENSE SOURCE.txt 白霜 万象"},
 	{"common/导入或导出", "导入或导出", "导出为 JSON，保留多行内容；也能导入 UTF-8 文本，一行一条。重复内容只保留一条", "批量导入、导出", ""},
@@ -128,7 +129,7 @@ func findSettings(query string) []settingItem {
 }
 
 func (s *settings) searchField(c *ui.Context) {
-	grayed(c).FillWidth().Children(func() {
+	ui.Column(c).FillWidth().Children(func() {
 		ui.SearchField(c, &s.settingQuery).Label("搜索全部设置").Placeholder("搜索设置").FillWidth().OnTextKey(func(key ui.TextKey) bool {
 			if key.Mods != 0 {
 				return false

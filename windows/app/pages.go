@@ -27,11 +27,11 @@ var pages = []struct {
 }
 
 func (s *settings) view(c *ui.Context) {
+	c.SetTheme(settingsTheme(c))
 	if s.notice != "" {
 		c.Toast(s.notice)
 		s.notice = ""
 	}
-	c.SetTheme(branded(c))
 	p := colors(c)
 	bar := c.TitleBar()
 	ui.Column(c).Fill().Background(p.page).Children(func() {
@@ -226,7 +226,7 @@ func (s *settings) candidatesPage(c *ui.Context) {
 	section(c, "外观", func() {
 		s.settingRow(c, "candidates/字体", func() {
 			family := s.config.FontFamily
-			grayed(c).Children(func() {
+			ui.Column(c).Children(func() {
 				if ui.Combobox(c, &family, s.fontList(fontNames)).Label("字体").Width(240).Changed() && family != "" {
 					s.config.FontFamily = family
 					changed = true
@@ -239,7 +239,7 @@ func (s *settings) candidatesPage(c *ui.Context) {
 		})
 		s.settingRow(c, "candidates/字号", func() {
 			size := float64(s.config.FontSize)
-			grayed(c).Children(func() {
+			ui.Column(c).Children(func() {
 				if ui.NumberInput(c, &size, 12, 36, 1).Label("字号").Width(120).Changed() {
 					s.config.FontSize = int(size)
 					changed = true
@@ -363,7 +363,7 @@ func (s *settings) typingPage(c *ui.Context) {
 				ui.Row(c).Wrap().GapX(18).GapY(8).Padding(12, 18, 14, 46).Background(colors(c).subtle).Children(func() {
 					for _, rule := range fuzzyRules {
 						on := s.config.FuzzyGroups&rule.Bit != 0
-						if ui.Checkbox(c, &on, rule.Label).Width(120).Changed() {
+						if checkbox(c, &on, rule.Label).Width(120).Changed() {
 							if on {
 								s.config.FuzzyGroups |= rule.Bit
 							} else {
@@ -385,7 +385,7 @@ func (s *settings) typingPage(c *ui.Context) {
 				label string
 			}{{pageKeyMinus, "- ="}, {pageKeyBracket, "[ ]"}, {pageKeyComma, ", ."}, {pageKeyTab, "Tab"}} {
 				on := s.config.PageKeys&k.bit != 0
-				if ui.Checkbox(c, &on, k.label).Changed() {
+				if checkbox(c, &on, k.label).Changed() {
 					if on {
 						s.config.PageKeys |= k.bit
 					} else {
@@ -558,12 +558,11 @@ func (s *settings) dictsPage(c *ui.Context) {
 }
 
 func (s *settings) phrasesPage(c *ui.Context) {
-	pageHeader(c, "快捷短语", "启用「快捷短语候选」后，输入完整编码即可选用短语。编码只使用英文字母；短语也会显示在工具栏的「常用语」中。")
+	pageHeader(c, "快捷短语", "启用「快捷短语候选」后，输入完整编码即可选用短语。编码只使用英文字母。")
 	section(c, "添加", func() {
 		s.settingBlock(c, "phrases/添加快捷短语", func() {
 			ui.Column(c).Padding(16, 18).Gap(12).Children(func() {
-				// 表单里只有输入框，整个用深灰强调色
-				grayed(c).Children(func() {
+				ui.Column(c).Children(func() {
 					ui.Form(c, func() {
 						ui.Field(c, "编码", func() { ui.TextInput(c, &s.newCode).Placeholder("例如 dz").Width(220) })
 						ui.Field(c, "短语", func() { ui.TextArea(c, &s.newText).Height(72) }).Error(s.formError)
@@ -581,7 +580,7 @@ func (s *settings) phrasesPage(c *ui.Context) {
 	})
 	section(c, "批量导入、导出", func() {
 		s.settingRow(c, "phrases/导入或导出", func() {
-			ui.Checkbox(c, &s.replacePhrases, "替换现有的")
+			checkbox(c, &s.replacePhrases, "替换现有的")
 			if ui.Button(c, "导入…").Clicked() {
 				s.importPhrases()
 			}
@@ -649,10 +648,10 @@ func (s *settings) learnedPage(c *ui.Context) {
 			ui.Column(c).Padding(16, 18).Gap(10).Children(func() {
 				ui.Text(c, "中文词的拼音可留空，FreeType 会自动注音；多音字请填写拼音。英文词默认使用原词的小写作为输入码。中英混输词请填写实际输入码，如 datag → 打 tag。").FontSize(12.5).TextColor(colors(c).muted).Wrap()
 				ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-					grayed(c).Children(func() {
+					ui.Column(c).Children(func() {
 						ui.TextInput(c, &s.newWord).Placeholder("词语，例如 霜频阁").Label("词语").Width(200)
 					})
-					grayed(c).Grow(1).Children(func() {
+					ui.Column(c).Grow(1).Children(func() {
 						ui.TextInput(c, &s.newPinyin).Placeholder("如 shuang pin ge 或 datag").Label("拼音或输入码").FillWidth()
 					})
 					if ui.PrimaryButton(c, "添加").Label("添加词").Clicked() {

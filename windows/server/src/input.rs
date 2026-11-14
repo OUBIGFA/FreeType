@@ -41,8 +41,8 @@ pub struct Env<'a> {
     pub config: &'a Config,
     pub mode: Mode,
     pub engine: Option<&'a Engine>,
-    /// 常用语：(编码, 上屏的文字)。
-    pub phrases: &'a [(String, String)],
+    /// 工具栏常用语的完整内容，不包含按编码匹配的快捷短语。
+    pub phrases: &'a [String],
     pub recent_emoji: &'a [String],
 }
 

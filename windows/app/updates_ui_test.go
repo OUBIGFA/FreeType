@@ -53,3 +53,29 @@ func TestAboutUpdateControlsSaveDefaultOffAndUseRealActions(t *testing.T) {
 		t.Fatal("检查或下载期间必须防止重复操作")
 	}
 }
+
+func TestShowSettingsAfterUpdateSwitchPersistsWithoutEnablingAutomaticUpdates(t *testing.T) {
+	s, backend := newTestSettings()
+	tt := open(t, s, "关于")
+	if s.config.ShowSettingsAfterUpdate {
+		t.Fatal("安装后显示设置页必须默认关闭")
+	}
+	for _, want := range []bool{true, false} {
+		if err := tt.Click("更新安装后显示设置页"); err != nil {
+			t.Fatal(err)
+		}
+		data, err := json.Marshal(backend.last("set_config")["config"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		var saved map[string]any
+		if err := json.Unmarshal(data, &saved); err != nil {
+			t.Fatal(err)
+		}
+		if saved["show_settings_after_update"] != want || saved["auto_update"] != false {
+			t.Fatalf("显示设置页的开关应单独保存：%s", data)
+		}
+		s.refresh()
+		tt.Frame()
+	}
+}

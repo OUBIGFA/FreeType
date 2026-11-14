@@ -48,13 +48,14 @@ type Config struct {
 	HotkeyTraditional string `json:"hotkey_traditional"`
 	HotkeyMode        string `json:"hotkey_mode"`
 
-	TrayIcon          bool   `json:"tray_icon"`
-	StatusBar         bool   `json:"status_bar"`
-	StatusBarAutohide bool   `json:"status_bar_autohide"`
-	HintOnToggle      bool   `json:"hint_on_toggle"`
-	HintOnFocus       bool   `json:"hint_on_focus"`
-	HintPosition      string `json:"hint_position"`
-	AutoUpdate        bool   `json:"auto_update"`
+	TrayIcon                bool   `json:"tray_icon"`
+	StatusBar               bool   `json:"status_bar"`
+	StatusBarAutohide       bool   `json:"status_bar_autohide"`
+	HintOnToggle            bool   `json:"hint_on_toggle"`
+	HintOnFocus             bool   `json:"hint_on_focus"`
+	HintPosition            string `json:"hint_position"`
+	AutoUpdate              bool   `json:"auto_update"`
+	ShowSettingsAfterUpdate bool   `json:"show_settings_after_update"`
 }
 
 // defaultConfig 和服务进程的默认值一样（连不上服务进程时界面先按它画）。

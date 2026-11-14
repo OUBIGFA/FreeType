@@ -4,7 +4,7 @@
 //! |---|---|---|
 //! | 工具栏 | 剪贴板、常用语、符号、表情四项 | 一行 |
 //! | 剪贴板 | 最近复制的文字，最新的在前（设置里打开才记） | 一行一条 |
-//! | 常用语 | 独立常用语与快捷短语，按内容去重 | 一行一条 |
+//! | 常用语 | 设置中单独保存的常用语 | 一行一条 |
 //! | 符号、表情 | 全部内置符号 / emoji；打拼音、英文搜 | 网格 |
 //!
 //! 数字选（网格里选光标所在行的第几个），方向键移光标，空格、回车选光标处的，
@@ -38,8 +38,8 @@ pub enum Page {
 /// 面板要用的数据（每次重算时由宿主给）。
 pub struct Sources<'a> {
     pub engine: Option<&'a Engine>,
-    /// 常用语：(编码, 上屏的文字)。
-    pub phrases: &'a [(String, String)],
+    /// 设置中保存的常用语，保留完整的多行内容用于上屏。
+    pub phrases: &'a [String],
     /// 最近用过的 emoji，最近的在前。
     pub recent: &'a [String],
     /// 剪贴板历史打开了没有（没打开时列表为空，标题说明怎么打开）。
@@ -142,14 +142,7 @@ impl Tool {
         self.items = match self.page {
             Page::Menu => MENU.iter().map(|m| item(m)).collect(),
             Page::Clipboard => wowtype_core::clipboard::history().iter().map(|t| item(t)).collect(),
-            Page::Phrases => sources
-                .phrases
-                .iter()
-                .map(|(code, text)| Item {
-                    shown: if code.is_empty() { line(text) } else { format!("{}  {code}", line(text)) },
-                    commit: text.clone(),
-                })
-                .collect(),
+            Page::Phrases => sources.phrases.iter().map(|text| item(text)).collect(),
             Page::Symbols if self.query.is_empty() => {
                 wowtype_core::symbols::SYMBOLS.iter().map(|s| item(s.text)).collect()
             }
@@ -401,7 +394,7 @@ mod tests {
         }
     }
 
-    fn sources<'a>(phrases: &'a [(String, String)], recent: &'a [String]) -> Sources<'a> {
+    fn sources<'a>(phrases: &'a [String], recent: &'a [String]) -> Sources<'a> {
         Sources {
             engine: None,
             phrases,
@@ -412,7 +405,7 @@ mod tests {
 
     #[test]
     fn menu_opens_pages_and_backspace_returns() {
-        let phrases = vec![("dz".to_string(), "北京市\n海淀区".to_string())];
+        let phrases = vec!["北京市\n海淀区".to_string()];
         let s = sources(&phrases, &[]);
         let mut tool = Tool::open(Page::Menu, &s);
         let view = tool.view();
@@ -421,7 +414,7 @@ mod tests {
         assert_eq!(tool.key(&press('2' as u32), &s), Outcome::Stay { refresh: true });
         assert_eq!(tool.page, Page::Phrases);
         let view = tool.view();
-        assert_eq!(view.items, vec!["北京市⏎海淀区  dz"]);
+        assert_eq!(view.items, vec!["北京市⏎海淀区"]);
         assert_eq!(view.panel, Panel::List);
         assert_eq!(
             tool.key(&press(0x20), &s),

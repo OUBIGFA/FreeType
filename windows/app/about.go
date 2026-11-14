@@ -63,11 +63,14 @@ func (s *settings) aboutPage(c *ui.Context) {
 			}
 		})
 		if s.loaded {
-			if s.settingSwitch(c, "about/自动更新", false, &s.config.AutoUpdate) {
+			changed := s.settingSwitch(c, "about/自动更新", false, &s.config.AutoUpdate)
+			changed = s.settingSwitch(c, "about/更新安装后显示设置页", false, &s.config.ShowSettingsAfterUpdate) || changed
+			if changed {
 				s.saveConfig()
 			}
 		} else {
 			s.settingRowValue(c, "about/自动更新", "正在读取更新设置…", nil)
+			s.settingRowValue(c, "about/更新安装后显示设置页", "正在读取更新设置…", nil)
 		}
 	})
 	section(c, "数据与日志", func() {

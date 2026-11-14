@@ -834,6 +834,7 @@ func TestNewSettingsLayoutsSnapshots(t *testing.T) {
 		{"search-hidden-option", "typing/汉字和字母之间", "", 1000, 540},
 		{"mixed-original-style", "typing/中英文之间自动加空格", "", 1000, 600},
 		{"about-min-window", "about/自动更新", "", 780, 540},
+		{"after-update-min-window", "about/更新安装后显示设置页", "", 780, 540},
 		{"about-updates-ready", "about/检查更新", "", 1000, 540},
 		{"search-results", "", "中英 空格", 1000, 720},
 	} {

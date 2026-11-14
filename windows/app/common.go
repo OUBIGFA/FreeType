@@ -9,11 +9,11 @@ import (
 
 // 常用语独立于快捷短语：没有编码，只从 v + 空格的工具栏中选择。
 func (s *settings) commonPage(c *ui.Context) {
-	pageHeader(c, "常用语", "常用语不需要编码。启用工具栏后，在全拼状态下按 v + 空格，再选择「常用语」。快捷短语也会显示在该列表中。")
+	pageHeader(c, "常用语", "常用语不需要编码。启用工具栏后，在全拼状态下按 v + 空格，再选择「常用语」。")
 	section(c, "添加", func() {
 		s.settingBlock(c, "common/添加常用语", func() {
 			ui.Column(c).Padding(16, 18).Gap(12).Children(func() {
-				grayed(c).Children(func() {
+				ui.Column(c).Children(func() {
 					ui.TextArea(c, &s.newCommon).Label("常用语内容").Placeholder("输入常用语，支持多行").Height(80)
 				})
 				if s.commonError != "" {
@@ -27,7 +27,7 @@ func (s *settings) commonPage(c *ui.Context) {
 	})
 	section(c, "批量导入、导出", func() {
 		s.settingRow(c, "common/导入或导出", func() {
-			ui.Checkbox(c, &s.replaceCommon, "替换现有的")
+			checkbox(c, &s.replaceCommon, "替换现有的")
 			if ui.Button(c, "导入…").Clicked() {
 				s.importCommonPhrases()
 			}

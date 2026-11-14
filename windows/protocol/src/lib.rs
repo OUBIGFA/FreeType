@@ -226,6 +226,8 @@ pub struct Config {
     pub hint_position: String,
     /// 开启后由托盘程序后台下载更新，下一次启动时交给完整安装器；默认关闭。
     pub auto_update: bool,
+    /// 安装或更新完成后自动打开设置页；默认关闭，主动打开设置不受影响。
+    pub show_settings_after_update: bool,
 }
 
 impl Default for Config {
@@ -274,6 +276,7 @@ impl Default for Config {
             hint_on_focus: false,
             hint_position: "top-left".into(),
             auto_update: false,
+            show_settings_after_update: false,
         }
     }
 }
@@ -712,6 +715,15 @@ mod tests {
         config.auto_update = true;
         let restored: Config = serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
         assert!(restored.auto_update);
+    }
+
+    #[test]
+    fn showing_settings_after_update_defaults_off_and_round_trips() {
+        let old: Config = serde_json::from_str("{}").unwrap();
+        assert_eq!(serde_json::to_value(old).unwrap()["show_settings_after_update"], false);
+        let enabled: Config = serde_json::from_str(r#"{"show_settings_after_update":true}"#).unwrap();
+        let restored: Config = serde_json::from_str(&serde_json::to_string(&enabled).unwrap()).unwrap();
+        assert_eq!(serde_json::to_value(restored).unwrap()["show_settings_after_update"], true);
     }
 
     #[test]

@@ -1,7 +1,8 @@
 // FreeType.exe：托盘图标和设置窗口。
 //
 // 开机时以 --background 启动，只放托盘图标并确保输入法服务（bin\FreeTypeServer.exe）在跑；
-// 从开始菜单打开时显示设置窗口。再次启动会把设置窗口带到前面。
+// 从开始菜单打开时显示设置窗口，再次主动打开会把设置窗口带到前面；
+// 安装完成后的启动按用户设置决定是否显示窗口，默认不显示。
 package main
 
 import (
@@ -166,7 +167,12 @@ func (a *app) makeTray() {
 }
 
 func main() {
-	background := slices.Contains(os.Args[1:], "--background")
+	args, err := consumeInstallerLaunch(os.Args[1:])
+	if err != nil {
+		log.Fatal(err)
+	}
+	os.Args = append(os.Args[:1], args...)
+	afterInstall := slices.Contains(args, "--after-install")
 	if !mygo.App.RequestSingleInstanceLock() {
 		return
 	}
@@ -175,7 +181,7 @@ func main() {
 		log.Fatal(err)
 	}
 	a := &app{client: client}
-	mygo.App.OnSecondInstance(func(args []string, workingDir string) { a.openSettings() })
+	mygo.App.OnSecondInstance(func(args []string, workingDir string) { a.handleLaunch(args) })
 	// 关掉设置窗口后托盘图标还在
 	mygo.App.OnWindowAllClosed(func() {})
 	mygo.App.WhenReady(func() {
@@ -204,6 +210,10 @@ func main() {
 				log.Println(err)
 				return
 			}
+			// 安装后先等服务可读，再决定是否创建设置窗口，默认关闭时不会闪现。
+			if afterInstall {
+				a.handleLaunch(args)
+			}
 			config, err := a.client.Call(op("get_config"))
 			if err != nil || config.Config == nil || a.updates == nil {
 				return
@@ -229,8 +239,8 @@ func main() {
 				mygo.RunOnMain(func() { a.showTray(show) })
 			}
 		}()
-		if !background {
-			a.openSettings()
+		if !afterInstall {
+			a.handleLaunch(args)
 		}
 	})
 	if err := mygo.App.Run(); err != nil {

@@ -70,8 +70,8 @@ pub struct Host {
     mode: Mode,
     /// 按应用记的中英文状态（mode_scope 是 app 时用）。
     app_modes: HashMap<String, Mode>,
-    /// 常用语（工具栏用）：(编码, 文字)。
-    phrases: Vec<(String, String)>,
+    /// 工具栏只读取独立常用语；快捷短语由引擎按编码匹配。
+    phrases: Vec<String>,
     recent_emoji: Vec<String>,
     /// 正在用的输入框（状态栏按它显示）。
     focused: Option<ClientId>,
@@ -258,20 +258,12 @@ impl Host {
 
     fn load_phrases(&mut self) {
         self.phrases = match self.store.load_common_phrases() {
-            Ok(phrases) => phrases.into_iter().map(|text| (String::new(), text)).collect(),
+            Ok(phrases) => phrases,
             Err(error) => {
                 crate::log(&error);
                 Vec::new()
             }
         };
-        for phrase in self.store
-            .load_quick_phrases()
-            .into_iter()
-        {
-            if !self.phrases.iter().any(|(_, text)| text == &phrase.text) {
-                self.phrases.push((phrase.code, phrase.text));
-            }
-        }
     }
 
     /// 快捷短语、导入的词库交给引擎（不用 &mut）。

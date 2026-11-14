@@ -587,12 +587,8 @@ fn v_space_opens_toolbar_and_phrases_commit() {
     let mut host = host("toolbar");
     host.handle(
         1,
-        Request::SetQuickPhrases {
-            phrases: vec![freetype_protocol::QuickPhrase {
-                code: "dz".into(),
-                text: "海淀区".into(),
-                weight: 10,
-            }],
+        Request::SetCommonPhrases {
+            phrases: vec!["海淀区".into()],
         },
     );
     typing(&mut host, "v");
@@ -603,7 +599,7 @@ fn v_space_opens_toolbar_and_phrases_commit() {
     assert!(!frame.forgettable);
     let frame = press(&mut host, '2' as u32);
     assert_eq!(frame.panel, Panel::List);
-    assert_eq!(frame.candidates[0], "海淀区  dz");
+    assert_eq!(frame.candidates, vec!["海淀区"]);
     let frame = press(&mut host, '1' as u32);
     assert_eq!(frame.commit.as_deref(), Some("海淀区"));
     assert!(frame.title.is_none() && frame.candidates.is_empty());
@@ -645,7 +641,7 @@ fn common_phrases_round_trip_preserves_multiline_and_merges_without_duplicates()
 }
 
 #[test]
-fn common_phrases_toolbar_uses_new_list_and_keeps_existing_quick_phrases() {
+fn common_phrases_toolbar_excludes_quick_phrases_while_codes_still_work() {
     let mut host = host("common-toolbar");
     assert!(host.handle(1, settings_request(serde_json::json!({
         "op": "set_common_phrases", "phrases": ["欢迎FreeType第5版"],
@@ -656,8 +652,25 @@ fn common_phrases_toolbar_uses_new_list_and_keeps_existing_quick_phrases() {
     typing(&mut host, "v");
     press(&mut host, 0x20);
     let frame = press(&mut host, '2' as u32);
-    assert_eq!(frame.candidates, vec!["欢迎FreeType第5版", "海淀区  dz"]);
+    assert_eq!(frame.candidates, vec!["欢迎FreeType第5版"]);
     assert_eq!(press(&mut host, '1' as u32).commit.as_deref(), Some("欢迎 FreeType 第 5 版"));
+    typing(&mut host, "dz");
+    assert_eq!(press(&mut host, 0x20).commit.as_deref(), Some("海淀区"));
+    cleanup(&host);
+}
+
+#[test]
+fn empty_common_phrases_toolbar_does_not_fall_back_to_quick_phrases() {
+    let mut host = host("empty-common-toolbar");
+    assert!(host.handle(1, Request::SetQuickPhrases {
+        phrases: vec![freetype_protocol::QuickPhrase { code: "dz".into(), text: "海淀区".into(), weight: 10 }],
+    }).ok);
+    typing(&mut host, "v");
+    press(&mut host, 0x20);
+    let frame = press(&mut host, '2' as u32);
+    assert!(frame.candidates.is_empty(), "没有常用语时不能用快捷短语填充：{:?}", frame.candidates);
+    assert_eq!(frame.title.as_deref(), Some("常用语 · 在设置「常用语」里添加"));
+    press(&mut host, keysym::ESCAPE);
     typing(&mut host, "dz");
     assert_eq!(press(&mut host, 0x20).commit.as_deref(), Some("海淀区"));
     cleanup(&host);
@@ -710,6 +723,7 @@ fn settings_backup_restores_all_data_including_unsaved_learning_and_custom_lexic
         c.autospace_digits = false;
         c.tray_icon = false;
         c.auto_update = true;
+        c.show_settings_after_update = true;
         c.lexicon = main_lexicon.to_string_lossy().into();
         c.default_mode = DefaultMode::Global;
     });
@@ -736,6 +750,7 @@ fn settings_backup_restores_all_data_including_unsaved_learning_and_custom_lexic
     assert_eq!(data["version"], 1);
     assert_eq!(data["config"]["lexicon"], "", "备份不依赖来源机器的路径");
     assert_eq!(data["config"]["auto_update"], true);
+    assert_eq!(data["config"]["show_settings_after_update"], true);
 
     let mut target = learning_host("settings-target");
     target.engine.as_ref().unwrap().record_selection_with_pinyin("旧词", Some("jiu ci"));
@@ -749,6 +764,7 @@ fn settings_backup_restores_all_data_including_unsaved_learning_and_custom_lexic
     assert_eq!(target.config.page_size, 9);
     assert!(!target.config.autospace_digits && !target.config.tray_icon);
     assert!(target.config.auto_update, "全部设置备份也应恢复自动更新开关");
+    assert!(target.config.show_settings_after_update, "全部设置备份也应恢复安装后显示设置页的开关");
     assert_eq!(target.mode, Mode::English);
     assert_eq!(target.store.list_quick_phrases()[0].text, "第一行\n第二行");
     assert_eq!(target.store.load_common_phrases().unwrap(), vec!["常用FreeType"]);
