@@ -16,8 +16,6 @@ A local Windows Chinese input method. Your input stays on your computer.
 
 FreeType is a local Chinese input method. The input engine, dictionaries, and learning data run on your computer. Normal Chinese input needs no network. FreeType does not send the text that you type to a server.
 
-FreeType is in pre-release validation and has no public release yet. See the [Windows validation scope](docs/WINDOWS.md#验证范围) for tested and untested behavior.
-
 ## Software preview
 
 <table>

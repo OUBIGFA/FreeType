@@ -68,4 +68,4 @@ NSIS `COPYING` 区分通用代码的 zlib/libpng 许可、bzip2 压缩模块的 
 
 升级依赖、替换图标、改动词库或修改上游代码后，重新运行统一构建入口。构建从锁定依赖提取原文；缺许可文件、缺 MPL 对应源码、数据修订不匹配或摘要不符时停止，不能复用另一份安装器的声明。
 
-项目来源登记为 `https://github.com/OUBIGFA/FreeType/tree/main/third_party`。公开发布前核对本次包的许可清单没有未解决项，并完成隔离环境安装验收；本声明本身不是安装验收结论。
+项目来源登记为 `https://github.com/OUBIGFA/FreeType/tree/main/third_party`。公开发布前核对本次包的许可清单没有未解决项。
