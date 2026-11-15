@@ -5,6 +5,7 @@
 These documents describe the WowType core, the C ABI, and the FreeType Windows shell. The Linux and macOS installation steps and feature states are technical references. They are not FreeType platform commitments.
 
 - [Windows version](WINDOWS.md): Windows structure, input behavior, dictionary import, data paths, build, and verification scope.
+- [Local Windows testing](WINDOWS-ACCEPTANCE.md): optional installation, upgrade, uninstall, and application input tests. These tests are not delivery or release prerequisites.
 - [C ABI](ABI.md): the interface between platform shells and the Rust core.
 - [Porting boundaries](PORTING.md): responsibilities of the input session and platform integration.
 - [Engine](ENGINE.md): pinyin, candidates, and ranking.
