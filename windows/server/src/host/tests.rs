@@ -491,6 +491,8 @@ fn emoji_shortcut_toggles_the_panel_like_upstream() {
 fn email_completion_page_keys_match_the_visible_page_arrows() {
     let mut host = host("email-page-keys");
     let first = typing(&mut host, "abc@");
+    let at_top = press(&mut host, keysym::LEFT);
+    assert_eq!(at_top.cursor, Some(0), "邮箱补全开头按左键应停在第一项");
     assert!(first.has_next);
     let next = press(&mut host, keysym::PAGE_DOWN);
     assert!(next.has_prev, "邮箱候选显示下一页按钮时 PgDn 也必须翻页");
@@ -1374,5 +1376,36 @@ fn traditional_phrase_conversion_and_learning() {
     assert!(words.iter().any(|w| w.word == "什么"), "{words:?}");
     let again = typing(&mut host, "shenme");
     assert_eq!(again.candidates.first().map(String::as_str), Some("什麼"));
+    cleanup(&host);
+}
+
+#[test]
+fn add_user_word_accepts_tones_and_uppercase() {
+    let mut host = host("tones");
+    for (word, raw_pinyin, want_pinyin) in [
+        ("倪豪", "Ni Hǎo", "ni hao"),
+        ("百色", "bai2se4", "bai se"),
+        ("女侠", "lǜ xiá", "lv xia"),
+        ("略小", "lu:4xiao3", "lv xiao"),
+    ] {
+        let res = host.handle(
+            1,
+            Request::AddUserWord {
+                word: word.into(),
+                pinyin: raw_pinyin.into(),
+            },
+        );
+        assert!(res.ok, "{raw_pinyin}: {:?}", res.error);
+        assert!(
+            res.user_words
+                .unwrap()
+                .iter()
+                .any(|w| w.word == word && w.pinyin == want_pinyin),
+            "{word} -> {want_pinyin}"
+        );
+    }
+    assert_eq!(typing(&mut host, "baixiao").candidates.is_empty(), false);
+    press(&mut host, keysym::ESCAPE);
+    assert!(typing(&mut host, "lvxia").candidates.iter().any(|c| c == "女侠"));
     cleanup(&host);
 }

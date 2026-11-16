@@ -271,7 +271,7 @@ fn parse_text_line(line: &str) -> Result<(String, Option<String>, u32), &'static
             word = Some(col.to_string());
         } else if col.bytes().all(|b| b.is_ascii_digit() || b == b'.') && col.bytes().any(|b| b.is_ascii_digit()) {
             weight = col.parse::<f64>().map(|f| f.clamp(1.0, f64::from(u32::MAX)) as u32).unwrap_or(DEFAULT_WEIGHT);
-        } else if col.is_ascii() {
+        } else if col.is_ascii() || msime::normalize_pinyin(col).is_some() {
             codes.push(col);
         }
     }
@@ -534,5 +534,26 @@ mod tests {
         assert_eq!((got.items[1].code.as_str(), got.items[1].text.as_str(), got.items[1].weight), ("sh", "上海市", 5));
         let msime_form = "bj\t北京市\n";
         assert_eq!(parse_quick_phrases(msime_form.as_bytes()).items[0].text, "北京市");
+    }
+
+    #[test]
+    fn text_dictionary_normalizes_tones_and_uppercase() {
+        let got = read("你好\tNi Hǎo\t300\n白色 bai2se4 120\n绿色\tlǜ\tsè\n'nǚ'xiá 女侠\n".as_bytes());
+        assert!(got.parsed.errors.is_empty(), "{:?}", got.parsed.errors);
+        let items: Vec<(&str, &str, u32)> = got
+            .parsed
+            .items
+            .iter()
+            .map(|e| (e.word.as_str(), e.pinyin.as_str(), e.weight))
+            .collect();
+        assert_eq!(
+            items,
+            vec![
+                ("你好", "ni hao", 300),
+                ("白色", "bai se", 120),
+                ("绿色", "lv se", DEFAULT_WEIGHT),
+                ("女侠", "nv xia", DEFAULT_WEIGHT),
+            ]
+        );
     }
 }

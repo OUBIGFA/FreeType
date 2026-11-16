@@ -96,12 +96,13 @@ impl Raw {
         all.get(self.cursor.min(all.len() - 1)).cloned().unwrap_or_default()
     }
 
+    /// 到了全部候选的两头就停住，不绕到另一头（和主候选列表一致）。
     pub fn move_cursor(&mut self, prev: bool) {
         let n = self.candidates().len();
         self.cursor = if prev {
-            (self.cursor + n - 1) % n
+            self.cursor.saturating_sub(1)
         } else {
-            (self.cursor + 1) % n
+            (self.cursor + 1).min(n.saturating_sub(1))
         };
     }
 }
@@ -172,12 +173,16 @@ mod tests {
     }
 
     #[test]
-    fn cursor_wraps_and_resets() {
+    fn cursor_stops_at_ends_and_resets() {
         let mut raw = Raw::new("x@");
         raw.move_cursor(true);
+        assert_eq!(raw.current(), "x@", "开头往前按应停在第一项");
+        for _ in 0..EMAIL_DOMAINS.len() + 2 {
+            raw.move_cursor(false);
+        }
         assert_eq!(raw.current(), format!("x@{}", EMAIL_DOMAINS[EMAIL_DOMAINS.len() - 1]));
-        raw.move_cursor(false);
-        assert_eq!(raw.current(), "x@");
+        raw.move_cursor(true);
+        assert_eq!(raw.current(), format!("x@{}", EMAIL_DOMAINS[EMAIL_DOMAINS.len() - 2]));
         raw.push('q');
         assert_eq!(raw.cursor, 0);
         assert!(raw.pop());

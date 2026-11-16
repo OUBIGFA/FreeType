@@ -10,8 +10,6 @@
 //!
 //! 文件开头的 UTF-8 BOM 和 Windows 换行都能读。
 
-use crate::lexicon::{parse_pinyin_keys, split_syllables};
-
 /// 快捷短语没写权重时的默认值（和水杉一样）。
 pub const QUICK_PHRASE_DEFAULT_WEIGHT: u32 = 10;
 /// 词库没写权重时给的频次：比常用词低、比生僻词高。
@@ -74,19 +72,10 @@ fn fields(line: &str) -> Vec<&str> {
     line.split('\t').map(|f| f.trim_matches(' ')).collect()
 }
 
-/// 编码写法统一成「空格分音节」：ni'hao、ni hao、nihao、lü 都行。不是拼音返回 None。
+/// 编码写法统一成「空格分音节」：ni'hao、ni hao、nihao、Ni Hǎo、ni3hao3、lü、lu: 都行。
+/// 交给核心 [`crate::lexicon::normalize_pinyin`] 统一规范；不是有效拼音返回 None。
 pub fn normalize_pinyin(code: &str) -> Option<String> {
-    let code = code.to_lowercase().replace('ü', "v");
-    let mut parts = Vec::new();
-    for token in code.split([' ', '\'', '\t']).filter(|t| !t.is_empty()) {
-        if parse_pinyin_keys(token).is_ok() {
-            parts.push(token.to_string());
-        } else {
-            parts.push(split_syllables(token)?);
-        }
-    }
-    let pinyin = parts.join(" ");
-    (!pinyin.is_empty() && parse_pinyin_keys(&pinyin).is_ok()).then_some(pinyin)
+    crate::lexicon::normalize_pinyin(code)
 }
 
 fn parse_weight(text: Option<&&str>, default: u32) -> Result<u32, &'static str> {
@@ -329,6 +318,15 @@ mod tests {
         let text = format_dictionary(&parsed.items);
         assert_eq!(text, "你好\tni'hao\t300\n");
         assert_eq!(parse_dictionary(&text).items, parsed.items);
+    }
+
+    #[test]
+    fn dictionary_accepts_tones_and_uppercase() {
+        let text = "你好\tNi Hǎo\t300\n白色\tbai2se4\n绿色\tlǜ sè\n女侠\tlu:4xia2\n";
+        let parsed = parse_dictionary(text);
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let pinyins: Vec<&str> = parsed.items.iter().map(|e| e.pinyin.as_str()).collect();
+        assert_eq!(pinyins, vec!["ni hao", "bai se", "lv se", "lv xia"]);
     }
 
     #[test]
