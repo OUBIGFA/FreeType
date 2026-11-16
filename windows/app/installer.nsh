@@ -42,9 +42,28 @@ LangString FT_RESTORE_FAILED ${LANG_SIMPCHINESE} "输入法组件未确认注销
 LangString FT_RESTORE_FAILED ${LANG_TRADCHINESE} "輸入法元件尚未確認取消註冊，且無法還原目前使用者的輸入法清單。解除安裝已停止，程式、啟動項目和使用者資料保留。請重新執行安裝程式修復後再解除安裝。"
 LangString FT_RESTORE_FAILED ${LANG_ENGLISH} "Input method removal was not confirmed, and FreeType could not restore the user's input method entry. Uninstall stopped; the program, startup entry and user data are kept. Run the installer to repair it before uninstalling again."
 
+; 与已发布服务的 pipe::single_instance 使用同一个名字。保留一个句柄即可让
+; 新旧服务的 CreateMutex 都看到 ERROR_ALREADY_EXISTS；不等待/占有互斥体，
+; 避免等待仍在运行的服务退出。测试编译时覆盖名字，绝不占用用户的真实实例。
+!ifndef FREETYPE_SERVER_MUTEX
+  !define FREETYPE_SERVER_MUTEX "Local\FreeType.Server"
+!endif
+Var FreeTypeServerGuard
+
 ; 安装和卸载共用按安装路径检查的停止步骤，不按进程名结束其他实例。
 !macro FreeTypePrepareFunction Prefix
 Function ${Prefix}FreeTypePrepare
+  ; 必须先保留服务锁再停止进程，消除旧 DLL 在停止与复制之间重新拉起服务的空隙。
+  StrCmp $FreeTypeServerGuard "" 0 guarded
+  System::Call 'kernel32::CreateMutexW(p 0, i 0, w "${FREETYPE_SERVER_MUTEX}") p .r0'
+  StrCmp $0 0 guard_failed
+  StrCpy $FreeTypeServerGuard $0
+  Goto guarded
+  guard_failed:
+    MessageBox MB_ICONSTOP|MB_OK "$(FT_STOP_FAILED)" /SD IDOK
+    SetErrorLevel 2
+    Quit
+  guarded:
   InitPluginsDir
   SetOutPath "$PLUGINSDIR"
   File /oname=prepare-install.ps1 "${__FILEDIR__}\prepare-install.ps1"
@@ -85,6 +104,12 @@ FunctionEnd
 ; 完成页由 mygo 无参数启动程序；进程环境标记保证它和这里的启动使用相同选项。
 ; 只设置安装器自己的环境，不写入用户或系统环境变量。
 Function FreeTypeLaunchAfterInstall
+  ; customInstall 到这里时，文件、两种架构的组件注册和用户启用都已完成。
+  ; 用现有服务锁兼容旧 DLL；退出/取消时系统也会自动回收句柄，不留持久阻断文件。
+  StrCmp $FreeTypeServerGuard "" released
+  System::Call 'kernel32::CloseHandle(p $FreeTypeServerGuard)'
+  StrCpy $FreeTypeServerGuard ""
+  released:
   System::Call 'Kernel32::SetEnvironmentVariable(t "FREETYPE_INSTALL_COMPLETED", t "1")'
   Exec '"$INSTDIR\FreeType.exe" --after-install'
 FunctionEnd

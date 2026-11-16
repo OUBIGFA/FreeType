@@ -63,6 +63,9 @@ class InstallerPreparationTests(unittest.TestCase):
         self.target = self.directory / "FreeType 安装 & target"
         self.target.mkdir()
         self.processes = []
+        # Real preparation now holds the server mutex across the entire install.
+        # Each disposable NSIS installer must use a private name, never the user's.
+        self.guard_define = f'!define FREETYPE_SERVER_MUTEX "Local\\FreeType.Test-{self.directory.name}"\n'
 
     def tearDown(self):
         for process in self.processes:
@@ -87,7 +90,7 @@ class InstallerPreparationTests(unittest.TestCase):
             '!insertmacro MUI_LANGUAGE "SimpChinese"\n'
             '!insertmacro MUI_LANGUAGE "TradChinese"\n'
             '!insertmacro MUI_LANGUAGE "English"\n'
-            f'!include "{INCLUDE}"\n'
+            + self.guard_define + f'!include "{INCLUDE}"\n'
             'Section\n' + extra +
             'FileOpen $0 "$INSTDIR\\prepared.txt" w\nFileWrite $0 "ready"\nFileClose $0\nSectionEnd\n',
             encoding="utf-8-sig",
@@ -143,7 +146,7 @@ class InstallerPreparationTests(unittest.TestCase):
             '!insertmacro MUI_LANGUAGE "SimpChinese"\n'
             '!insertmacro MUI_LANGUAGE "TradChinese"\n'
             '!insertmacro MUI_LANGUAGE "English"\n'
-            f'!include "{INCLUDE}"\n'
+            + self.guard_define + f'!include "{INCLUDE}"\n'
             f'Section\nWriteUninstaller "{uninstaller}"\nSectionEnd\n'
             'Section "Uninstall"\nCall un.FreeTypePrepare\n'
             'FileOpen $0 "$INSTDIR\\uninstall-prepared.txt" w\nFileWrite $0 "ready"\nFileClose $0\nSectionEnd\n',
@@ -217,7 +220,7 @@ class InstallerPreparationTests(unittest.TestCase):
             '!insertmacro MUI_LANGUAGE "SimpChinese"\n'
             '!insertmacro MUI_LANGUAGE "TradChinese"\n'
             '!insertmacro MUI_LANGUAGE "English"\n'
-            f'!include "{include}"\nSection\nWriteUninstaller "{uninstaller}"\nSectionEnd\n'
+            + self.guard_define + f'!include "{include}"\nSection\nWriteUninstaller "{uninstaller}"\nSectionEnd\n'
             'Section "Uninstall"\n' + stale + '!insertmacro customUnInstall\n'
             'Delete "$INSTDIR\\bin\\FreeTypeServer.exe"\n'
             'FileOpen $0 "$INSTDIR\\uninstalled.txt" w\nFileWrite $0 "done"\nFileClose $0\nSectionEnd\n',

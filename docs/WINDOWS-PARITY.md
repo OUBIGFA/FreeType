@@ -2,7 +2,7 @@
 
 本表用于维护 FreeType 的 Windows 移植。核对对象为 WowType 保留基线 `5656e136e9f5fc32837c87bc1a2242ec159a32d7`，以及 2026-11-13 核对的上游 main `882bd335c0e1484c8e49e00a22c47431a5b9feb4`。后者相对基线没有修改 Rust 引擎和会话的行为代码；主要增加 macOS 外壳、设置和配置契约。FreeType 没有把这些平台文件当作 Windows 功能接入。
 
-mygo 固定为 v0.9.0，本次核对时仍为最新发布版。
+mygo 当前固定版本见 [第三方来源登记](../third_party/README.md#mygo-版本约定)。
 
 ## 默认状态：全局
 
