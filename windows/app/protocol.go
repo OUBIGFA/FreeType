@@ -28,14 +28,16 @@ type Config struct {
 	ArrowKeys   string `json:"arrow_keys"`
 	NumpadDot   bool   `json:"numpad_dot"`
 
-	FullwidthPunct   bool   `json:"fullwidth_punct"`
-	AutoPair         bool   `json:"auto_pair"`
-	Autospace        bool   `json:"autospace"`
-	AutospaceLetters bool   `json:"autospace_letters"`
-	AutospaceDigits  bool   `json:"autospace_digits"`
-	DefaultMode      string `json:"default_mode"`
-	ModeScope        string `json:"mode_scope"`
-	Traditional      bool   `json:"traditional"`
+	FullwidthPunct   bool        `json:"fullwidth_punct"`
+	AutoPair         bool        `json:"auto_pair"`
+	Autospace        bool        `json:"autospace"`
+	AutospaceLetters bool        `json:"autospace_letters"`
+	AutospaceDigits  bool        `json:"autospace_digits"`
+	DefaultMode      string      `json:"default_mode"`
+	ModeScope        string      `json:"mode_scope"`
+	Traditional      bool        `json:"traditional"`
+	AppPresets       bool        `json:"app_presets"`
+	AppPresetRules   []AppPreset `json:"app_preset_rules"`
 
 	QuickPhrases     bool `json:"quick_phrases"`
 	EmojiSuggest     bool `json:"emoji_suggest"`
@@ -68,7 +70,8 @@ func defaultConfig() Config {
 		ShiftToggle: "both", PageKeys: pageKeyMinus, SelectKeys: "off", PickChar: true, ArrowKeys: "candidates", NumpadDot: true,
 		FullwidthPunct: true, AutoPair: true, Autospace: true, AutospaceLetters: true, AutospaceDigits: true,
 		DefaultMode: "chinese", ModeScope: "global",
-		QuickPhrases: true, EmojiSuggest: true, DateTime: true, Calculator: true, Toolbar: true, EmailCompletion: true,
+		AppPresetRules: []AppPreset{},
+		QuickPhrases:   true, EmojiSuggest: true, DateTime: true, Calculator: true, Toolbar: true, EmailCompletion: true,
 		HotkeyEmoji: "off", HotkeyPunct: "off", HotkeyTraditional: "off", HotkeyMode: "off",
 		TrayIcon: true, HintOnToggle: true, HintPosition: "top-left",
 	}
@@ -92,6 +95,18 @@ var fuzzyRules = []struct {
 	{1, "z = zh"}, {2, "c = ch"}, {4, "s = sh"}, {8, "n = l"}, {16, "f = h"}, {32, "r = l"},
 	{64, "an = ang"}, {128, "en = eng"}, {256, "in = ing"}, {512, "ian = iang"}, {1024, "uan = uang"}, {2048, "un = ong"},
 	{4096, "an = ai"}, {8192, "huang = wang"}, {16384, "un = iong"}, {32768, "eng = ong"},
+}
+
+// AppPreset 是一次切入指定程序时要使用的中英文状态。
+type AppPreset struct {
+	App  string `json:"app"`
+	Mode string `json:"mode"`
+}
+
+// AppWindow 是服务端发现的一个当前打开窗口所属程序。
+type AppWindow struct {
+	App   string `json:"app"`
+	Title string `json:"title"`
 }
 
 // QuickPhrase 是一条快捷短语。
@@ -163,6 +178,7 @@ type Response struct {
 	UserWords     []UserWord    `json:"user_words,omitempty"`
 	Report        *ImportReport `json:"report,omitempty"`
 	Frame         *Frame        `json:"frame,omitempty"`
+	Apps          []AppWindow   `json:"apps,omitempty"`
 }
 
 // Request 是一条请求：op 加上各自的字段。

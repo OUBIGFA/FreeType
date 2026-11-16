@@ -511,6 +511,172 @@ fn caps_lock_letters_go_to_app() {
 }
 
 #[test]
+fn caps_lock_types_english_and_restores_the_remembered_mode() {
+    let mut host = host("caps-english");
+    let on = host.handle(1, Request::CapsLock { on: true }).frame.unwrap();
+    assert_eq!(on.mode, Mode::English, "大写锁定开着：显示和输入都是英文");
+    assert_eq!(on.hint.as_deref(), Some("A"));
+    assert_eq!(host.handle(1, Request::Status).status.unwrap().mode, Mode::English);
+    for sym in [',' as u32, '1' as u32, 'A' as u32] {
+        let frame = key_with(&mut host, 1, sym, modifier::CAPS);
+        assert!(!frame.handled && frame.commit.is_none(), "标点、数字、字母都原样交给应用");
+    }
+    let off = host.handle(1, Request::CapsLock { on: false }).frame.unwrap();
+    assert_eq!(off.mode, Mode::Chinese, "关掉后回到原来的中文");
+    assert_eq!(off.hint.as_deref(), Some("中"));
+    assert_eq!(press(&mut host, ',' as u32).commit.as_deref(), Some("，"));
+    // 重复报同一个状态（输入框得到焦点时也报）不提示
+    assert_eq!(host.handle(1, Request::CapsLock { on: false }).frame.unwrap().hint, None);
+    cleanup(&host);
+}
+
+#[test]
+fn caps_lock_commits_half_typed_letters() {
+    let mut host = host("caps-composing");
+    assert_eq!(typing(&mut host, "ni").preedit, "ni");
+    let frame = host.handle(1, Request::CapsLock { on: true }).frame.unwrap();
+    assert_eq!(frame.commit.as_deref(), Some("ni"), "打到一半的字母原样上屏");
+    assert!(frame.preedit.is_empty() && frame.candidates.is_empty());
+    cleanup(&host);
+}
+
+#[test]
+fn caps_lock_state_follows_key_modifiers_without_a_notification() {
+    // 在没有 FreeType 的窗口里开关了大写锁定：服务进程从下一个键带的状态里跟上
+    let mut host = host("caps-keys");
+    let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    host.set_desktop(Box::new(Recorder(log.clone())));
+    assert!(!key_with(&mut host, 1, ',' as u32, modifier::CAPS).handled);
+    assert_eq!(log.borrow().last().unwrap().mode, Mode::English, "状态栏跟着变");
+    assert_eq!(press(&mut host, ',' as u32).commit.as_deref(), Some("，"), "下一个键没带大写锁定：回到中文");
+    assert_eq!(log.borrow().last().unwrap().mode, Mode::Chinese);
+    cleanup(&host);
+}
+
+#[test]
+fn caps_lock_keeps_the_remembered_mode_from_being_toggled() {
+    let mut host = host("caps-toggle");
+    host.handle(1, Request::CapsLock { on: true });
+    let frame = host
+        .handle(1, Request::ToggleMode { shift: Some("left".into()) })
+        .frame
+        .unwrap();
+    assert_eq!(frame.mode, Mode::English);
+    assert_eq!(frame.hint.as_deref(), Some("A"), "提示还在大写锁定");
+    host.handle(1, Request::CapsLock { on: false });
+    assert!(press(&mut host, 'n' as u32).handled, "记住的中文没有被切走");
+    cleanup(&host);
+}
+
+/// 桌面：记状态栏，前台程序和开着的窗口由测试指定。
+struct Foreground(std::rc::Rc<std::cell::RefCell<Option<String>>>);
+
+impl Desktop for Foreground {
+    fn update(&self, _state: &BarState) {}
+    fn open_settings(&self) {}
+    fn foreground_app(&self) -> Option<String> {
+        self.0.borrow().clone()
+    }
+    fn open_apps(&self) -> Vec<freetype_protocol::AppWindow> {
+        vec![freetype_protocol::AppWindow { app: "code.exe".into(), title: "main.rs".into() }]
+    }
+}
+
+fn preset(app: &str, mode: Mode) -> freetype_protocol::AppPreset {
+    freetype_protocol::AppPreset { app: app.into(), mode }
+}
+
+fn status_mode(host: &mut Host) -> Mode {
+    host.handle(1, Request::Status).status.unwrap().mode
+}
+
+#[test]
+fn app_preset_applies_once_when_switching_into_the_app() {
+    let mut host = host("preset");
+    configure(&mut host, |c| {
+        c.app_presets = true;
+        // 规则里的大小写不影响匹配
+        c.app_preset_rules = vec![preset("Code.EXE", Mode::English), preset("wechat.exe", Mode::Chinese)];
+    });
+    host.foreground("notepad.exe");
+    assert_eq!(status_mode(&mut host), Mode::Chinese, "没有规则的程序不动");
+    host.foreground("code.exe");
+    assert_eq!(status_mode(&mut host), Mode::English, "切进规则里的程序：切一次");
+    // 在这个程序里手动切回中文，再换它自己的窗口（查找框、对话框）：不重置
+    host.handle(1, Request::ToggleMode { shift: None });
+    host.foreground("code.exe");
+    assert_eq!(status_mode(&mut host), Mode::Chinese, "同一个程序里不再干预");
+    host.foreground("explorer.exe");
+    assert_eq!(status_mode(&mut host), Mode::Chinese, "没有规则的程序沿用当时的状态");
+    host.foreground("code.exe");
+    assert_eq!(status_mode(&mut host), Mode::English, "离开后再切回来：重新套用一次");
+    host.foreground("wechat.exe");
+    assert_eq!(status_mode(&mut host), Mode::Chinese, "规则也可以指定中文");
+    cleanup(&host);
+}
+
+#[test]
+fn app_preset_does_nothing_when_switched_off_or_already_in_that_mode() {
+    let mut host = host("preset-off");
+    configure(&mut host, |c| c.app_preset_rules = vec![preset("code.exe", Mode::English)]);
+    host.foreground("code.exe");
+    assert_eq!(status_mode(&mut host), Mode::Chinese, "总开关关着：规则不生效");
+    // 打开开关只管之后的切入，不追溯现在所在的程序
+    configure(&mut host, |c| c.app_presets = true);
+    assert_eq!(status_mode(&mut host), Mode::Chinese);
+    host.foreground("notepad.exe");
+    host.handle(1, Request::ToggleMode { shift: None });
+    host.foreground("code.exe");
+    let frame = host.handle(1, Request::Focus { active: true, before: None }).frame.unwrap();
+    assert_eq!(frame.mode, Mode::English);
+    assert_eq!(frame.hint, None, "已经是英文：不切换，也不提示");
+    cleanup(&host);
+}
+
+#[test]
+fn app_preset_is_applied_by_focus_and_hints_once() {
+    let mut host = host("preset-focus");
+    configure(&mut host, |c| {
+        c.app_presets = true;
+        c.app_preset_rules = vec![preset("code.exe", Mode::English)];
+    });
+    let foreground = std::rc::Rc::new(std::cell::RefCell::new(None));
+    host.set_desktop(Box::new(Foreground(foreground.clone())));
+    host.handle(2, Request::Hello { session: true, app: "Code.exe".into() });
+    // 前台事件还没到，输入框先得到了焦点：焦点这一步自己查前台程序
+    *foreground.borrow_mut() = Some("code.exe".to_string());
+    let frame = host.handle(2, Request::Focus { active: true, before: None }).frame.unwrap();
+    assert_eq!(frame.mode, Mode::English);
+    assert_eq!(frame.hint.as_deref(), Some("英"), "预设切换了状态：提示一次");
+    let frame = host.handle(2, Request::Focus { active: true, before: None }).frame.unwrap();
+    assert_eq!(frame.hint, None, "同一个程序里换输入框：不再提示");
+    assert!(!key_with(&mut host, 2, 'a' as u32, 0).handled);
+    // FreeType 自己的窗口（桌面报 None）不算离开
+    *foreground.borrow_mut() = None;
+    host.handle(2, Request::ToggleMode { shift: None });
+    let frame = host.handle(2, Request::Focus { active: true, before: None }).frame.unwrap();
+    assert_eq!(frame.mode, Mode::Chinese, "手动切换的结果留着");
+    let apps = host.handle(9, Request::ListApps).apps.unwrap();
+    assert_eq!(apps[0].app, "code.exe");
+    cleanup(&host);
+}
+
+#[test]
+fn app_preset_sets_the_apps_own_mode_when_modes_are_per_app() {
+    let mut host = host("preset-app-scope");
+    configure(&mut host, |c| {
+        c.mode_scope = "app".into();
+        c.app_presets = true;
+        c.app_preset_rules = vec![preset("code.exe", Mode::English)];
+    });
+    host.handle(2, Request::Hello { session: true, app: "code.exe".into() });
+    host.foreground("code.exe");
+    assert!(!key_with(&mut host, 2, 'a' as u32, 0).handled, "规则里的程序切成英文");
+    assert!(press(&mut host, 'n' as u32).handled, "记事本各记各的，还是中文");
+    cleanup(&host);
+}
+
+#[test]
 fn composing_swallows_ctrl_combinations() {
     let mut host = host("ctrl");
     typing(&mut host, "ni");

@@ -38,6 +38,7 @@ pub fn is_modifier(vk: u16) -> bool {
 }
 
 pub const VK_SHIFT: u16 = 0x10;
+pub const VK_CAPITAL: u16 = 0x14;
 
 /// GetKeyState 的结果翻成修饰键位掩码。`state(vk)` 返回 GetKeyState(vk)。
 pub fn modifiers(state: impl Fn(u16) -> i16) -> u32 {

@@ -7,6 +7,8 @@
 //!    同步编辑会话改文档（上屏、更新编辑区、光标），再按编辑区的位置摆候选窗；
 //! 3. 单按 Shift（按下到松开之间没有别的键，没和 Ctrl/Alt/Win 一起按）切换中英文：系统第一次
 //!    报这次松开时就切换（`OnTestKeyUp` 或 `OnKeyUp`，见 [`key_released`]），不吃这个键。
+//! 4. Caps Lock：按下、松开时看大写锁定变没变，变了就告诉服务进程（[`caps_changed`]）。开着时
+//!    服务进程一律按英文处理，关掉后回到原来的中英文状态；这个键本身不吃。
 //!
 //! 中英文状态只由 FreeType 自己管（服务进程里），不看系统的「键盘打开 / 关闭」状态：有的应用自己
 //! 建 TSF 线程时这个状态是「关闭」，`Ctrl+空格` 也会把它关掉，以前因此会一声不响地只出字母。
@@ -75,6 +77,8 @@ struct State {
     last_caret: Option<RECT>,
     button: Option<ButtonHandle>,
     mode: Mode,
+    /// 上一次报给服务进程的大写锁定状态（变了才再报）。
+    caps: bool,
     /// 服务进程要光标前的字（自动加空格打开了）。
     want_before: bool,
     /// 服务进程那边在组字、开着面板（键要先问它）。
@@ -114,6 +118,7 @@ impl TextService {
                 last_caret: None,
                 button: None,
                 mode: Mode::Chinese,
+                caps: false,
                 want_before: false,
                 busy: false,
             })),
@@ -596,6 +601,27 @@ fn composing(state: &Rc<RefCell<State>>) -> bool {
     s.composition.is_some() || s.busy
 }
 
+/// 大写锁定现在开着没有（按处理到这条按键消息时的状态）。
+fn caps_on() -> bool {
+    unsafe { GetKeyState(i32::from(keys::VK_CAPITAL)) & 1 != 0 }
+}
+
+/// Caps Lock 按下、松开时：大写锁定变了就告诉服务进程，按应答上屏打到一半的字母、提示新状态。
+///
+/// 按下和松开都看一遍：浏览器内核的程序先看一眼消息再取走，按下那一刻状态可能还没更新；
+/// 同一次变化只报一遍（`State::caps` 记着上次报的）。应用禁用输入法的地方（密码框）不提示，
+/// 服务进程从之后每个按键带的修饰键状态里照样能跟上。
+fn caps_changed(state: &Rc<RefCell<State>>, context: Option<&ITfContext>) {
+    let on = caps_on();
+    if std::mem::replace(&mut state.borrow_mut().caps, on) == on || disabled(context) {
+        return;
+    }
+    if let Some(frame) = call(state, &Request::CapsLock { on }) {
+        // 和单按 Shift 一样不强求同步：系统只是先问一声的时候不一定给同步的编辑会话
+        apply(state, context, frame, false);
+    }
+}
+
 fn on_click(state: &Weak<RefCell<State>>, click: Click) {
     let Some(state) = state.upgrade() else {
         return;
@@ -708,6 +734,10 @@ fn on_focus(state: &Rc<RefCell<State>>, focus: Option<&ITfDocumentMgr>) {
     edit_with(&context, client_id, TF_ES_ASYNCDONTCARE | TF_ES_READ, move |ec| {
         let before = before_text(&context2, ec);
         let caret = selection_rect(&context2, ec);
+        // 大写锁定可能在别的窗口里开关过：先对齐，下面拿到的中英文状态才是对的
+        let on = caps_on();
+        state2.borrow_mut().caps = on;
+        let _ = call(&state2, &Request::CapsLock { on });
         let Some(mut frame) = call(&state2, &Request::Focus { active: true, before }) else {
             return Ok(());
         };
@@ -835,6 +865,10 @@ fn key_released(state: &Rc<RefCell<State>>, context: Option<&ITfContext>, wparam
     if keys::is_modifier(vk) && state.borrow().caret_move.is_some() {
         caret_tick(state);
     }
+    if vk == keys::VK_CAPITAL {
+        caps_changed(state, context);
+        return;
+    }
     if !state.borrow_mut().shift.key_up(vk, moment()) || disabled(context) {
         return;
     }
@@ -871,6 +905,9 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         }
         let vk = wparam.0 as u16;
         note_key_down(&self.state, wparam, lparam);
+        if vk == keys::VK_CAPITAL {
+            caps_changed(&self.state, pic.as_ref());
+        }
         if keys::is_modifier(vk) || disabled(pic.as_ref()) {
             return Ok(false.into());
         }
@@ -891,6 +928,9 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         }
         let vk = wparam.0 as u16;
         note_key_down(&self.state, wparam, lparam);
+        if vk == keys::VK_CAPITAL {
+            caps_changed(&self.state, pic.as_ref());
+        }
         if keys::is_modifier(vk) || disabled(pic.as_ref()) {
             return Ok(false.into());
         }

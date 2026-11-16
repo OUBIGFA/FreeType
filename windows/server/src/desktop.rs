@@ -5,18 +5,22 @@
 //!   有输入框在用 FreeType 时显示。不抢焦点，点按钮不会让应用的输入框失去焦点。
 //! - **剪贴板历史**：设置里打开时，系统剪贴板一有文字就交给核心记下（只在内存里）。
 //!   密码管理器标了「不进剪贴板历史」的不记。
+//! - **前台程序**：前台窗口换了就把它所属的程序名发给引擎线程（指定软件的预设输入状态用）。
+//!   靠系统的前台窗口事件，不轮询。
 //!
-//! 状态由引擎线程经 [`DesktopHandle`] 推过来；按钮点了经 `events` 发回引擎线程。
+//! 状态由引擎线程经 [`DesktopHandle`] 推过来；按钮点了、前台换了经 `events` 发回引擎线程。
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
-use freetype_protocol::Mode;
-use windows::core::{w, HSTRING, PCWSTR};
-use windows::Win32::Foundation::{COLORREF, HGLOBAL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
-use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND};
+use freetype_protocol::{AppWindow, Mode};
+use windows::core::{w, BOOL, HSTRING, PCWSTR, PWSTR};
+use windows::Win32::Foundation::{CloseHandle, COLORREF, HGLOBAL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Graphics::Dwm::{
+    DwmGetWindowAttribute, DwmSetWindowAttribute, DWMWA_CLOAKED, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
+};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreatePen, CreateSolidBrush,
     DeleteDC, DeleteObject, EndPaint, FillRect, GetMonitorInfoW, GetTextExtentPoint32W, InvalidateRect,
@@ -31,29 +35,38 @@ use windows::Win32::System::DataExchange::{
 use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
 use windows::Win32::System::Ole::CF_UNICODETEXT;
 use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
+use windows::Win32::System::Threading::{
+    GetCurrentProcessId, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+    PROCESS_QUERY_LIMITED_INFORMATION,
+};
+use windows::Win32::UI::Accessibility::{SetWinEventHook, HWINEVENTHOOK};
 use windows::Win32::UI::HiDpi::{GetDpiForWindow, SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
 use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW, GetCursorPos,
-    GetMessageW, GetWindowRect, KillTimer, LoadCursorW, PostMessageW, RegisterClassExW, SetCursor,
-    SetForegroundWindow, SetTimer, SetWindowPos, ShowWindow, TrackPopupMenu, TranslateMessage, CS_DROPSHADOW,
-    HTCAPTION, HTCLIENT, HWND_MESSAGE, HWND_TOPMOST, IDC_ARROW, IDC_HAND, IDC_SIZEALL, MA_NOACTIVATE, MF_STRING,
-    MSG, SWP_NOACTIVATE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, TPM_BOTTOMALIGN,
-    TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_APP, WM_CLIPBOARDUPDATE, WM_EXITSIZEMOVE, WM_LBUTTONUP, WM_MOUSEACTIVATE,
-    WM_MOUSEMOVE, WM_NCHITTEST, WM_PAINT, WM_RBUTTONUP, WM_SETCURSOR, WM_TIMER, WNDCLASSEXW,
+    AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW, EnumWindows,
+    GetClassNameW, GetCursorPos, GetForegroundWindow, GetMessageW, GetWindow, GetWindowLongW, GetWindowRect,
+    GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible, KillTimer, LoadCursorW, PostMessageW,
+    RegisterClassExW, SetCursor, SetForegroundWindow, SetTimer, SetWindowPos, ShowWindow, TrackPopupMenu,
+    TranslateMessage, CS_DROPSHADOW, EVENT_SYSTEM_FOREGROUND, GWL_EXSTYLE, GW_OWNER, HTCAPTION, HTCLIENT,
+    HWND_MESSAGE, HWND_TOPMOST, IDC_ARROW, IDC_HAND, IDC_SIZEALL, MA_NOACTIVATE, MF_STRING, MSG, SWP_NOACTIVATE,
+    SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, TPM_BOTTOMALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON,
+    WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_APP, WM_CLIPBOARDUPDATE, WM_EXITSIZEMOVE, WM_LBUTTONUP,
+    WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_NCHITTEST, WM_PAINT, WM_RBUTTONUP, WM_SETCURSOR, WM_TIMER, WNDCLASSEXW,
     WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 use crate::host::{BarState, Desktop};
 
-/// 状态栏上点了什么（发回引擎线程）。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// 桌面线程发回引擎线程的事：状态栏上点了什么，前台换到了哪个程序。
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BarEvent {
     ToggleMode,
     TogglePunct,
     ToggleTraditional,
     OpenSettings,
     HideBar,
+    /// 前台窗口换到了这个程序的窗口（小写文件名，见 [`window_app`]）。
+    Foreground(String),
 }
 
 const BAR_CLASS: PCWSTR = w!("FreeTypeStatusBar");
@@ -121,6 +134,14 @@ impl Desktop for DesktopHandle {
 
     fn open_settings(&self) {
         open_settings(&self.settings_exe);
+    }
+
+    fn foreground_app(&self) -> Option<String> {
+        window_app(unsafe { GetForegroundWindow() })
+    }
+
+    fn open_apps(&self) -> Vec<AppWindow> {
+        open_apps()
     }
 }
 
@@ -222,6 +243,17 @@ fn run() {
         ) {
             let _ = AddClipboardFormatListener(hwnd);
         }
+        // 前台窗口一换就收到一次（由下面的消息循环送达），不用定时器去查。
+        // 钩子跟着这个线程，进程退出时系统收回。
+        SetWinEventHook(
+            EVENT_SYSTEM_FOREGROUND,
+            EVENT_SYSTEM_FOREGROUND,
+            None,
+            Some(foreground_proc),
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+        );
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             let _ = TranslateMessage(&msg);
@@ -305,6 +337,112 @@ unsafe fn history_forbidden(format: u32) -> bool {
         let _ = GlobalUnlock(global);
         value == 0
     }
+}
+
+// —— 前台程序 ——
+
+/// 任务栏和通知区域的窗口类。点托盘图标（包括 FreeType 自己的）会先让任务栏到前台；
+/// 它们不是用户打字的地方，不算离开了原来的程序。
+const SHELL_CLASSES: [&str; 4] = [
+    "Shell_TrayWnd",
+    "Shell_SecondaryTrayWnd",
+    "NotifyIconOverflowWindow",
+    "TopLevelWindowForOverflowXamlIsland",
+];
+
+unsafe extern "system" fn foreground_proc(
+    _hook: HWINEVENTHOOK,
+    _event: u32,
+    hwnd: HWND,
+    _object: i32,
+    _child: i32,
+    _thread: u32,
+    _time: u32,
+) {
+    if let Some(app) = window_app(hwnd) {
+        send(BarEvent::Foreground(app));
+    }
+}
+
+/// 进程的可执行文件完整路径。打不开的进程（系统保护的）返回 None。
+fn process_path(pid: u32) -> Option<String> {
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut buf = [0u16; 1024];
+        let mut len = buf.len() as u32;
+        let result = QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut len);
+        let _ = CloseHandle(process);
+        result.ok()?;
+        Some(String::from_utf16_lossy(&buf[..len as usize]))
+    }
+}
+
+/// 窗口属于哪个程序：小写文件名（code.exe），和输入法 DLL 报的程序名、规则里的写法一致。
+///
+/// None：不算换了程序 —— 没有窗口、任务栏和通知区域，或者是 FreeType 自己的窗口
+/// （状态栏、设置窗口、托盘菜单；候选窗在各应用自己的进程里，本来就不会被当成别的程序）。
+/// 认不出的程序返回空串：算离开了原来的程序，但对不上任何规则。
+pub fn window_app(hwnd: HWND) -> Option<String> {
+    if hwnd.is_invalid() {
+        return None;
+    }
+    unsafe {
+        let mut class = [0u16; 64];
+        let n = GetClassNameW(hwnd, &mut class).max(0) as usize;
+        if SHELL_CLASSES.contains(&String::from_utf16_lossy(&class[..n]).as_str()) {
+            return None;
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if pid == 0 {
+            return Some(String::new());
+        }
+        if pid == GetCurrentProcessId() {
+            return None;
+        }
+        let Some(path) = process_path(pid) else {
+            return Some(String::new());
+        };
+        let path = path.to_lowercase();
+        static SETTINGS: OnceLock<String> = OnceLock::new();
+        if &path == SETTINGS.get_or_init(|| settings_exe().to_string_lossy().to_lowercase()) {
+            return None;
+        }
+        Some(path.rsplit(['\\', '/']).next().unwrap_or_default().to_string())
+    }
+}
+
+/// 现在开着窗口的程序：任务栏上看得到的那些窗口（看得见、有标题、不是工具窗口和别的窗口的附属窗口、
+/// 没被系统藏起来），一个程序只列一次，按程序名排序。
+pub fn open_apps() -> Vec<AppWindow> {
+    unsafe extern "system" fn each(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        unsafe {
+            let apps = &mut *(lparam.0 as *mut Vec<AppWindow>);
+            let mut title = [0u16; 256];
+            let n = GetWindowTextW(hwnd, &mut title).max(0) as usize;
+            let mut cloaked = 0u32;
+            let _ = DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &mut cloaked as *mut u32 as *mut _, 4);
+            let listed = IsWindowVisible(hwnd).as_bool()
+                && n > 0
+                && cloaked == 0
+                && GetWindowLongW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOOLWINDOW.0 == 0
+                && GetWindow(hwnd, GW_OWNER).is_err();
+            if listed {
+                if let Some(app) = window_app(hwnd).filter(|app| !app.is_empty()) {
+                    if apps.iter().all(|a| a.app != app) {
+                        apps.push(AppWindow { app, title: String::from_utf16_lossy(&title[..n]) });
+                    }
+                }
+            }
+            true.into()
+        }
+    }
+    let mut apps: Vec<AppWindow> = Vec::new();
+    unsafe {
+        let _ = EnumWindows(Some(each), LPARAM(&mut apps as *mut Vec<AppWindow> as isize));
+    }
+    apps.sort_by(|a, b| a.app.cmp(&b.app));
+    apps
 }
 
 // —— 状态栏 ——

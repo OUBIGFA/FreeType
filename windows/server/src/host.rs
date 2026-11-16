@@ -7,6 +7,12 @@
 //! 按键规则在 [`crate::input`]；这里管连接、中英文状态（全局或按应用）、快捷键、设置、
 //! 学到的词，以及通知桌面上的状态栏（[`Desktop`]）。
 //!
+//! 记住的中英文状态之外还有两件事影响实际的输入状态：
+//!
+//! - **大写锁定**：开着时一律按英文输入（[`Host::effective`]），不改记住的状态，关掉就回去；
+//! - **指定软件的预设**：前台换到规则里的程序时把记住的状态切一次（[`Host::foreground`]），
+//!   之后在这个程序里怎么切都不再干预。
+//!
 //! TSF 先问「要不要这个键」（test）再真正按下：test 在会话副本上算一遍并记下结果，
 //! 普通编辑键直接接纳这份结果；涉及学习、删除记录的键只在真正按下时执行。test 说不要的键不会再真按，这时副本直接留下
 //! （交给应用的字记进了上文）。
@@ -15,8 +21,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use freetype_protocol::{
-    modifier, Command, Config, DefaultMode, Frame, ImportReport, Key, Mode, Request, Response, Status, UserWord,
-    PROTOCOL_VERSION,
+    modifier, AppWindow, Command, Config, DefaultMode, Frame, ImportReport, Key, Mode, Request, Response, Status,
+    UserWord, PROTOCOL_VERSION,
 };
 use wowtype_core::msime;
 use wowtype_core::Engine;
@@ -51,6 +57,15 @@ pub struct BarState {
 pub trait Desktop {
     fn update(&self, state: &BarState);
     fn open_settings(&self);
+    /// 现在前台窗口属于哪个程序（小写文件名；认不出的程序是空串）。
+    /// None：没有前台窗口，或者是 FreeType 自己的窗口，不算换了程序。
+    fn foreground_app(&self) -> Option<String> {
+        None
+    }
+    /// 现在开着窗口的程序（设置里添加指定软件时挑）。
+    fn open_apps(&self) -> Vec<AppWindow> {
+        Vec::new()
+    }
 }
 
 struct Client {
@@ -70,6 +85,12 @@ pub struct Host {
     mode: Mode,
     /// 按应用记的中英文状态（mode_scope 是 app 时用）。
     app_modes: HashMap<String, Mode>,
+    /// 大写锁定开着（DLL 报的）：实际输入状态一律是英文，`mode`、`app_modes` 不动。
+    caps: bool,
+    /// 最近到前台的程序；指定软件的预设只在它变了的那一刻套用一次。
+    foreground: String,
+    /// 预设刚切换了状态：下一次输入框得到焦点时在光标旁提示一次。
+    preset_hint: bool,
     /// 工具栏只读取独立常用语；快捷短语由引擎按编码匹配。
     phrases: Vec<String>,
     recent_emoji: Vec<String>,
@@ -175,6 +196,9 @@ impl Host {
             config,
             store,
             app_modes: HashMap::new(),
+            caps: false,
+            foreground: String::new(),
+            preset_hint: false,
             phrases: Vec::new(),
             recent_emoji,
             focused: None,
@@ -392,6 +416,87 @@ impl Host {
         self.clients.get(&id).map(|c| c.state.app.clone()).unwrap_or_default()
     }
 
+    /// 实际的输入状态：大写锁定开着时一律是英文（字母、数字、标点都原样交给应用），
+    /// 记住的状态不动，关掉大写锁定就回到它。按键、状态显示都用这个。
+    fn effective(&self, mode: Mode) -> Mode {
+        if self.caps {
+            Mode::English
+        } else {
+            mode
+        }
+    }
+
+    /// 光标旁提示的状态：大写锁定开着是「A」，否则是「中」「英」。
+    fn hint_text(&self, mode: Mode) -> String {
+        if self.caps {
+            "A".to_string()
+        } else {
+            mode_hint(mode)
+        }
+    }
+
+    /// 记下大写锁定的状态；变了返回 true（旧状态下缓存的按键结果随之作废）。
+    fn set_caps(&mut self, on: bool) -> bool {
+        if self.caps == on {
+            return false;
+        }
+        self.caps = on;
+        for client in self.clients.values_mut() {
+            client.pending = None;
+        }
+        true
+    }
+
+    /// DLL 报大写锁定开了 / 关了。
+    fn caps_lock(&mut self, id: ClientId, on: bool) -> Response {
+        if !self.set_caps(on) {
+            // 没变（输入框得到焦点时 DLL 也会报一次）：不提示
+            return self.with_client(id, |state, env| state.current(false, env));
+        }
+        let hint = self.config.hint_on_toggle.then(|| self.hint_text(self.mode_of(&self.app_of(id))));
+        let mut response = self.with_client(id, |state, env| {
+            // 打到一半开了大写锁定：和切到英文一样，字母原样上屏，面板关掉
+            if on && state.busy() {
+                state.reset(true, env)
+            } else {
+                state.current(false, env)
+            }
+        });
+        if let Some(frame) = response.frame.as_mut() {
+            frame.hint = hint;
+        }
+        self.notify_bar();
+        response
+    }
+
+    /// 前台窗口换到了 `app` 这个程序（小写文件名；桌面线程的事件，或输入框得到焦点时查到的）。
+    ///
+    /// 指定软件的预设只在这里套用：从别的程序切进规则里的程序时切一次，已经是那个状态就不动。
+    /// 同一个程序里换窗口（查找框、保存对话框）不算，用户在里面手动切换的结果留着；
+    /// 没有规则的程序什么都不改。
+    pub fn foreground(&mut self, app: &str) {
+        if app == self.foreground {
+            return;
+        }
+        self.foreground = app.to_string();
+        if !self.config.app_presets {
+            return;
+        }
+        let rule = self.config.app_preset_rules.iter().find(|rule| rule.app == app);
+        let Some(mode) = rule.map(|rule| rule.mode) else {
+            return;
+        };
+        if self.mode_of(app) == mode {
+            return;
+        }
+        if let Err(error) = self.set_mode(app, mode) {
+            crate::log(&error);
+            return;
+        }
+        self.preset_hint = true;
+        self.notify_bar();
+    }
+
     /// 状态栏、托盘看的状态：有焦点时取当前应用，否则保留最后的主动选择。
     fn current_mode(&self) -> Mode {
         self.focused.map(|id| self.mode_of(&self.app_of(id))).unwrap_or(self.mode)
@@ -401,7 +506,7 @@ impl Host {
         let state = BarState {
             visible: self.config.status_bar && self.focused.is_some(),
             autohide: self.config.status_bar_autohide,
-            mode: self.current_mode(),
+            mode: self.effective(self.current_mode()),
             chinese_punct: self.config.fullwidth_punct,
             traditional: self.config.traditional,
         };
@@ -419,7 +524,7 @@ impl Host {
             protocol: PROTOCOL_VERSION,
             version: option_env!("FREETYPE_BUILD_VERSION").unwrap_or(env!("CARGO_PKG_VERSION")).to_string(),
             ready: self.engine.is_some(),
-            mode: self.current_mode(),
+            mode: self.effective(self.current_mode()),
             chinese_punct: self.config.fullwidth_punct,
             traditional: self.config.traditional,
             data_dir: self.store.dir().display().to_string(),
@@ -468,7 +573,7 @@ impl Host {
     /// 对一个连接的输入状态做点事。
     fn with_client(&mut self, id: ClientId, f: impl FnOnce(&mut ClientState, &Env) -> Out) -> Response {
         let app = self.app_of(id);
-        let mode = self.mode_of(&app);
+        let mode = self.effective(self.mode_of(&app));
         let engine = self.engine_ref();
         let Some(client) = self.clients.get_mut(&id) else {
             return Response::error("这个连接没有输入会话（先发 hello，session 为 true）");
@@ -490,7 +595,7 @@ impl Host {
         let enabled = self.config.hint_on_toggle;
         let mut response = self.with_client(id, |state, env| state.current(true, env));
         if !response.ok {
-            let mode = self.current_mode();
+            let mode = self.effective(self.current_mode());
             let mut frame = Frame {
                 handled: true,
                 ..Frame::default()
@@ -532,7 +637,7 @@ impl Host {
             return None;
         };
         if key.test {
-            let mode = self.mode_of(&self.app_of(id));
+            let mode = self.effective(self.mode_of(&self.app_of(id)));
             let mut frame = Frame {
                 handled: true,
                 ..Frame::default()
@@ -557,6 +662,10 @@ impl Host {
     }
 
     fn key(&mut self, id: ClientId, key: Key, before: Option<String>) -> Response {
+        // 每个键都带着大写锁定的状态：在没有 FreeType 的窗口里开关过也能跟上
+        if self.set_caps(key.modifiers & modifier::CAPS != 0) {
+            self.notify_bar();
+        }
         if let Some(response) = self.hotkey(id, &key) {
             if let Some(client) = self.clients.get_mut(&id) {
                 client.pending = None;
@@ -564,7 +673,7 @@ impl Host {
             return response;
         }
         let app = self.app_of(id);
-        let mode = self.mode_of(&app);
+        let mode = self.effective(self.mode_of(&app));
         let engine = self.engine_ref();
         let Some(client) = self.clients.get_mut(&id) else {
             return Response::error("这个连接没有输入会话（先发 hello，session 为 true）");
@@ -620,11 +729,15 @@ impl Host {
                 _ => false,
             };
             if !allowed {
-                let mode = self.mode_of(&self.app_of(id));
+                let mode = self.effective(self.mode_of(&self.app_of(id)));
                 let mut frame = Frame::default();
                 self.style(&mut frame, mode);
                 return Response::with_frame(frame);
             }
+        }
+        if self.caps {
+            // 大写锁定开着时打出来的总是英文，切换了也看不出来：不切，提示原因
+            return self.hint_frame(id, Some(self.hint_text(Mode::English)));
         }
         let app = match self.clients.get(&id) {
             Some(client) => client.state.app.clone(),
@@ -680,6 +793,15 @@ impl Host {
         } else if self.focused == Some(id) {
             self.focused = None;
         }
+        if active {
+            // 前台换程序的事件和这条焦点消息谁先到不一定：这里也查一次，
+            // 让预设先生效，这次应答里的状态和提示才是对的
+            if let Some(app) = self.desktop.as_ref().and_then(|desktop| desktop.foreground_app()) {
+                self.foreground(&app);
+            }
+        }
+        // 预设刚切换了状态：和手动切换一样提示一次
+        let preset_hint = active && std::mem::take(&mut self.preset_hint) && self.config.hint_on_toggle;
         let hint_on_focus = self.config.hint_on_focus;
         let mut response = self.with_client(id, |state, env| {
             if let Some(before) = &before {
@@ -688,8 +810,8 @@ impl Host {
             state.current(false, env)
         });
         if let Some(frame) = response.frame.as_mut() {
-            if active && hint_on_focus {
-                frame.hint = Some(mode_hint(frame.mode));
+            if active && (hint_on_focus || preset_hint) {
+                frame.hint = Some(self.hint_text(frame.mode));
             }
         }
         self.notify_bar();
@@ -959,8 +1081,13 @@ impl Host {
             Request::Focus { active, before } => self.focus(id, active, before),
             Request::ToggleMode { shift } => self.toggle_mode(id, shift),
             Request::Command { command } => self.command(id, command),
+            Request::CapsLock { on } => self.caps_lock(id, on),
             Request::Status => Response {
                 status: Some(self.status()),
+                ..Response::ok()
+            },
+            Request::ListApps => Response {
+                apps: Some(self.desktop.as_ref().map(|desktop| desktop.open_apps()).unwrap_or_default()),
                 ..Response::ok()
             },
             Request::GetConfig => Response {

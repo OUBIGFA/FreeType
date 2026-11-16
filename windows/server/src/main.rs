@@ -177,6 +177,10 @@ mod app {
             match inbox.recv_timeout(SAVE_INTERVAL) {
                 Ok(Event::Bar(event)) => {
                     let request = match event {
+                        BarEvent::Foreground(app) => {
+                            host.foreground(&app);
+                            continue;
+                        }
                         BarEvent::ToggleMode => Request::ToggleMode { shift: None },
                         BarEvent::TogglePunct => Request::Command { command: Command::TogglePunct },
                         BarEvent::ToggleTraditional => Request::Command {

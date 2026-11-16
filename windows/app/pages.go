@@ -210,6 +210,7 @@ func (s *settings) generalPage(c *ui.Context) {
 			changed = choose(c, "提示位置", positions, &s.config.HintPosition, 200) || changed
 		})
 	})
+	s.appPresetSection(c)
 	s.backupSection(c)
 	if changed {
 		s.saveConfig()

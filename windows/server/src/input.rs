@@ -123,10 +123,6 @@ fn punct_char(key: &Key) -> Option<char> {
     printable(key).filter(|c| !c.is_ascii_alphanumeric())
 }
 
-fn is_letter(key: &Key) -> bool {
-    char::from_u32(key.keysym).is_some_and(|c| c.is_ascii_alphabetic())
-}
-
 /// 小键盘数字键对应的字符。
 fn keypad_digit(key: &Key) -> Option<char> {
     (keysym::KP_0..=keysym::KP_9)
@@ -327,11 +323,8 @@ impl ClientState {
         if env.mode == Mode::English {
             return self.pass_or_space(key, env);
         }
+        // 大写锁定开着时宿主给的就是英文状态（`Host::effective`），到不了下面
         let composing = self.session.composing();
-        if key.modifiers & modifier::CAPS != 0 && !composing && is_letter(key) {
-            // 大写锁定：字母原样交给应用
-            return self.pass_or_space(key, env);
-        }
         let plain = key.modifiers & (modifier::CTRL | modifier::ALT | modifier::SUPER) == 0;
         // v + 空格：工具栏
         if plain

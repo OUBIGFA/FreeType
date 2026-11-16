@@ -113,7 +113,7 @@ fn input_request(request: &Request) -> bool {
     matches!(request,
         Request::Hello { .. } | Request::Key { .. } | Request::Select { .. } | Request::Page { .. }
         | Request::Forget { .. } | Request::Reset { .. } | Request::Focus { .. }
-        | Request::ToggleMode { .. } | Request::Command { .. } | Request::Status)
+        | Request::ToggleMode { .. } | Request::Command { .. } | Request::CapsLock { .. } | Request::Status)
 }
 
 /// 同一登录会话里只跑一个服务进程。返回 false 表示已经有一个了。

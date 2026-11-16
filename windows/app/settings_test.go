@@ -54,6 +54,8 @@ func (f *fakeBackend) Call(r Request) (Response, error) {
 			f.config.FullwidthPunct = !f.config.FullwidthPunct
 		}
 		return Response{OK: true}, nil
+	case "list_apps":
+		return Response{OK: true, Apps: []AppWindow{{App: "code.exe", Title: "main.go"}, {App: "wechat.exe", Title: "微信"}}}, nil
 	case "list_quick_phrases":
 		return Response{OK: true, QuickPhrases: f.phrases}, nil
 	case "set_quick_phrases":
@@ -938,5 +940,42 @@ func TestTraySwitchDefaultsOnAndTellsTheTrayApp(t *testing.T) {
 	}
 	if b.config.TrayIcon || len(shown) != 1 || shown[0] {
 		t.Fatalf("关掉托盘图标没生效：%+v %v", b.config.TrayIcon, shown)
+	}
+}
+
+func TestAppPresetRulesAreSavedUpdatedAndPersisted(t *testing.T) {
+	s, b := newTestSettings()
+	s.config.AppPresets = true
+	s.newPresetApp = `C:\\Program Files\\Code.EXE`
+	s.newPresetMode = "english"
+	s.addPreset()
+	if len(b.config.AppPresetRules) != 1 || b.config.AppPresetRules[0] != (AppPreset{App: "code.exe", Mode: "english"}) {
+		t.Fatalf("指定程序规则没有保存：%+v", b.config.AppPresetRules)
+	}
+	// 同一程序再次添加应更新，而不是重复添加；这就是重启后仍保留且不用反复添加的配置。
+	s.newPresetApp = "code.exe"
+	s.newPresetMode = "chinese"
+	s.addPreset()
+	if len(b.config.AppPresetRules) != 1 || b.config.AppPresetRules[0].Mode != "chinese" {
+		t.Fatalf("重复程序没有更新原规则：%+v", b.config.AppPresetRules)
+	}
+	if len(s.apps) != 2 || s.apps[0].App != "code.exe" {
+		t.Fatalf("没有读取当前打开的程序：%+v", s.apps)
+	}
+}
+
+func TestAppPresetSettingsPageShowsWindowPickerAndRules(t *testing.T) {
+	s, b := newTestSettings()
+	s.config.AppPresets = true
+	b.config.AppPresets = true
+	tt := open(t, s, "")
+	tt.Frame()
+	for _, text := range []string{"指定软件规则", "刷新打开的窗口", "手动输入"} {
+		if !tt.HasText(text) {
+			t.Fatalf("打开指定软件设置后没有「%s」：%q", text, tt.Texts())
+		}
+	}
+	if !b.config.AppPresets {
+		t.Fatal("指定软件总开关没有保存")
 	}
 }

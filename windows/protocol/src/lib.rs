@@ -128,6 +128,23 @@ impl DefaultMode {
     }
 }
 
+/// 指定软件的预设输入状态：焦点从别的程序切进这个程序时切换一次。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppPreset {
+    /// 程序文件名，小写带扩展名（code.exe）。
+    pub app: String,
+    pub mode: Mode,
+}
+
+/// 一个开着窗口的程序（设置里添加 [`AppPreset`] 时从中挑）。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppWindow {
+    /// 程序文件名，小写带扩展名。
+    pub app: String,
+    /// 它的一个窗口标题（帮用户认出是哪个软件）。
+    pub title: String,
+}
+
 /// 用户设置，存为 `%APPDATA%\FreeType\config.json`。缺的字段取默认值。
 ///
 /// 取值是字符串的几项（快捷键、位置等）只认下面列出的写法，别的在 [`Config::sanitized`] 里换成默认值。
@@ -193,6 +210,11 @@ pub struct Config {
     pub mode_scope: String,
     /// 输出繁体。
     pub traditional: bool,
+    /// 指定软件自动切换中英文（总开关）：只在焦点从别的程序切进规则里的程序时切换一次，
+    /// 之后在这个程序里怎么切都不干预；没有规则的程序沿用当时的状态。
+    pub app_presets: bool,
+    /// 各程序切进来时的状态，见 [`Config::app_presets`]。
+    pub app_preset_rules: Vec<AppPreset>,
 
     // —— 实用功能 ——
     /// 快捷短语混入候选（编码完整对上时排第一）。
@@ -269,6 +291,8 @@ impl Default for Config {
             default_mode: DefaultMode::Chinese,
             mode_scope: "global".into(),
             traditional: false,
+            app_presets: false,
+            app_preset_rules: Vec::new(),
             quick_phrases: true,
             emoji_suggest: true,
             date_time: true,
@@ -304,6 +328,18 @@ pub const HOTKEYS_EMOJI: [&str; 3] = ["off", "ctrl+shift+e", "ctrl+alt+e"];
 pub const HOTKEYS_PUNCT: [&str; 2] = ["off", "ctrl+period"];
 pub const HOTKEYS_TRADITIONAL: [&str; 3] = ["off", "ctrl+shift+f", "ctrl+shift+t"];
 pub const HOTKEYS_MODE: [&str; 2] = ["off", "ctrl+space"];
+/// 指定软件的规则最多几条（设置里手工维护的列表，不需要更多）。
+pub const MAX_APP_PRESETS: usize = 200;
+
+/// 规则里的程序名统一成小写文件名：去掉路径，没写扩展名的补上 `.exe`。写不成文件名的返回 None。
+pub fn normalize_app_name(name: &str) -> Option<String> {
+    let name = name.trim().trim_matches('"');
+    let name = name.rsplit(['\\', '/']).next().unwrap_or(name).trim().to_lowercase();
+    if name.is_empty() || name.len() > 260 || name.chars().any(|c| c.is_control() || r#"<>:"|?*"#.contains(c)) {
+        return None;
+    }
+    Some(if name.ends_with(".exe") { name } else { name + ".exe" })
+}
 
 /// 不在 `allowed` 里就换成 `fallback`。
 fn pick(value: &mut String, allowed: &[&str], fallback: &str) {
@@ -341,6 +377,17 @@ impl Config {
         pick(&mut self.hotkey_punct, &HOTKEYS_PUNCT, &d.hotkey_punct);
         pick(&mut self.hotkey_traditional, &HOTKEYS_TRADITIONAL, &d.hotkey_traditional);
         pick(&mut self.hotkey_mode, &HOTKEYS_MODE, &d.hotkey_mode);
+        // 同一个程序只留最先的一条：匹配时不分大小写，重复的规则没有意义
+        let mut rules: Vec<AppPreset> = Vec::new();
+        for rule in std::mem::take(&mut self.app_preset_rules) {
+            let Some(app) = normalize_app_name(&rule.app) else {
+                continue;
+            };
+            if rules.len() < MAX_APP_PRESETS && rules.iter().all(|r| r.app != app) {
+                rules.push(AppPreset { app, mode: rule.mode });
+            }
+        }
+        self.app_preset_rules = rules;
         self
     }
 }
@@ -440,8 +487,13 @@ pub enum Request {
         shift: Option<String>,
     },
     Command { command: Command },
+    /// 大写锁定开了 / 关了（DLL 在按下 Caps Lock 和输入框得到焦点时报）。
+    /// 开着时一律按英文输入，关掉后回到原来的中英文状态。
+    CapsLock { on: bool },
     /// 服务状态（版本、词库是否载入、模式）。
     Status,
+    /// 现在开着窗口的程序（设置里添加指定软件时挑）。
+    ListApps,
     GetConfig,
     SetConfig { config: Config },
     ListQuickPhrases,
@@ -644,6 +696,8 @@ pub struct Response {
     pub user_words: Option<Vec<UserWord>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report: Option<ImportReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub apps: Option<Vec<AppWindow>>,
 }
 
 impl Response {
@@ -768,7 +822,38 @@ mod tests {
     }
 
     #[test]
+    fn app_preset_rules_are_normalized_and_deduplicated() {
+        let config: Config = serde_json::from_str(
+            r#"{"app_presets": true, "app_preset_rules": [
+                {"app": " Code.EXE ", "mode": "english"},
+                {"app": "C:\\Program Files\\Tencent\\WeChat.exe", "mode": "chinese"},
+                {"app": "code", "mode": "chinese"},
+                {"app": "bad|name.exe", "mode": "english"},
+                {"app": "  ", "mode": "english"}
+            ]}"#,
+        )
+        .unwrap();
+        let config = config.sanitized();
+        assert!(config.app_presets);
+        assert_eq!(
+            config.app_preset_rules,
+            vec![
+                AppPreset { app: "code.exe".into(), mode: Mode::English },
+                AppPreset { app: "wechat.exe".into(), mode: Mode::Chinese },
+            ],
+            "统一成小写文件名，重复的只留第一条，写不成文件名的丢掉"
+        );
+        let old: Config = serde_json::from_str("{}").unwrap();
+        assert!(!old.app_presets && old.app_preset_rules.is_empty(), "旧配置不能自动开启");
+    }
+
+    #[test]
     fn unit_requests_decode() {
+        assert_eq!(
+            decode::<Request>(br#"{"op":"caps_lock","on":true}"#).unwrap(),
+            Request::CapsLock { on: true }
+        );
+        assert_eq!(decode::<Request>(br#"{"op":"list_apps"}"#).unwrap(), Request::ListApps);
         assert_eq!(
             decode::<Request>(br#"{"op":"toggle_mode"}"#).unwrap(),
             Request::ToggleMode { shift: None }

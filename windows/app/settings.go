@@ -53,6 +53,10 @@ type settings struct {
 	common  []string
 	words   []UserWord
 
+	// 最近一次从服务端发现的可选窗口。
+	apps                                     []AppWindow
+	newPresetApp, newPresetMode, presetError string
+
 	newCode, newText, newWeight         string
 	formError                           string
 	replacePhrases                      bool
@@ -113,6 +117,7 @@ func (s *settings) refresh() {
 		dicts, _ := s.backend.Call(op("list_dictionaries"))
 		phrases, _ := s.backend.Call(op("list_quick_phrases"))
 		common, commonErr := s.backend.Call(op("list_common_phrases"))
+		apps, _ := s.backend.Call(op("list_apps"))
 		return func() {
 			s.statusErr = ""
 			if status.Status != nil {
@@ -129,6 +134,7 @@ func (s *settings) refresh() {
 			} else {
 				s.notice = "读取常用语失败：" + commonErr.Error()
 			}
+			s.apps = apps.Apps
 		}
 	})
 }
