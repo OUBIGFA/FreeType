@@ -57,6 +57,8 @@ use crate::DllRef;
 const BEFORE_CHARS: i32 = 20;
 
 struct State {
+    /// 激活代次：停用后排队中的编辑会话不能继续操作文档或报告旧焦点。
+    generation: u64,
     thread_mgr: Option<ITfThreadMgr>,
     client_id: u32,
     thread_sink_cookie: Option<u32>,
@@ -101,9 +103,16 @@ pub struct TextService {
 }
 
 impl TextService {
+    /// 组字、候选选择和补全光标移动全部结束后才允许交接实现。
+    pub(crate) fn can_reload(&self) -> bool {
+        let s = self.state.borrow();
+        s.composition.is_none() && !s.busy && s.caret_move.is_none()
+    }
+
     pub fn new(instance: HINSTANCE) -> Self {
         Self {
             state: Rc::new(RefCell::new(State {
+                generation: 0,
                 thread_mgr: None,
                 client_id: 0,
                 thread_sink_cookie: None,
@@ -495,7 +504,9 @@ fn apply(state: &Rc<RefCell<State>>, context: Option<&ITfContext>, frame: Frame,
     } else {
         // 异步：编辑会话里改完文档再摆候选窗
         let (state2, context2, frame2) = (state.clone(), context.clone(), shared.clone());
+        let generation = state.borrow().generation;
         edit(context, client_id, false, move |ec| {
+            if state2.borrow().generation != generation { return Ok(()); }
             let result = apply_document(&state2, &context2, &frame2, ec);
             show_window(&state2, &frame2);
             caret_back(&state2, &frame2);
@@ -755,7 +766,9 @@ fn on_focus(state: &Rc<RefCell<State>>, focus: Option<&ITfDocumentMgr>) {
     }
     // 读光标前的字和光标位置要编辑会话；这里不能同步要，异步做完再告诉服务进程
     let (state2, context2) = (state.clone(), context.clone());
+    let generation = state.borrow().generation;
     edit_with(&context, client_id, TF_ES_ASYNCDONTCARE | TF_ES_READ, move |ec| {
+        if state2.borrow().generation != generation { return Ok(()); }
         let before = before_text(&context2, ec);
         let caret = selection_rect(&context2, ec);
         // 大写锁定可能在别的窗口里开关过：先对齐，下面拿到的中英文状态才是对的
@@ -786,6 +799,7 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
         ui::set_caret_handler(None);
         unwatch_layout(&self.state);
         let mut s = self.state.borrow_mut();
+        s.generation = s.generation.wrapping_add(1);
         s.caret_move = None;
         if let Some(thread_mgr) = s.thread_mgr.take() {
             unsafe {
@@ -805,6 +819,8 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
         }
         s.composition = None;
         s.context = None;
+        s.busy = false;
+        s.predicting = false;
         s.sink = None;
         s.layout_sink = None;
         s.window = None;
@@ -838,6 +854,7 @@ impl ITfTextInputProcessorEx_Impl for TextService_Impl {
         let focus = unsafe { thread_mgr.GetFocus().ok() };
         {
             let mut s = self.state.borrow_mut();
+            s.generation = s.generation.wrapping_add(1);
             s.thread_mgr = Some(thread_mgr);
             s.client_id = tid;
             s.sink = Some(composition_sink);
@@ -1061,7 +1078,9 @@ impl ITfTextLayoutSink_Impl for TextService_Impl {
         };
         let state = self.state.clone();
         let context2 = context.clone();
+        let generation = state.borrow().generation;
         edit_with(&context, client_id, TF_ES_ASYNCDONTCARE | TF_ES_READ, move |ec| {
+            if state.borrow().generation != generation { return Ok(()); }
             let rect = unsafe { composition.GetRange() }
                 .ok()
                 .and_then(|range| text_rect(&context2, ec, &range));
@@ -1082,6 +1101,19 @@ impl ITfTextLayoutSink_Impl for TextService_Impl {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn component_handoff_waits_for_input_and_caret_completion() {
+        let service = TextService::new(HINSTANCE::default());
+        assert!(service.can_reload());
+        note_frame(&service.state, &Frame { preedit: "ni".into(), handled: true, ..Frame::default() });
+        assert!(!service.can_reload(), "正在组字时不能替换实现");
+        note_frame(&service.state, &Frame::default());
+        service.state.borrow_mut().caret_move = Some(keys::CaretMove::new(1, 0));
+        assert!(!service.can_reload(), "补全光标移动结束前不能替换实现");
+        service.state.borrow_mut().caret_move = None;
+        assert!(service.can_reload());
+    }
 
     #[test]
     fn predicted_key_does_not_start_or_end_document_composition() {

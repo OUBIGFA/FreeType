@@ -78,6 +78,8 @@ var settingsItems = []settingItem{
 	{"sync/启用同步", "启用同步", "默认关闭。开启后可以把全部设置和数据上传到你自己的 WebDAV 或 S3 兼容存储，再在别的电脑上合并恢复", "云端同步", "WebDAV S3 坚果云 MinIO R2 OSS 网盘 云 备份 多台电脑"},
 	{"sync/同步服务", "同步服务", "填写 WebDAV 或 S3 兼容存储的地址和凭据，并测试连接", "云端同步", "WebDAV S3 地址 账号 密码 存储桶 Access Key Secret Key 测试连接"},
 	{"sync/上传与恢复", "上传与恢复", "上传当前数据的快照；查看各台电脑的快照并合并到本机", "云端同步", "立即上传 刷新设备 恢复 合并 快照"},
+	{"sync/自动同步", "自动同步", "按数据修改时间同步，较新的完整备份替换较旧数据", "云端同步", "定时 间隔 每天 次数 重试 自动上传 自动下载"},
+	{"sync/同步计划", "同步计划", "设置时间、次数、失败重试和备份保留数", "云端同步", "分钟 每日 上限 备份 历史"},
 	{"typing/模糊音分组", "模糊音分组", "选择要合并的相近读音", "拼音", "z zh c ch s sh n l f h r l an ang en eng in ing ian iang uan uang un ong ai huang wang iong"},
 	{"dicts/词库文件", "词库文件", "选择自定义主词库，或恢复白霜、万象和项目热词组成的默认词库", "主词库", "白霜 万象 热词 拼音 lexicon.tsv 选择文件 恢复默认"},
 	{"dicts/已导入词库", "已导入词库", "查看或删除导入的词库", "词库", "删除 管理"},
@@ -233,7 +235,7 @@ func (s *settings) unavailableReason(id string) string {
 		if !s.config.ClipboardHistory {
 			return "请先开启记录剪贴板历史。"
 		}
-	case "sync/同步服务", "sync/上传与恢复":
+	case "sync/同步服务", "sync/上传与恢复", "sync/自动同步", "sync/同步计划":
 		if !s.sync.Enabled {
 			return "请先开启启用同步。"
 		}

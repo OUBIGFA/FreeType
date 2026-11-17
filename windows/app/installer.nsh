@@ -26,6 +26,10 @@ LangString FT_STOP_FAILED ${LANG_SIMPCHINESE} "无法结束安装目录中的 Fr
 LangString FT_STOP_FAILED ${LANG_TRADCHINESE} "無法結束安裝目錄中的 FreeType 處理程序。檔案尚未取代；請關閉 FreeType 後重新執行安裝程式。"
 LangString FT_STOP_FAILED ${LANG_ENGLISH} "FreeType could not stop its processes in the installation directory. No files were replaced. Close FreeType and run the installer again."
 
+LangString FT_START_FAILED ${LANG_SIMPCHINESE} "新版输入法服务未能启动或载入词库。更新尚未完成，待更新记录已保留。请查看服务日志后重试安装。"
+LangString FT_START_FAILED ${LANG_TRADCHINESE} "新版輸入法服務未能啟動或載入詞庫。更新尚未完成，待更新記錄已保留。請查看服務日誌後重試安裝。"
+LangString FT_START_FAILED ${LANG_ENGLISH} "The updated input service could not start or load its dictionary. The update is incomplete and its pending record is retained. Check the service log and retry installation."
+
 LangString FT_ENABLE_FAILED ${LANG_SIMPCHINESE} "无法将 FreeType 加入当前用户的输入法列表。安装尚未完成，请重新运行安装器；问题持续时请查看服务日志。"
 LangString FT_ENABLE_FAILED ${LANG_TRADCHINESE} "無法將 FreeType 加入目前使用者的輸入法清單。安裝尚未完成，請重新執行安裝程式；問題持續時請查看服務日誌。"
 LangString FT_ENABLE_FAILED ${LANG_ENGLISH} "FreeType could not enable the input method for this user. Installation is incomplete. Run the installer again; if it still fails, check the service log."
@@ -47,6 +51,9 @@ LangString FT_RESTORE_FAILED ${LANG_ENGLISH} "Input method removal was not confi
 ; 避免等待仍在运行的服务退出。测试编译时覆盖名字，绝不占用用户的真实实例。
 !ifndef FREETYPE_SERVER_MUTEX
   !define FREETYPE_SERVER_MUTEX "Local\FreeType.Server"
+!endif
+!ifndef FREETYPE_UPDATE_PENDING
+  !define FREETYPE_UPDATE_PENDING "$APPDATA\FreeType\updates\pending.json"
 !endif
 Var FreeTypeServerGuard
 
@@ -110,6 +117,15 @@ Function FreeTypeLaunchAfterInstall
   System::Call 'kernel32::CloseHandle(p $FreeTypeServerGuard)'
   StrCpy $FreeTypeServerGuard ""
   released:
+  nsExec::ExecToLog /TIMEOUT=60000 '"$INSTDIR\bin\FreeTypeServer.exe" --start-and-check'
+  Pop $0
+  StrCmp $0 "0" ready
+    MessageBox MB_ICONSTOP|MB_OK "$(FT_START_FAILED)" /SD IDOK
+    SetErrorLevel 8
+    Quit
+  ready:
+  ; 服务已从本次安装目录启动且词库可用，才结束更新事务。
+  Delete "${FREETYPE_UPDATE_PENDING}"
   System::Call 'Kernel32::SetEnvironmentVariable(t "FREETYPE_INSTALL_COMPLETED", t "1")'
   Exec '"$INSTDIR\FreeType.exe" --after-install'
 FunctionEnd
@@ -130,8 +146,6 @@ FunctionEnd
   ; 加进当前用户的输入法列表，开机时放托盘图标并启动输入法服务
   Call FreeTypeEnableForUser
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "FreeType" '"$INSTDIR\FreeType.exe" --background'
-  ; The verified update is complete only after all input-method components register.
-  Delete "$APPDATA\FreeType\updates\pending.json"
   Call FreeTypeLaunchAfterInstall
 !macroend
 

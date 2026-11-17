@@ -7,7 +7,7 @@
 //! - `--unregister-tsf`（需要管理员）：注销并删掉上面的文件和注册表项。
 //! - `--enable` / `--disable`：把 FreeType 加进 / 移出当前用户的输入法列表。
 //!
-//! DLL 正被应用加载时不能覆盖：先改名，重启后删除旧文件。
+//! DLL 按内容摘要并行保存；注册成功后原子发布 current.txt，由运行中的 TSF 外壳安全交接。
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -15,7 +15,8 @@ use std::process::Command;
 use freetype_protocol::{LANGID_ZH_CN, PROFILE_GUID, TEXT_SERVICE_CLSID};
 use windows::core::{s, HRESULT, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{FreeLibrary, ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
-use windows::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_DELAY_UNTIL_REBOOT};
+use windows::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_DELAY_UNTIL_REBOOT, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH};
+use windows::Win32::Security::Cryptography::{BCryptHash, BCRYPT_SHA256_ALG_HANDLE};
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 use windows::Win32::System::Registry::{
@@ -47,7 +48,45 @@ fn program_files(x86: bool) -> PathBuf {
 }
 
 fn installed_dll(x86: bool) -> PathBuf {
-    program_files(x86).join(DLL_NAME)
+    let root = program_files(x86);
+    std::fs::read_to_string(root.join("current.txt")).ok()
+        .filter(|revision| valid_revision(revision.trim()))
+        .map(|revision| root.join("versions").join(revision.trim()).join(DLL_NAME))
+        .unwrap_or_else(|| root.join(DLL_NAME))
+}
+
+fn valid_revision(revision: &str) -> bool {
+    revision.len() == 64 && revision.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// 固定测试版号也必须识别新代码；目录按实际 DLL SHA-256 命名，不覆盖被加载的版本。
+fn stage_component(source: &Path, root: &Path) -> Result<(String, PathBuf), String> {
+    let bytes = std::fs::read(source).map_err(|e| e.to_string())?;
+    let mut hash = [0u8; 32];
+    unsafe { BCryptHash(BCRYPT_SHA256_ALG_HANDLE, None, &bytes, &mut hash).ok() }.map_err(|e| e.to_string())?;
+    let revision: String = hash.iter().map(|b| format!("{b:02x}")).collect();
+    let target = root.join("versions").join(&revision).join(DLL_NAME);
+    if target.exists() {
+        if std::fs::read(&target).map_err(|e| e.to_string())? != bytes {
+            return Err(format!("已保存的输入法组件摘要不符：{}", target.display()));
+        }
+    } else {
+        std::fs::create_dir_all(target.parent().unwrap()).map_err(|e| e.to_string())?;
+        let temporary = target.with_extension(format!("pending-{}", std::process::id()));
+        std::fs::write(&temporary, bytes).map_err(|e| e.to_string())?;
+        std::fs::rename(&temporary, &target).map_err(|e| e.to_string())?;
+    }
+    Ok((revision, target))
+}
+
+fn publish_component(root: &Path, revision: &str) -> Result<(), String> {
+    if !valid_revision(revision) || !root.join("versions").join(revision).join(DLL_NAME).is_file() {
+        return Err("输入法组件未准备完成，不能发布".into());
+    }
+    let temporary = root.join(format!("current-{}.tmp", std::process::id()));
+    std::fs::write(&temporary, revision).map_err(|e| e.to_string())?;
+    unsafe { MoveFileExW(&HSTRING::from(temporary.as_os_str()), &HSTRING::from(root.join("current.txt").as_os_str()), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) }
+        .map_err(|e| format!("无法发布输入法组件：{e}"))
 }
 
 /// 删掉文件；正被占用就改名，重启后删。
@@ -152,17 +191,20 @@ fn set_server_path(server: &Path) -> Result<(), String> {
 }
 
 pub fn register_tsf(bin_dir: &Path) -> Result<(), String> {
-    let x64 = installed_dll(false);
-    let x86 = installed_dll(true);
-    install_file(&bin_dir.join(DLL_NAME), &x64)?;
-    install_file(&bin_dir.join("x86").join(DLL_NAME), &x86)?;
+    let root64 = program_files(false);
+    let root86 = program_files(true);
+    let (revision64, x64) = stage_component(&bin_dir.join(DLL_NAME), &root64)?;
+    let (revision86, x86) = stage_component(&bin_dir.join("x86").join(DLL_NAME), &root86)?;
     // 系统输入法列表里显示的图标（DllRegisterServer 按 DLL 旁边的这个文件登记）
     for target in [&x64, &x86] {
         install_file(&bin_dir.join(ICON_NAME), &target.with_file_name(ICON_NAME))?;
     }
     call_dll(&x64, s!("DllRegisterServer"))?;
     regsvr32_x86(&x86, false)?;
-    set_server_path(&bin_dir.join("FreeTypeServer.exe"))
+    set_server_path(&bin_dir.join("FreeTypeServer.exe"))?;
+    // 两种架构全部可用后才通知现存组件切换；注册失败保留旧的发布指针。
+    publish_component(&root64, &revision64)?;
+    publish_component(&root86, &revision86)
 }
 
 pub fn unregister_tsf() -> Result<(), String> {
@@ -179,15 +221,24 @@ pub fn unregister_tsf() -> Result<(), String> {
             errors.push(e);
         }
     }
-    for path in [&x64, &x86] {
-        for file in [path.to_path_buf(), path.with_file_name(ICON_NAME)] {
-            if let Err(e) = remove_file(&file) {
-                errors.push(e);
+    for root in [program_files(false), program_files(true)] {
+        let mut components = vec![root.join(DLL_NAME)];
+        if let Ok(entries) = std::fs::read_dir(root.join("versions")) {
+            for entry in entries.flatten() {
+                if valid_revision(&entry.file_name().to_string_lossy()) { components.push(entry.path().join(DLL_NAME)); }
             }
         }
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::remove_dir(dir);
+        for path in components {
+            for file in [path.to_path_buf(), path.with_file_name(ICON_NAME)] {
+                if let Err(e) = remove_file(&file) {
+                    errors.push(e);
+                }
+            }
+            if let Some(dir) = path.parent().filter(|dir| *dir != root) { let _ = std::fs::remove_dir(dir); }
         }
+        if let Err(e) = remove_file(&root.join("current.txt")) { errors.push(e); }
+        let _ = std::fs::remove_dir(root.join("versions"));
+        let _ = std::fs::remove_dir(root);
     }
     let status = unsafe { RegDeleteTreeW(HKEY_LOCAL_MACHINE, &HSTRING::from(REGISTRY_KEY)) };
     if status != ERROR_SUCCESS && status != ERROR_FILE_NOT_FOUND {
@@ -198,6 +249,39 @@ pub fn unregister_tsf() -> Result<(), String> {
     } else {
         Err(errors.join("；"))
     }
+}
+
+/// 安装器已释放启动屏障。启动新服务并等词库可用，失败时安装器保留待更新记录。
+pub fn start_and_check() -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    use windows::core::PWSTR;
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_NAME_WIN32};
+    let executable = std::env::current_exe().map_err(|e| e.to_string())?;
+    let expected = executable.canonicalize().map_err(|e| e.to_string())?;
+    let name = freetype_protocol::pipe_name(&crate::pipe::current_user_sid().map_err(|e| e.to_string())?) + &crate::instance_suffix();
+    Command::new(&executable).creation_flags(0x0800_0000 | 0x0000_0008).spawn().map_err(|e| e.to_string())?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
+    while std::time::Instant::now() < deadline {
+        if let Ok((response, pid)) = crate::pipe::request_with_server(&name, &freetype_protocol::Request::Status) {
+            let path = unsafe {
+                let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).map_err(|e| e.to_string())?;
+                let mut path = [0u16; 32768];
+                let mut len = path.len() as u32;
+                let result = QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, PWSTR(path.as_mut_ptr()), &mut len);
+                let _ = CloseHandle(process);
+                result.map_err(|e| e.to_string())?;
+                PathBuf::from(String::from_utf16_lossy(&path[..len as usize]))
+            };
+            if path.canonicalize().map_err(|e| e.to_string())? != expected { return Err("仍有其他安装目录的旧服务运行，更新尚未生效".into()); }
+            if let Some(status) = response.status {
+                if let Some(error) = status.error { return Err(error); }
+                if response.ok && status.ready { return Ok(()); }
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    Err("新版输入法服务未在 45 秒内就绪".into())
 }
 
 /// InstallLayoutOrTip 用的字符串：`0804:{CLSID}{PROFILE}`。
@@ -230,6 +314,30 @@ pub fn enable_for_user(enable: bool) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn component_publication_preserves_old_bytes_and_rejects_incomplete_versions() {
+        let marker = marker_path();
+        let root = marker.parent().unwrap();
+        let source = root.join("source.dll");
+        std::fs::write(&source, b"first component").unwrap();
+        let (first, old) = super::stage_component(&source, root).unwrap();
+        assert_eq!(first.len(), 64);
+        super::publish_component(root, &first).unwrap();
+        std::fs::write(&source, b"second component").unwrap();
+        let (second, new) = super::stage_component(&source, root).unwrap();
+        assert_ne!(first, second);
+        assert_eq!(std::fs::read(&old).unwrap(), b"first component");
+        assert_eq!(std::fs::read(&new).unwrap(), b"second component");
+        super::publish_component(root, &second).unwrap();
+        assert_eq!(std::fs::read_to_string(root.join("current.txt")).unwrap(), second);
+        for invalid in ["../escape", &"a".repeat(64)] {
+            assert!(super::publish_component(root, invalid).is_err());
+            assert_eq!(std::fs::read_to_string(root.join("current.txt")).unwrap(), second);
+        }
+        std::fs::write(&new, b"corrupt").unwrap();
+        assert!(super::stage_component(&source, root).is_err());
+    }
+
     fn marker_path() -> std::path::PathBuf {
         let root = std::env::var_os("FREETYPE_TEST_TEMP")
             .map(std::path::PathBuf::from)

@@ -30,6 +30,8 @@ type app struct {
 	settings  *settings
 	tray      *mygo.Tray
 	updates   *updates
+	syncer    *autoSync
+	syncError string
 }
 
 func (a *app) openSettings() {
@@ -42,6 +44,12 @@ func (a *app) openSettings() {
 	}
 	s := newSettings(a.client, mygo.App.Version())
 	s.resources = a.resources
+	if a.syncer != nil {
+		s.autoSync = a.syncer
+		s.autoSyncStatus = a.syncer.snapshot()
+	} else if a.syncError != "" {
+		s.autoSyncStatus = autoSyncState{Failed: true, Message: a.syncError}
+	}
 	s.onTray = a.showTray
 	s.openFolder = func(path string) { _ = exec.Command("explorer.exe", path).Start() }
 	s.openURL = mygo.Shell.OpenExternal
@@ -210,6 +218,47 @@ func main() {
 				log.Println(err)
 				return
 			}
+			// 同步跟随应用存活，关闭设置窗口也继续；目录以服务实际使用的位置为准。
+			if status, err := a.client.Call(op("status")); err == nil && status.Status != nil {
+				syncer, syncErr := newAutoSync(status.Status.DataDir, a.client)
+				mygo.RunOnMain(func() {
+					if syncErr != nil {
+						log.Println("initialize sync:", syncErr)
+						a.syncError = syncErr.Error() + "；修正后请重新启动 FreeType 设置和托盘"
+						if a.settings != nil {
+							a.win.Update(func() { a.settings.autoSyncStatus = autoSyncState{Failed: true, Message: a.syncError} })
+						}
+						return
+					}
+					a.syncer = syncer
+					syncer.changed = func(state autoSyncState) {
+						mygo.RunOnMain(func() {
+							if a.settings != nil && a.win != nil {
+								s := a.settings
+								a.win.Update(func() { s.autoSyncStatus = state })
+							}
+						})
+					}
+					syncer.restored = func(response Response) {
+						mygo.RunOnMain(func() {
+							if a.settings != nil && a.win != nil {
+								s := a.settings
+								a.win.Update(func() { s.applyRestored(response) })
+							} else if response.Config != nil {
+								a.showTray(response.Config.TrayIcon)
+								if a.updates != nil {
+									a.updates.setAutomatic(response.Config.AutoUpdate)
+								}
+							}
+						})
+					}
+					if a.settings != nil && a.win != nil {
+						s := a.settings
+						a.win.Update(func() { s.autoSync = syncer; s.autoSyncStatus = syncer.snapshot() })
+					}
+					syncer.start()
+				})
+			}
 			// 安装后先等服务可读，再决定是否创建设置窗口，默认关闭时不会闪现。
 			if afterInstall {
 				a.handleLaunch(args)
@@ -248,5 +297,8 @@ func main() {
 	}
 	if a.updates != nil {
 		a.updates.close()
+	}
+	if a.syncer != nil {
+		a.syncer.close()
 	}
 }

@@ -89,6 +89,15 @@ pub(crate) fn export(
     engine: &Engine,
     path: &Path,
 ) -> Result<ImportReport, String> {
+    let (text, report) = snapshot(store, config, mode, recent_emoji, engine)?;
+    write_atomic(path, &text).map_err(|error| format!("写入全部设置备份失败：{error}"))?;
+    Ok(report)
+}
+
+/// 同一份序列化用于导出和条件恢复比较，避免下载期间的新编辑被覆盖。
+pub(crate) fn snapshot(
+    store: &Store, config: &Config, mode: Mode, recent_emoji: &[String], engine: &Engine,
+) -> Result<(String, ImportReport), String> {
     let quick = optional_text(&store.dir().join("quick_phrases.txt"))?.unwrap_or_default();
     let parsed = msime::parse_quick_phrases(&quick);
     if !parsed.errors.is_empty() {
@@ -150,8 +159,28 @@ pub(crate) fn export(
     };
     let prepared = prepare(data)?;
     let text = serde_json::to_string_pretty(&prepared.data).map_err(|error| error.to_string())? + "\n";
-    write_atomic(path, &text).map_err(|error| format!("写入全部设置备份失败：{error}"))?;
-    Ok(prepared.report())
+    Ok((text, prepared.report()))
+}
+
+/// 首次同步和服务重启后，使用数据文件的时间，不能使用本次导出文件的时间。
+pub(crate) fn modified_unix_ms(store: &Store, config: &Config) -> Result<u64, String> {
+    let mut paths: Vec<PathBuf> = PROFILE_FILES.iter().map(|name| store.dir().join(name)).collect();
+    paths.push(store.dir().join("dicts"));
+    paths.extend(dictionary_paths(&store.dir().join("dicts"))?);
+    if !config.lexicon.is_empty() { paths.push(PathBuf::from(&config.lexicon)); }
+    let mut latest = 0;
+    for path in paths {
+        match fs::metadata(&path) {
+            Ok(meta) => {
+                let stamp = meta.modified().map_err(|e| e.to_string())?
+                    .duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
+                latest = latest.max(stamp);
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("读取数据修改时间失败：{e}")),
+        }
+    }
+    Ok(latest)
 }
 
 pub(crate) fn read(path: &Path) -> Result<PreparedBackup, String> {

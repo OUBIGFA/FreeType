@@ -536,6 +536,10 @@ pub enum Request {
     ImportLearning { path: String },
     /// 全部设置和用户数据的版本化备份；校验预览不改动当前数据。
     ExportSettings { path: String },
+    /// 自动同步的完整快照及数据修改时间；导出本身不算修改。
+    ExportSyncSettings { path: String },
+    /// 仅当当前数据仍与 expected_path 一致且没有组字时整份恢复。
+    ImportSyncSettings { path: String, expected_path: String },
     InspectSettingsBackup { path: String },
     ImportSettings { path: String },
     /// 把一份全部设置备份合并进当前数据（数据同步的恢复）：不删除、不替换本机已有的内容。
@@ -692,6 +696,8 @@ pub struct ImportReport {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Response {
     pub ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modified_unix_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

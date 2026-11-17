@@ -26,7 +26,7 @@ class UpdateHandoffTests(unittest.TestCase):
             Path(os.environ["LOCALAPPDATA"]) / "mygo/nsis-3.13/makensis.exe")))
         self.server = self.root / "app/bin/FreeTypeServer.exe"
         self.server.parent.mkdir(parents=True)
-        shutil.copyfile(ROOT / "target/release/FreeTypeServer.exe", self.server)
+        shutil.copyfile(Path(os.environ.get("FREETYPE_TEST_SERVER", ROOT / "target/release/FreeTypeServer.exe")), self.server)
         self.data = self.root / "data"
         self.data.mkdir()
         self.resources = self.root / "app/data"
@@ -62,6 +62,10 @@ class UpdateHandoffTests(unittest.TestCase):
         self.files = []
 
     def tearDown(self):
+        if self.mutex_exists():
+            stop = subprocess.run([str(self.server), "--stop"], env=self.env,
+                                  creationflags=subprocess.CREATE_NO_WINDOW, timeout=10)
+            self.assertEqual(stop.returncode, 0)
         for file in self.files:
             file.close()
         for process in reversed(self.processes):
@@ -142,7 +146,8 @@ class UpdateHandoffTests(unittest.TestCase):
             f'InstallDir "{self.server.parent.parent}"\n'
             '!include "MUI2.nsh"\n!insertmacro MUI_LANGUAGE "SimpChinese"\n'
             '!insertmacro MUI_LANGUAGE "TradChinese"\n!insertmacro MUI_LANGUAGE "English"\n'
-            f'!define FREETYPE_SERVER_MUTEX "{self.mutex}"\n!include "{INCLUDE}"\n'
+            f'!define FREETYPE_SERVER_MUTEX "{self.mutex}"\n'
+            f'!define FREETYPE_UPDATE_PENDING "{self.root / "pending.json"}"\n!include "{INCLUDE}"\n'
             'Section\n'
             f'FileOpen $0 "{self.root / "copying.txt"}" w\nFileClose $0\n'
             'StrCpy $1 0\nwait:\n'
@@ -172,8 +177,8 @@ class UpdateHandoffTests(unittest.TestCase):
         self.lexicon.write_text(self.complete, encoding="utf-8")
         (self.root / "continue.txt").touch()
         self.assertEqual(installer.wait(timeout=10), 0)
-        self.wait_for(lambda: not self.mutex_exists(), "Installer retained the startup barrier")
-        self.launch(self.server)
+        # 完成钩子必须自己启动并验证新版服务；不能等重启电脑或测试手动拉起。
+        self.assertTrue(self.mutex_exists(), "The completed installer must leave a ready server running")
         connection = self.connect()
         self.wait_for(lambda: self.call(connection, "hello", session=True, app="update-test.exe")["status"]["ready"],
                       "Dictionary did not load after the update")

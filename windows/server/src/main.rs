@@ -96,6 +96,7 @@ mod app {
             }
             Some("--enable") => return report(setup::enable_for_user(true), "加入输入法列表"),
             Some("--disable") => return report(setup::enable_for_user(false), "移出输入法列表"),
+            Some("--start-and-check") => return report(setup::start_and_check(), "启动并核对新版服务"),
             Some("--stop") => {
                 let result = pipe_path().and_then(|name| {
                     pipe::request(&name, &Request::Shutdown)

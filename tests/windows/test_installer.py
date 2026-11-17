@@ -35,10 +35,10 @@ class InstallerPreparationTests(unittest.TestCase):
             ' if (args.Length > 0 && args[0] == "--stop") {'
             ' System.IO.File.WriteAllText(System.IO.Path.Combine('
             ' System.AppDomain.CurrentDomain.BaseDirectory, "stop-requested.txt"), "requested"); return 0; }'
-            ' if (args.Length > 0 && (args[0] == "--enable" || args[0] == "--disable" || args[0] == "--unregister-tsf")) {'
+            ' if (args.Length > 0 && (args[0] == "--enable" || args[0] == "--disable" || args[0] == "--unregister-tsf" || args[0] == "--start-and-check")) {'
             ' System.IO.File.AppendAllText(System.IO.Path.Combine('
             ' System.AppDomain.CurrentDomain.BaseDirectory, "setup-calls.txt"), args[0] + "\\n");'
-            ' string variable = args[0] == "--enable" ? "ENABLE" : args[0] == "--disable" ? "DISABLE" : "UNREGISTER";'
+            ' string variable = args[0] == "--enable" ? "ENABLE" : args[0] == "--disable" ? "DISABLE" : args[0] == "--start-and-check" ? "START" : "UNREGISTER";'
             ' int code = int.Parse(System.Environment.GetEnvironmentVariable("FREETYPE_TEST_" + variable + "_EXIT") ?? "0");'
             ' int marker = System.Array.IndexOf(args, "--marker");'
             ' if (code == 0 && args[0] == "--unregister-tsf" && marker >= 0 && marker + 1 < args.Length) {'
@@ -66,6 +66,7 @@ class InstallerPreparationTests(unittest.TestCase):
         # Real preparation now holds the server mutex across the entire install.
         # Each disposable NSIS installer must use a private name, never the user's.
         self.guard_define = f'!define FREETYPE_SERVER_MUTEX "Local\\FreeType.Test-{self.directory.name}"\n'
+        self.guard_define += f'!define FREETYPE_UPDATE_PENDING "{self.directory / "pending.json"}"\n'
 
     def tearDown(self):
         for process in self.processes:
@@ -170,6 +171,8 @@ class InstallerPreparationTests(unittest.TestCase):
 
     def test_install_completion_marks_automatic_and_finish_page_launches(self):
         shutil.copyfile(self.fixture, self.target / "FreeType.exe")
+        (self.target / "bin").mkdir()
+        shutil.copyfile(self.fixture, self.target / "bin/FreeTypeServer.exe")
         self.run_preparation(
             'Call FreeTypeLaunchAfterInstall\n'
             # mygo's finish page launches without arguments; it must inherit the marker too.
@@ -181,6 +184,18 @@ class InstallerPreparationTests(unittest.TestCase):
             time.sleep(0.02)
         self.assertEqual(automatic.read_text(encoding="utf-8"), "1|--after-install")
         self.assertEqual((self.target / "finish-page.txt").read_text(encoding="utf-8"), "1|")
+        self.assertEqual((self.target / "bin/setup-calls.txt").read_text(), "--start-and-check\n")
+
+    def test_new_service_failure_does_not_launch_or_report_success(self):
+        shutil.copyfile(self.fixture, self.target / "FreeType.exe")
+        (self.target / "bin").mkdir()
+        shutil.copyfile(self.fixture, self.target / "bin/FreeTypeServer.exe")
+        pending = self.directory / "pending.json"
+        pending.write_text("pending", encoding="utf-8")
+        self.run_preparation('Call FreeTypeLaunchAfterInstall\n', expected_code=8,
+                             environment={"FREETYPE_TEST_START_EXIT": "23"})
+        self.assertFalse((self.target / "after-install.txt").exists())
+        self.assertEqual(pending.read_text(encoding="utf-8"), "pending")
 
     def run_uninstall(self, expected_code, expected_calls, *, cancelled=False, stale_marker=False, environment=None):
         import winreg

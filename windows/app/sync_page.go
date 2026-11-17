@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/egoist/mygo/ui"
@@ -15,12 +16,12 @@ func (s *settings) syncPage(c *ui.Context) {
 		return
 	}
 	s.loadSync()
-	busy := s.syncBusy != ""
+	busy := s.syncBusy != "" || s.autoSyncStatus.Busy
 	section(c, "云端同步", func() {
 		if s.settingSwitch(c, "sync/启用同步", false, &s.sync.Enabled) {
 			s.saveSync()
 		}
-		if !s.sync.Enabled && !s.showSetting("sync/同步服务") && !s.showSetting("sync/上传与恢复") {
+		if !s.sync.Enabled && !s.showSetting("sync/同步服务") && !s.showSetting("sync/上传与恢复") && !s.showSetting("sync/自动同步") && !s.showSetting("sync/同步计划") {
 			return
 		}
 		s.settingBlock(c, "sync/同步服务", func() {
@@ -29,7 +30,7 @@ func (s *settings) syncPage(c *ui.Context) {
 				if s.sync.Provider == "s3" {
 					provider = 1
 				}
-				if ui.Segmented(c, &provider, "WebDAV", "S3 兼容").Label("同步服务").Changed() {
+				if ui.Segmented(c, &provider, "WebDAV", "S3 兼容").AlignSelf(ui.Start).Label("同步服务").Changed() {
 					s.sync.Provider = []string{"webdav", "s3"}[provider]
 				}
 				ui.Column(c).Children(func() {
@@ -63,9 +64,89 @@ func (s *settings) syncPage(c *ui.Context) {
 				})
 			})
 		})
+		if s.settingSwitch(c, "sync/自动同步", false, &s.sync.Automatic) {
+			s.saveSync()
+		}
+		s.settingBlock(c, "sync/同步计划", func() {
+			ui.Column(c).Padding(14, 18).Gap(12).Children(func() {
+				ui.Form(c, func() {
+					ui.Field(c, "同步方式", func() {
+						mode := 0
+						if s.sync.Schedule == "daily" {
+							mode = 1
+						}
+						// 表单内容列默认拉伸子控件；分段按钮按标签宽度显示。
+						if ui.Segmented(c, &mode, "按间隔", "每天定时").AlignSelf(ui.Start).Label("同步方式").Changed() {
+							s.sync.Schedule = []string{"interval", "daily"}[mode]
+						}
+					})
+					if s.sync.Schedule == "daily" {
+						ui.Field(c, "每天时间", func() { ui.TextInput(c, &s.sync.DailyTime).Label("每天同步时间").Placeholder("21:00").Width(160) }).Description("按本机时间，24 小时制。")
+					} else {
+						ui.Field(c, "间隔（分钟）", func() {
+							value := float64(s.sync.IntervalMinutes)
+							if ui.NumberInput(c, &value, 1, 1440, 1).Label("同步间隔").Width(160).Changed() {
+								s.sync.IntervalMinutes = int(value)
+							}
+						})
+					}
+					ui.Field(c, "每日最多次数", func() {
+						value := float64(s.sync.DailyLimit)
+						if ui.NumberInput(c, &value, 0, 1440, 1).Label("每日最多次数").Width(160).Changed() {
+							s.sync.DailyLimit = int(value)
+						}
+					}).Description("0 表示不限；自动检查和重试均计一次，手动同步不受限。")
+					ui.Field(c, "失败重试次数", func() {
+						value := float64(s.sync.RetryLimit)
+						if ui.NumberInput(c, &value, 0, 10, 1).Label("失败重试次数").Width(160).Changed() {
+							s.sync.RetryLimit = int(value)
+						}
+					})
+					ui.Field(c, "每台设备保留备份", func() {
+						value := float64(s.sync.KeepSnapshots)
+						if ui.NumberInput(c, &value, 1, 100, 1).Label("保留备份数").Width(160).Changed() {
+							s.sync.KeepSnapshots = int(value)
+						}
+					})
+				})
+				checkbox(c, &s.sync.SyncOnStart, "启动 FreeType 后同步一次")
+				ui.Row(c).Gap(10).Children(func() {
+					if ui.Button(c, "保存同步计划").Disabled(busy).Clicked() {
+						if s.saveSync() {
+							s.syncMessage = "同步计划已保存"
+							s.syncFailed = false
+						}
+					}
+					if ui.PrimaryButton(c, "立即同步").Disabled(busy || s.autoSync == nil).Clicked() {
+						if s.saveSync() {
+							go s.autoSync.run(time.Now(), true)
+						}
+					}
+					if ui.Button(c, "打开恢复前备份").Clicked() && s.openFolder != nil {
+						s.openFolder(filepath.Join(s.syncDataDir(), "sync-backups"))
+					}
+				})
+				status := s.autoSyncStatus
+				text := status.Message
+				if text == "" {
+					text = "自动同步尚未运行"
+				}
+				color := colors(c).muted
+				if status.Failed {
+					color = c.Theme().Danger
+				}
+				ui.Text(c, text).Wrap().TextColor(color)
+				if !status.Last.IsZero() {
+					ui.Text(c, "最近同步："+status.Last.Local().Format("01-02 15:04")+fmt.Sprintf(" · 今日自动尝试 %d 次", status.Count)).TextColor(colors(c).muted)
+				}
+				if s.sync.Automatic && !status.Next.IsZero() {
+					ui.Text(c, "下次同步："+status.Next.Local().Format("01-02 15:04")).TextColor(colors(c).muted)
+				}
+			})
+		})
 		s.settingBlock(c, "sync/上传与恢复", func() {
 			ui.Row(c).Padding(13, 18).Gap(10).AlignItems(ui.Center).Children(func() {
-				texts(c, "上传与恢复", "上传会把当前的全部设置和数据存成这台电脑的一份快照；每台电脑保留最近 "+fmt.Sprint(keepSnapshots)+" 份")
+				texts(c, "上传与恢复", "上传会把当前的全部设置和数据存成这台电脑的一份快照；每台电脑保留最近 "+fmt.Sprint(s.sync.KeepSnapshots)+" 份")
 				if ui.Button(c, "刷新设备").Disabled(busy).Clicked() {
 					s.refreshSyncDevices()
 				}
@@ -100,15 +181,19 @@ func (s *settings) syncPage(c *ui.Context) {
 		message, color := s.syncMessage, colors(c).muted
 		if busy {
 			message = s.syncBusy
+			if message == "" {
+				message = s.autoSyncStatus.Message
+			}
 		} else if s.syncFailed {
 			color = c.Theme().Danger
 		}
 		ui.Text(c, message).Key("sync-message").TextColor(color).Wrap().Margin(10, 2, 0, 2)
 	}
 	hint(c, "数据只发往你填写的地址，不经过其他服务器。密码和密钥用 Windows 的数据保护加密后保存在本机，不会上传。\n"+
-		"恢复是合并：把快照里的词库、快捷短语、常用语、学习记录并进本机，并采纳那台电脑上改过的设置；本机已有的内容不会被删除。"+
+		"设备列表中的手动恢复是合并：把快照里的词库、快捷短语、常用语、学习记录并进本机，并采纳那台电脑上改过的设置；本机已有的内容不会被删除。"+
 		"因此在一台电脑上删掉的内容，合并另一台的快照后可能会回来。中英文状态、自定义主词库和悬浮状态栏位置各台电脑各自保留。\n"+
-		"目前需要手动点「立即上传」，没有自动上传。")
+		"自动同步按数据修改时间选择整份备份，较新版本会替换本机全部设置和数据（包括删除）；各台电脑请开启系统自动校时。恢复前的本机备份保存在 sync-backups。\n"+
+		"关闭设置窗口后自动同步继续运行；退出 FreeType 设置和托盘后停止。相同内容不会重复传输。")
 	title := "合并 " + deviceName(s.syncRestore) + " 的快照？"
 	switch ui.AlertDialog(c, &s.confirmSyncRestore, title, "将把这份快照并进本机当前的数据，本机已有的内容不会被删除。", "取消", "合并") {
 	case 1:

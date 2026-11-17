@@ -106,6 +106,8 @@ pub struct Host {
     lexicon_change: Option<String>,
     /// 学到了新东西，还没存盘。
     dirty: bool,
+    // 包含尚未存盘的学习变化；同步导出、轮询和远端恢复不更新此时间。
+    sync_modified_ms: u64,
 }
 
 impl Drop for Host {
@@ -210,6 +212,7 @@ impl Host {
             lexicon_in_use: String::new(),
             lexicon_change: None,
             dirty: false,
+            sync_modified_ms: 0,
         };
         host.load_phrases();
         host
@@ -591,9 +594,11 @@ impl Host {
         let mut frame = out.frame;
         if frame.commit.is_some() {
             self.dirty = true;
+            self.mark_sync_change();
         }
         if out.forgot {
             self.dirty = true;
+            self.mark_sync_change();
             self.save_if_dirty();
         }
         self.style(&mut frame, mode);
@@ -1141,11 +1146,55 @@ impl Host {
         }
     }
 
+    fn mark_sync_change(&mut self) {
+        self.sync_modified_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
+    }
+
+    fn export_sync_settings(&self, path: &Path) -> Response {
+        let mut response = self.export_settings(path);
+        if response.ok {
+            match backup::modified_unix_ms(&self.store, &self.config) {
+                Ok(stamp) => response.modified_unix_ms = Some(stamp.max(self.sync_modified_ms)),
+                Err(error) => return Response::error(error),
+            }
+        }
+        response
+    }
+
+    fn import_sync_settings(&mut self, path: &Path, expected_path: &Path) -> Response {
+        if self.clients.values().any(|client| client.state.busy()) {
+            return Response::error("正在输入，自动同步将在稍后重试");
+        }
+        let Some(engine) = self.engine.as_deref() else { return Response::error("词库还在载入，请稍后再试"); };
+        let current = match backup::snapshot(&self.store, &self.config, self.mode, &self.recent_emoji, engine) {
+            Ok((text, _)) => text,
+            Err(error) => return Response::error(error),
+        };
+        let expected = match std::fs::read_to_string(expected_path) {
+            Ok(text) => text,
+            Err(error) => return Response::error(format!("读取同步比较快照失败：{error}")),
+        };
+        if current != expected { return Response::error("本机数据在下载期间已修改，将重新比较版本"); }
+        // 检查和恢复在同一宿主请求中完成，期间不处理其他输入或设置修改。
+        self.import_settings(path)
+    }
+
     /// 处理一条请求；里面出了 panic 时记日志、丢掉这个连接的输入状态，不让服务进程退出。
     pub fn handle(&mut self, id: ClientId, request: Request) -> Response {
+        let may_edit = matches!(&request,
+            Request::SetConfig { .. } | Request::SetQuickPhrases { .. } | Request::ImportQuickPhrases { .. }
+            | Request::SetCommonPhrases { .. } | Request::ImportCommonPhrases { .. }
+            | Request::ImportDictionary { .. } | Request::RemoveDictionary { .. }
+            | Request::ImportLearning { .. } | Request::ImportSettings { .. } | Request::MergeSettings { .. }
+            | Request::ForgetWords { .. } | Request::AddUserWord { .. } | Request::ClearLearned
+            | Request::ToggleMode { .. } | Request::Command { .. } | Request::Reload);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.handle_inner(id, request)));
         match result {
-            Ok(response) => response,
+            Ok(response) => {
+                if response.ok && may_edit { self.mark_sync_change(); }
+                response
+            },
             Err(_) => {
                 crate::log(&format!("处理请求时出错（连接 {id}），已重置这个输入框"));
                 let engine = self.engine_ref();
@@ -1285,6 +1334,8 @@ impl Host {
             Request::ExportLearning { path } => self.export_learning(Path::new(&path)),
             Request::ImportLearning { path } => self.import_learning(Path::new(&path)),
             Request::ExportSettings { path } => self.export_settings(Path::new(&path)),
+            Request::ExportSyncSettings { path } => self.export_sync_settings(Path::new(&path)),
+            Request::ImportSyncSettings { path, expected_path } => self.import_sync_settings(Path::new(&path), Path::new(&expected_path)),
             Request::InspectSettingsBackup { path } => Self::report(backup::read(Path::new(&path)).map(|data| data.report())),
             Request::ImportSettings { path } => self.import_settings(Path::new(&path)),
             Request::MergeSettings { path } => self.merge_settings(Path::new(&path)),

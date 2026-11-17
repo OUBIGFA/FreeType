@@ -16,6 +16,8 @@ mod register;
 #[cfg(windows)]
 mod service;
 #[cfg(windows)]
+mod reload;
+#[cfg(windows)]
 mod ui;
 
 #[cfg(windows)]
@@ -32,7 +34,7 @@ mod exports {
     use windows::Win32::System::SystemServices::DLL_PROCESS_ATTACH;
     use windows::Win32::UI::TextServices::ITfTextInputProcessorEx;
 
-    use crate::service::TextService;
+    use crate::reload::ReloadableService;
 
     static INSTANCE: AtomicIsize = AtomicIsize::new(0);
     /// 活着的 COM 对象和 LockServer 次数；为 0 时 DLL 可以卸载。
@@ -72,7 +74,7 @@ mod exports {
             if outer.is_some() {
                 return Err(CLASS_E_NOAGGREGATION.into());
             }
-            let service: ITfTextInputProcessorEx = TextService::new(instance()).into();
+            let service: ITfTextInputProcessorEx = ReloadableService::new(instance()).into();
             unsafe { service.query(iid, object).ok() }
         }
 

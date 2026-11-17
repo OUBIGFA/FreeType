@@ -172,17 +172,18 @@ type Frame struct {
 
 // Response 是一条应答。
 type Response struct {
-	OK            bool          `json:"ok"`
-	Error         string        `json:"error,omitempty"`
-	Status        *Status       `json:"status,omitempty"`
-	Config        *Config       `json:"config,omitempty"`
-	QuickPhrases  []QuickPhrase `json:"quick_phrases,omitempty"`
-	CommonPhrases []string      `json:"common_phrases,omitempty"`
-	Dictionaries  []Dictionary  `json:"dictionaries,omitempty"`
-	UserWords     []UserWord    `json:"user_words,omitempty"`
-	Report        *ImportReport `json:"report,omitempty"`
-	Frame         *Frame        `json:"frame,omitempty"`
-	Apps          []AppWindow   `json:"apps,omitempty"`
+	OK             bool          `json:"ok"`
+	ModifiedUnixMS int64         `json:"modified_unix_ms,omitempty"`
+	Error          string        `json:"error,omitempty"`
+	Status         *Status       `json:"status,omitempty"`
+	Config         *Config       `json:"config,omitempty"`
+	QuickPhrases   []QuickPhrase `json:"quick_phrases,omitempty"`
+	CommonPhrases  []string      `json:"common_phrases,omitempty"`
+	Dictionaries   []Dictionary  `json:"dictionaries,omitempty"`
+	UserWords      []UserWord    `json:"user_words,omitempty"`
+	Report         *ImportReport `json:"report,omitempty"`
+	Frame          *Frame        `json:"frame,omitempty"`
+	Apps           []AppWindow   `json:"apps,omitempty"`
 }
 
 // Request 是一条请求：op 加上各自的字段。

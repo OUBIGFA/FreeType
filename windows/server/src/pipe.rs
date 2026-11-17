@@ -26,7 +26,7 @@ use windows::Win32::Storage::FileSystem::{
     OPEN_EXISTING, PIPE_ACCESS_DUPLEX,
 };
 use windows::Win32::System::Pipes::{
-    ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, ImpersonateNamedPipeClient, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS,
+    ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, GetNamedPipeServerProcessId, ImpersonateNamedPipeClient, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS,
     PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
 };
 use windows::Win32::System::SystemServices::SECURITY_MANDATORY_MEDIUM_RID;
@@ -281,6 +281,11 @@ pub fn listen(name: &str, sid: &str, engine: Sender<Message>) -> io::Result<()> 
 
 /// 简单的客户端：连上、发一条、读一条（`--stop`、测试用）。
 pub fn request(name: &str, request: &Request) -> io::Result<Response> {
+    request_with_server(name, request).map(|(response, _)| response)
+}
+
+/// 安装交接还需确认应答来自本次安装目录，不能把其他服务的 status 当作更新完成。
+pub fn request_with_server(name: &str, request: &Request) -> io::Result<(Response, u32)> {
     let handle = unsafe {
         CreateFileW(
             &HSTRING::from(name),
@@ -301,10 +306,12 @@ pub fn request(name: &str, request: &Request) -> io::Result<Response> {
         }
     }
     let handle = Handle(handle);
+    let mut server = 0;
+    unsafe { GetNamedPipeServerProcessId(handle.0, &mut server)?; }
     write_all(handle.0, &encode(request))?;
     let mut reader = LineReader { buf: Vec::new() };
     let line = reader
         .next_line(handle.0)
         .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "服务进程没有应答"))?;
-    decode(&line).map_err(io::Error::other)
+    decode(&line).map(|response| (response, server)).map_err(io::Error::other)
 }

@@ -47,6 +47,16 @@ type syncSettings struct {
 	S3SecretKey string `json:"s3_secret_key"`
 	S3PathStyle bool   `json:"s3_path_style"`
 
+	// 计划与凭据一样只属于本机，不随远端快照恢复。
+	Automatic       bool   `json:"automatic"`
+	Schedule        string `json:"schedule"`
+	IntervalMinutes int    `json:"interval_minutes"`
+	DailyTime       string `json:"daily_time"`
+	SyncOnStart     bool   `json:"sync_on_start"`
+	DailyLimit      int    `json:"daily_limit"`
+	RetryLimit      int    `json:"retry_limit"`
+	KeepSnapshots   int    `json:"keep_snapshots"`
+
 	// 这台设备在远端的名字：32 位小写十六进制，生成一次后一直用（覆盖安装不变）。
 	DeviceID string `json:"device_id"`
 }
@@ -69,7 +79,8 @@ func newDeviceID() (string, error) {
 
 // loadSyncSettings 读 sync.json；没有文件就是默认值。设备标识不对或没有时生成一个新的。
 func loadSyncSettings(dir string) (syncSettings, error) {
-	c := syncSettings{Provider: "webdav", S3PathStyle: true}
+	c := syncSettings{Provider: "webdav", S3PathStyle: true, Schedule: "interval",
+		IntervalMinutes: 30, DailyTime: "21:00", SyncOnStart: true, RetryLimit: 3, KeepSnapshots: keepSnapshots}
 	data, err := os.ReadFile(filepath.Join(dir, "sync.json"))
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return c, fmt.Errorf("读取同步设置失败：%w", err)
@@ -147,12 +158,15 @@ type syncDevice struct {
 	Revision string `json:"revision"`
 	Uploaded int64  `json:"uploaded_unix"`
 	Size     int64  `json:"size"`
+	Modified int64  `json:"modified_unix_ms,omitempty"`
+	Origin   string `json:"origin_device,omitempty"`
+	Hash     string `json:"sha256,omitempty"`
 }
 
 func deviceInfoKey(id string) string         { return "devices/" + id + ".json" }
 func snapshotKey(id, revision string) string { return "devices/" + id + "/" + revision + ".json" }
 
-// revisionOrder 把修订号拆成 (秒级时间戳, 进程号)；不是修订号返回 false。
+// revisionOrder 把修订号拆成 (秒级时间戳, 序号)；兼容旧版以进程号作序号。
 func revisionOrder(revision string) (int64, int64, bool) {
 	m := revisionPattern.FindStringSubmatch(revision)
 	if m == nil {
@@ -187,6 +201,10 @@ func listRevisions(store remoteStore, id string) ([]string, error) {
 
 // uploadSnapshot 把 file（全部设置备份）传成这台设备的新快照，更新设备信息，清掉多出来的旧快照。
 func uploadSnapshot(store remoteStore, id, hostname, file string, now time.Time) (syncDevice, error) {
+	return uploadVersionedSnapshot(store, id, hostname, file, now, syncVersion{}, keepSnapshots)
+}
+
+func uploadVersionedSnapshot(store remoteStore, id, hostname, file string, now time.Time, version syncVersion, keep int) (syncDevice, error) {
 	if !deviceIDPattern.MatchString(id) {
 		return syncDevice{}, errors.New("设备标识不对，请重新保存同步设置")
 	}
@@ -201,7 +219,8 @@ func uploadSnapshot(store remoteStore, id, hostname, file string, now time.Time)
 	}
 	device := syncDevice{
 		ID: id, Hostname: hostname, Uploaded: now.Unix(), Size: info.Size(),
-		Revision: fmt.Sprintf("%d-%d", now.Unix(), os.Getpid()),
+		Revision: fmt.Sprintf("%d-%d", now.Unix(), now.Nanosecond()),
+		Modified: version.Modified, Origin: version.Origin, Hash: version.Hash,
 	}
 	if err := store.Put(snapshotKey(id, device.Revision), body, info.Size()); err != nil {
 		return syncDevice{}, err
@@ -223,7 +242,7 @@ func uploadSnapshot(store remoteStore, id, hostname, file string, now time.Time)
 				continue
 			}
 			kept++
-			if kept >= keepSnapshots {
+			if kept >= keep {
 				_ = store.Delete(snapshotKey(id, revision))
 			}
 		}
@@ -233,6 +252,11 @@ func uploadSnapshot(store remoteStore, id, hostname, file string, now time.Time)
 
 // listDevices 列出远端有快照的设备，最近上传的在前。读不懂的设备信息跳过。
 func listDevices(store remoteStore) ([]syncDevice, error) {
+	return readDevices(store, false)
+}
+
+// 自动覆盖前必须读懂全部设备记录，不能跳过损坏记录后错误宣布本机最新。
+func readDevices(store remoteStore, strict bool) ([]syncDevice, error) {
 	entries, err := store.List("devices")
 	if err != nil {
 		return nil, err
@@ -249,12 +273,21 @@ func listDevices(store remoteStore) ([]syncDevice, error) {
 		}
 		var device syncDevice
 		if json.Unmarshal(data.Bytes(), &device) != nil {
+			if strict {
+				return nil, errors.New("云端设备信息损坏，自动同步已停止")
+			}
 			continue
 		}
 		// 标识以文件名为准，不信文件里写的（拿它拼路径）
 		device.ID = id
 		if _, _, valid := revisionOrder(device.Revision); !valid {
+			if strict {
+				return nil, errors.New("云端快照修订号无效，自动同步已停止")
+			}
 			device.Revision = ""
+		}
+		if strict && (device.Modified < 0 || device.Uploaded <= 0 || (device.Hash != "" && (len(device.Hash) != 64 || device.Modified <= 0 || !deviceIDPattern.MatchString(device.Origin)))) {
+			return nil, errors.New("云端快照版本信息无效，自动同步已停止")
 		}
 		devices = append(devices, device)
 	}
@@ -324,9 +357,16 @@ func (s *settings) loadSync() {
 }
 
 func (s *settings) saveSync() bool {
+	if err := validateSyncPlan(s.sync); err != nil && s.sync.Enabled && s.sync.Automatic {
+		s.syncMessage, s.syncFailed = err.Error(), true
+		return false
+	}
 	if err := saveSyncSettings(s.syncDataDir(), s.sync); err != nil {
 		s.syncMessage, s.syncFailed = err.Error(), true
 		return false
+	}
+	if s.autoSync != nil {
+		s.autoSync.configure(s.sync)
 	}
 	return true
 }
@@ -339,9 +379,17 @@ func (s *settings) syncTask(doing string, work func(store remoteStore) (string, 
 	if !s.saveSync() {
 		return
 	}
+	manager := s.autoSync
+	if manager != nil && !manager.gate.TryLock() {
+		s.syncMessage, s.syncFailed = "自动同步正在进行，请稍后重试", true
+		return
+	}
 	settings := s.sync
 	s.syncBusy, s.syncMessage, s.syncFailed = doing, "", false
 	s.background(func() func() {
+		if manager != nil {
+			defer manager.gate.Unlock()
+		}
 		var (
 			message string
 			change  func()
@@ -389,6 +437,8 @@ func tempSnapshot() (string, error) {
 
 func (s *settings) uploadSync() {
 	id := s.sync.DeviceID
+	config := s.sync
+	manager := s.autoSync
 	s.syncTask("正在上传…", func(store remoteStore) (string, func(), error) {
 		file, err := tempSnapshot()
 		if err != nil {
@@ -396,11 +446,31 @@ func (s *settings) uploadSync() {
 		}
 		defer os.Remove(file)
 		// 快照就是「导出全部设置」的文件：由服务进程生成，里面没有同步的地址和凭据
-		if _, err := s.backend.Call(op("export_settings", "path", file)); err != nil {
+		operation := "export_settings"
+		if manager != nil {
+			operation = "export_sync_settings"
+		}
+		response, err := s.backend.Call(op(operation, "path", file))
+		if err != nil {
 			return "", nil, fmt.Errorf("生成快照失败：%w", err)
 		}
+		var version syncVersion
+		if manager != nil {
+			hash, err := snapshotHash(file)
+			if err != nil {
+				return "", nil, err
+			}
+			manager.mu.Lock()
+			version = localSyncVersion(&manager.state.Checkpoint, syncTarget(config), hash, response.ModifiedUnixMS, id)
+			manager.state.Checkpoint.Version = version
+			err = manager.saveLocked()
+			manager.mu.Unlock()
+			if err != nil {
+				return "", nil, err
+			}
+		}
 		hostname, _ := os.Hostname()
-		device, err := uploadSnapshot(store, id, hostname, file, time.Now())
+		device, err := uploadVersionedSnapshot(store, id, hostname, file, time.Now(), version, config.KeepSnapshots)
 		if err != nil {
 			return "", nil, err
 		}
