@@ -274,6 +274,7 @@ impl Host {
                 self.engine = Some(Box::new(engine));
                 self.engine_error = None;
                 self.apply_user_data();
+                self.prepare_prediction();
             }
             Err(error) => self.engine_error = Some(error),
         }
@@ -312,6 +313,13 @@ impl Host {
         engine.lexicon().set_extra_words(words);
     }
 
+    /// 开着上屏联想：提前建好它的词频表（只建一次），免得第一次联想时那个键卡一下。
+    fn prepare_prediction(&self) {
+        if let (true, Some(engine)) = (self.config.predict_next, self.engine.as_deref()) {
+            engine.prepare_prediction();
+        }
+    }
+
     fn set_config(&mut self, config: Config) {
         let current_mode = self.current_mode();
         let old_scope = self.config.mode_scope.clone();
@@ -333,6 +341,7 @@ impl Host {
         }
         self.attach();
         self.apply_user_data();
+        self.prepare_prediction();
         self.notify_bar();
     }
 
@@ -804,6 +813,8 @@ impl Host {
         let preset_hint = active && std::mem::take(&mut self.preset_hint) && self.config.hint_on_toggle;
         let hint_on_focus = self.config.hint_on_focus;
         let mut response = self.with_client(id, |state, env| {
+            // 换了输入框：上一个输入框里的联想词不带过来
+            state.dismiss_prediction();
             if let Some(before) = &before {
                 state.set_before(before);
             }
@@ -1044,6 +1055,50 @@ impl Host {
         }
     }
 
+    /// 数据同步的恢复：把另一台设备（或本机以前）的快照并进当前数据，不删除本机已有的内容。
+    ///
+    /// 学习记录按核心的规则合并（重复合并不累加）；设置只采纳那台设备上改过的项；
+    /// 中英文状态、主词库、状态栏位置是各设备自己的，不动。
+    fn merge_settings(&mut self, path: &Path) -> Response {
+        let Some(engine) = self.engine.as_deref() else { return Response::error("词库还在载入，请稍后再试"); };
+        // 整份先校验完再动数据
+        let prepared = match backup::read(path) { Ok(data) => data, Err(error) => return Response::error(error) };
+        let counts = match prepared.merge_files(&self.store) { Ok(counts) => counts, Err(error) => return Response::error(error) };
+        let learned = match engine.import_learning(&prepared.data.learning.to_string()) {
+            Ok(changed) => changed,
+            Err(error) => return Response::error(format!("合并学习记录失败：{error:#}")),
+        };
+        if let Err(error) = self.learned_changed() {
+            return Response::error(format!("学习记录已合并，但尚未保存到磁盘：{error}"));
+        }
+        for emoji in &prepared.data.recent_emoji {
+            if !self.recent_emoji.contains(emoji) {
+                self.recent_emoji.push(emoji.clone());
+            }
+        }
+        self.recent_emoji.truncate(RECENT_EMOJI);
+        let _ = self.store.save_recent_emoji(&self.recent_emoji);
+        // 存设置时一并把合并后的快捷短语、词库交给引擎
+        if let Err(error) = self.save_config(prepared.merged_config(&self.config)) {
+            return Response::error(error);
+        }
+        let common = match self.store.load_common_phrases() { Ok(common) => common, Err(error) => return Response::error(error) };
+        let report = ImportReport {
+            added: counts.quick_phrases + counts.common_phrases + counts.dictionaries + learned,
+            note: Some(format!(
+                "新增 {} 份词库、{} 条快捷短语、{} 条常用语，合并 {} 条学习记录",
+                counts.dictionaries, counts.quick_phrases, counts.common_phrases, learned
+            )),
+            ..ImportReport::default()
+        };
+        Response {
+            config: Some(self.config.clone()), status: Some(self.status()),
+            quick_phrases: Some(self.store.list_quick_phrases()), common_phrases: Some(common),
+            dictionaries: Some(self.store.list_dictionaries()), user_words: Some(self.user_words()), report: Some(report),
+            ..Response::ok()
+        }
+    }
+
     /// 处理一条请求；里面出了 panic 时记日志、丢掉这个连接的输入状态，不让服务进程退出。
     pub fn handle(&mut self, id: ClientId, request: Request) -> Response {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.handle_inner(id, request)));
@@ -1190,6 +1245,7 @@ impl Host {
             Request::ExportSettings { path } => self.export_settings(Path::new(&path)),
             Request::InspectSettingsBackup { path } => Self::report(backup::read(Path::new(&path)).map(|data| data.report())),
             Request::ImportSettings { path } => self.import_settings(Path::new(&path)),
+            Request::MergeSettings { path } => self.merge_settings(Path::new(&path)),
             Request::ListUserWords => Response {
                 user_words: Some(self.user_words()),
                 ..Response::ok()

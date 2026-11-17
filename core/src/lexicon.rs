@@ -191,6 +191,9 @@ pub trait Lexicon: Send + Sync {
 
     fn len(&self) -> usize;
 
+    /// 逐个给出词库里的 (词, 词频)（同一个词多个读音会给多次）。上屏联想建词频表用，默认没有。
+    fn for_each_word(&self, _visit: &mut dyn FnMut(&str, f64)) {}
+
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -696,6 +699,12 @@ impl Lexicon for MemoryLexicon {
 
     fn len(&self) -> usize {
         self.entries.len()
+    }
+
+    fn for_each_word(&self, visit: &mut dyn FnMut(&str, f64)) {
+        for entry in &self.entries {
+            visit(&entry.word, entry.freq);
+        }
     }
 }
 

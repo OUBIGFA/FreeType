@@ -9,10 +9,12 @@
 //! - 工具栏（v + 空格）、表情面板（[`crate::tools`]）；
 //! - 邮箱、网址补全（[`crate::raw`]）；
 //! - 中英文之间自动加空格；
+//! - 上屏联想：选的词上屏以后接着给出常跟在它后面的词（设置里打开才有，见 `ClientState::predict`）；
 //! - 组字时会话不认的键一律吃掉，不让它漏给应用。
 
 use freetype_protocol::{keysym, modifier, Config, Frame, Key, Mode, Panel};
 use wowtype_core::autospace;
+use wowtype_core::predict::Prediction;
 use wowtype_core::session::{self, CandidateKind, KeyAction, Session};
 use wowtype_core::symbols;
 use wowtype_core::Engine;
@@ -99,6 +101,12 @@ pub struct ClientState {
     quote_open: [bool; 2],
     pub tool: Option<Tool>,
     pub raw: Option<Raw>,
+    /// 上屏联想：刚上屏的词后面常接的词，候选窗正显示着。
+    ///
+    /// 这时没有在组字。数字键、空格（各有开关）或鼠标选一个：上屏、记下搭配、接着联想；
+    /// Esc 收起；别的键先收起再照常处理（字母开始打拼音，退格、方向键、回车交给应用）。
+    /// 光标前的字一变（[`ClientState::remember`]、[`ClientState::set_before`]）就作废。
+    predict: Option<Vec<Prediction>>,
     /// 应用的程序名（按应用记中英文时用）。
     pub app: String,
 }
@@ -163,6 +171,7 @@ impl ClientState {
             quote_open: [false; 2],
             tool: None,
             raw: None,
+            predict: None,
             app,
         }
     }
@@ -179,11 +188,17 @@ impl ClientState {
     /// 光标前的字（DLL 读到的）。
     pub fn set_before(&mut self, before: &str) {
         let n = before.chars().count();
-        self.context = before.chars().skip(n.saturating_sub(CONTEXT_CHARS)).collect();
+        let context: String = before.chars().skip(n.saturating_sub(CONTEXT_CHARS)).collect();
+        if context != self.context {
+            // 光标挪走了、应用里的字变了：联想词不再接得上
+            self.predict = None;
+        }
+        self.context = context;
         self.session.set_context(&self.context.clone());
     }
 
     pub fn remember(&mut self, text: &str) {
+        self.predict = None;
         self.context.push_str(text);
         let n = self.context.chars().count();
         if n > CONTEXT_CHARS {
@@ -199,8 +214,92 @@ impl ClientState {
         out
     }
 
+    /// 收起上屏联想（换了输入框）。
+    pub fn dismiss_prediction(&mut self) {
+        self.predict = None;
+    }
+
+    /// 还作数的联想词：关了开关、切到英文（含大写锁定）就作废。
+    fn live_prediction(&mut self, env: &Env) -> Option<&[Prediction]> {
+        if !env.config.predict_next || env.mode != Mode::Chinese {
+            self.predict = None;
+        }
+        self.predict.as_deref()
+    }
+
+    /// 刚上屏了字：按新的上文准备联想词（没开、没有可联想的就没有）。
+    fn start_prediction(&mut self, env: &Env) {
+        self.predict = None;
+        if !env.config.predict_next || env.mode != Mode::Chinese || self.busy() {
+            return;
+        }
+        let items = self.session.predictions(env.config.page_size as usize);
+        self.predict = (!items.is_empty()).then_some(items);
+    }
+
+    /// 联想词画进应答（没在组字、没开面板时）。
+    fn show_prediction(&mut self, frame: &mut Frame, env: &Env) {
+        if self.busy() {
+            return;
+        }
+        let Some(items) = self.live_prediction(env) else {
+            return;
+        };
+        frame.candidates = items.iter().map(|item| shown_text(&item.text)).collect();
+        // 数字键不选词时不标序号；空格选第一个时把它高亮出来
+        frame.labels = if env.config.predict_digits { Vec::new() } else { vec![String::new(); items.len()] };
+        frame.cursor = env.config.predict_space.then_some(0);
+        frame.has_prev = false;
+        frame.has_next = false;
+        frame.forgettable = false;
+        frame.predict = true;
+    }
+
+    /// 选了第 index 个联想词：记搭配、上屏，接着联想下一个词。
+    fn choose_prediction(&mut self, index: usize, env: &Env) -> Out {
+        let Some(item) = self.predict.take().and_then(|items| items.get(index).cloned()) else {
+            return self.current(true, env);
+        };
+        // 先记搭配（上文还是上屏之前的），再上屏
+        self.session.learn_prediction(&item.word);
+        let text = self.emit(&item.text, env);
+        self.start_prediction(env);
+        let mut out = self.current(true, env);
+        out.frame.commit = Some(text);
+        out
+    }
+
+    /// 联想词显示着的时候来了一个键。Some：这个键处理完了；None：已收起联想，照常处理这个键。
+    fn predict_key(&mut self, key: &Key, env: &Env) -> Option<Out> {
+        let count = self.live_prediction(env)?.len();
+        let plain = key.modifiers & (modifier::CTRL | modifier::ALT | modifier::SUPER | modifier::SHIFT) == 0;
+        if plain && key.keysym == keysym::ESCAPE {
+            self.predict = None;
+            return Some(self.current(true, env));
+        }
+        let digit = printable(key).filter(char::is_ascii_digit).or_else(|| keypad_digit(key));
+        let index = if !plain {
+            None
+        } else if key.keysym == 0x20 && env.config.predict_space {
+            Some(0)
+        } else if env.config.predict_digits {
+            // 和候选的标号一样：1–9，0 是第 10 个
+            digit.and_then(|c| c.to_digit(10)).map(|d| (d as usize + 9) % 10).filter(|i| *i < count)
+        } else {
+            None
+        };
+        match index {
+            Some(index) => Some(self.choose_prediction(index, env)),
+            None => {
+                self.predict = None;
+                None
+            }
+        }
+    }
+
     /// 关掉面板和邮箱补全，清空编辑区。
     pub fn clear(&mut self) {
+        self.predict = None;
         self.tool = None;
         self.raw = None;
         if self.session.composing() {
@@ -253,6 +352,11 @@ impl ClientState {
         out.frame.cursor = core.cand_cursor;
         out.frame.has_prev = core.has_prev;
         out.frame.has_next = core.has_next;
+        if out.frame.commit.is_some() {
+            // 选的词上屏了：接着联想（原样上屏的字母、标点后面接不上，自然没有）
+            self.start_prediction(env);
+        }
+        self.show_prediction(&mut out.frame, env);
         out
     }
 
@@ -276,6 +380,7 @@ impl ClientState {
 
     /// 打开工具栏或表情面板（结束正在打的字）。
     pub fn open_tool(&mut self, page: Page, env: &Env) -> Out {
+        self.predict = None;
         self.raw = None;
         if self.session.composing() {
             self.session.reset(false);
@@ -319,6 +424,9 @@ impl ClientState {
         }
         if self.raw.is_some() {
             return self.raw_key(key, env);
+        }
+        if let Some(out) = self.predict_key(key, env) {
+            return out;
         }
         if env.mode == Mode::English {
             return self.pass_or_space(key, env);
@@ -587,6 +695,9 @@ impl ClientState {
             }
             return self.current(true, env);
         }
+        if self.live_prediction(env).is_some() {
+            return self.choose_prediction(index, env);
+        }
         let core = self.session.select(index);
         self.core_frame(core, env)
     }
@@ -617,6 +728,7 @@ impl ClientState {
 
     /// 输入框没了焦点、应用要结束组字：`commit` 时原样上屏。
     pub fn reset(&mut self, commit: bool, env: &Env) -> Out {
+        self.predict = None;
         self.tool = None;
         if let Some(raw) = self.raw.take() {
             let mut out = self.current(true, env);

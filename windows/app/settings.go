@@ -74,6 +74,21 @@ type settings struct {
 	confirmRestore              bool
 	restorePath, restoreSummary string
 
+	// 数据同步（见 sync.go）。sync 是 sync.json 的内容，第一次打开那一页时读。
+	sync       syncSettings
+	syncLoaded bool
+	// 同步设置放在哪个目录；空着用服务进程报的用户数据目录（测试里换掉）。
+	syncDir string
+	// 连远端的办法（测试里换成内存里的假远端）。
+	newStore func(syncSettings) (remoteStore, error)
+	// 正在做的同步动作的说明（空：没有在做）；做完的结果和它是不是失败。
+	syncBusy, syncMessage string
+	syncFailed            bool
+	syncDevices           []syncDevice
+	syncListed            bool
+	syncRestore           syncDevice
+	confirmSyncRestore    bool
+
 	// 最近一次导入的结果。
 	report       string
 	reportErrors []string

@@ -144,6 +144,16 @@ impl LanguageModel for WordLm {
         }
     }
 
+    fn next_lifts(&self, prev: &str, visit: &mut dyn FnMut(&str, f64)) {
+        let Some(&p) = self.ids.get(prev) else {
+            return;
+        };
+        // 存的分数本来就是提升度；「的」这样的词后面有八万多个搭配，所以不排序、不复制
+        for i in self.starts[p as usize] as usize..self.starts[p as usize + 1] as usize {
+            visit(&self.words[self.curs[i] as usize], self.scores[i] as f64);
+        }
+    }
+
     fn top_next(&self, prev: &str, limit: usize) -> Vec<(String, f64)> {
         let Some(&p) = self.ids.get(prev) else {
             return Vec::new();

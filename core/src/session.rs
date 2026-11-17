@@ -466,6 +466,25 @@ impl<'e> Session<'e> {
         }
     }
 
+    /// 上屏联想（FreeType）：光标前的字后面最可能接的词，见 [`crate::predict`]。没有引擎时是空的。
+    pub fn predictions(&self, limit: usize) -> Vec<crate::predict::Prediction> {
+        self.engine
+            .map_or_else(Vec::new, |engine| engine.predict_after(&self.context, limit))
+    }
+
+    /// 用户选了联想词 `word`（词库里的写法）：记下它和上一个词的搭配。
+    /// 在联想词上屏、上文更新之前调。预判副本里不记（和选词一样留给真正的按键）。
+    pub fn learn_prediction(&mut self, word: &str) {
+        let Some(engine) = self.engine else {
+            return;
+        };
+        if self.defer_learning() {
+            return;
+        }
+        engine.set_context(utf8_tail(&self.context, CONTEXT_BYTES));
+        engine.record_prediction(word);
+    }
+
     /// 带引擎建会话。
     pub fn with_engine(engine: &'e Engine) -> Self {
         Self {

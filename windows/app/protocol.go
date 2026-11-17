@@ -46,6 +46,9 @@ type Config struct {
 	Toolbar          bool `json:"toolbar"`
 	ClipboardHistory bool `json:"clipboard_history"`
 	EmailCompletion  bool `json:"email_completion"`
+	PredictNext      bool `json:"predict_next"`
+	PredictDigits    bool `json:"predict_digits"`
+	PredictSpace     bool `json:"predict_space"`
 
 	HotkeyEmoji       string `json:"hotkey_emoji"`
 	HotkeyPunct       string `json:"hotkey_punct"`
@@ -72,6 +75,7 @@ func defaultConfig() Config {
 		DefaultMode: "chinese", ModeScope: "global",
 		AppPresetRules: []AppPreset{},
 		QuickPhrases:   true, EmojiSuggest: true, DateTime: true, Calculator: true, Toolbar: true, EmailCompletion: true,
+		PredictDigits: true, PredictSpace: true,
 		HotkeyEmoji: "off", HotkeyPunct: "off", HotkeyTraditional: "off", HotkeyMode: "off",
 		TrayIcon: true, HintOnToggle: true, HintPosition: "top-left",
 	}

@@ -452,7 +452,7 @@ func TestFullSettingsImportNeedsConfirmationAndRefreshesAllData(t *testing.T) {
 	}
 	var tray bool = true
 	s.onTray = func(show bool) { tray = show }
-	tt := open(t, s, "常规")
+	tt := open(t, s, "数据与同步")
 	if err := tt.Click("导入全部设置"); err != nil {
 		t.Fatal(err)
 	}
@@ -477,7 +477,7 @@ func TestFullSettingsImportCancelAndInvalidFilePreserveCurrentData(t *testing.T)
 		if invalid {
 			b.failRequest = "inspect_settings_backup"
 		}
-		tt := open(t, s, "常规")
+		tt := open(t, s, "数据与同步")
 		if err := tt.Click("导入全部设置"); err != nil {
 			t.Fatal(err)
 		}
@@ -500,7 +500,7 @@ func TestFullSettingsExportUsesPortableJson(t *testing.T) {
 		}
 		return `C:\test\all.json`
 	}
-	tt := open(t, s, "常规")
+	tt := open(t, s, "数据与同步")
 	if err := tt.Click("导出全部设置"); err != nil {
 		t.Fatal(err)
 	}
@@ -863,7 +863,7 @@ func TestNewSettingsLayoutsSnapshots(t *testing.T) {
 		name, target, query string
 		width, height       int
 	}{
-		{"backup-min-window", "general/全部设置和数据", "", 780, 540},
+		{"backup-min-window", "sync/全部设置和数据", "", 780, 540},
 		{"common-min-window", "common/导入或导出", "", 780, 540},
 		{"search-hidden-option", "typing/汉字和字母之间", "", 1000, 540},
 		{"mixed-original-style", "typing/中英文之间自动加空格", "", 1000, 600},
@@ -873,6 +873,9 @@ func TestNewSettingsLayoutsSnapshots(t *testing.T) {
 		{"search-results", "", "中英 空格", 1000, 720},
 		{"typing-fuzzy-groups-min-window", "typing/模糊音分组", "", 780, 540},
 		{"typing-arrow-keys", "typing/左右方向键", "", 1000, 540},
+		{"features-predict-and-presets", "features/上屏联想", "", 1000, 1100},
+		{"sync-webdav", "sync/同步服务", "", 1000, 1100},
+		{"sync-s3-min-window", "sync/上传与恢复", "", 780, 900},
 	} {
 		s, _ := newTestSettings()
 		s.config.Autospace = false
@@ -884,6 +887,24 @@ func TestNewSettingsLayoutsSnapshots(t *testing.T) {
 			s.updateStatus = updateState{Version: "0.2.0", Message: "更新已下载，可立即更新；开启自动更新后，下次启动时安装", Ready: true}
 		}
 		s.onCheckUpdates, s.onUpdateNow = func() {}, func() {}
+		s.syncDir = t.TempDir()
+		switch sample.name {
+		case "features-predict-and-presets":
+			s.config.PredictNext, s.config.AppPresets = true, true
+			s.config.AppPresetRules = []AppPreset{{App: "code.exe", Mode: "english"}}
+		case "sync-webdav", "sync-s3-min-window":
+			s.loadSync()
+			s.sync.Enabled, s.sync.WebDAVURL, s.sync.WebDAVUser = true, "https://dav.jianguoyun.com/dav/FreeType", "me@example.com"
+			s.sync.DeviceID = "0123456789abcdef0123456789abcdef"
+			s.syncDevices = []syncDevice{
+				{ID: s.sync.DeviceID, Hostname: "OFFICE-PC", Uploaded: 1794800000, Size: 1536000},
+				{ID: "fedcba9876543210fedcba9876543210", Hostname: "家里的电脑", Uploaded: 1794700000, Size: 820000},
+			}
+			s.syncMessage = "已上传（1.5 MB）"
+			if sample.name == "sync-s3-min-window" {
+				s.sync.Provider = "s3"
+			}
+		}
 		if _, err := os.Stat("resources"); err == nil {
 			s.resources = "resources"
 		}
@@ -968,7 +989,7 @@ func TestAppPresetSettingsPageShowsWindowPickerAndRules(t *testing.T) {
 	s, b := newTestSettings()
 	s.config.AppPresets = true
 	b.config.AppPresets = true
-	tt := open(t, s, "")
+	tt := open(t, s, "实用功能")
 	tt.Frame()
 	for _, text := range []string{"指定软件规则", "刷新打开的窗口", "手动输入"} {
 		if !tt.HasText(text) {
@@ -977,5 +998,57 @@ func TestAppPresetSettingsPageShowsWindowPickerAndRules(t *testing.T) {
 	}
 	if !b.config.AppPresets {
 		t.Fatal("指定软件总开关没有保存")
+	}
+}
+
+// 没开「记录剪贴板历史」时，指定软件的规则区也必须能操作（以前整块被禁用成灰色）。
+func TestAppPresetRulesCanBeEditedWithoutClipboardHistory(t *testing.T) {
+	s, b := newTestSettings()
+	s.config.AppPresets, b.config.AppPresets = true, true
+	if s.config.ClipboardHistory {
+		t.Fatal("这个测试要在剪贴板历史关闭时进行")
+	}
+	for _, id := range []string{"features/指定软件规则", "features/指定软件规则列表"} {
+		if reason := s.unavailableReason(id); reason != "" {
+			t.Fatalf("%s 被禁用：%s", id, reason)
+		}
+	}
+	s.newPresetApp = "code.exe"
+	tt := open(t, s, "实用功能")
+	tt.Frame()
+	if err := tt.Click("添加 / 更新"); err != nil {
+		t.Fatal(err)
+	}
+	if len(b.config.AppPresetRules) != 1 || b.config.AppPresetRules[0].App != "code.exe" {
+		t.Fatalf("规则区点不动：%+v", b.config.AppPresetRules)
+	}
+	// 原来的前提仍然有效
+	s.config.AppPresets = false
+	if s.unavailableReason("features/指定软件规则") == "" || s.unavailableReason("features/清空剪贴板历史") == "" {
+		t.Fatal("总开关关着时规则区、没开剪贴板历史时清空按钮应不可用")
+	}
+}
+
+func TestPredictNextIsOffByDefaultAndSavedFromFeaturesPage(t *testing.T) {
+	s, b := newTestSettings()
+	if s.config.PredictNext || !s.config.PredictDigits || !s.config.PredictSpace {
+		t.Fatalf("上屏联想默认应关闭，两个选词键默认开：%+v", s.config)
+	}
+	tt := open(t, s, "实用功能")
+	if tt.HasText("数字键选联想词") {
+		t.Fatal("没开上屏联想时不显示它的子选项")
+	}
+	if err := tt.Click("上屏联想"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !b.config.PredictNext {
+		t.Fatal("上屏联想开关没有保存")
+	}
+	if err := tt.Click("空格选第一个联想词"); err != nil {
+		t.Fatal(err)
+	}
+	if b.config.PredictSpace || !b.config.PredictDigits {
+		t.Fatalf("子选项没有分别保存：%+v", b.config)
 	}
 }

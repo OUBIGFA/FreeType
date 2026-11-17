@@ -73,14 +73,14 @@ func (s *settings) addPreset() {
 
 func (s *settings) appPresetSection(c *ui.Context) {
 	section(c, "指定软件自动切换", func() {
-		changed := s.settingSwitch(c, "general/指定软件自动切换", false, &s.config.AppPresets)
+		changed := s.settingSwitch(c, "features/指定软件自动切换", false, &s.config.AppPresets)
 		if changed {
 			s.saveConfig()
 		}
-		if !s.config.AppPresets && !s.showSetting("general/指定软件规则") && !s.showSetting("general/指定软件规则列表") {
+		if !s.config.AppPresets && !s.showSetting("features/指定软件规则") && !s.showSetting("features/指定软件规则列表") {
 			return
 		}
-		s.settingBlock(c, "general/指定软件规则", func() {
+		s.settingBlock(c, "features/指定软件规则", func() {
 			p := colors(c)
 			ui.Column(c).Padding(14, 18).Gap(10).Children(func() {
 				ui.Text(c, "只有从其他程序切入时应用一次；在程序内部手动切换后会保持。没有规则的程序不受影响。\n规则保存在 FreeType 用户设置中，重启后仍然有效。").TextColor(p.muted).Wrap()
@@ -129,7 +129,7 @@ func (s *settings) appPresetSection(c *ui.Context) {
 				}
 			})
 		})
-		s.settingBlock(c, "general/指定软件规则列表", func() {
+		s.settingBlock(c, "features/指定软件规则列表", func() {
 			remove := -1
 			change := -1
 			changeMode := ""

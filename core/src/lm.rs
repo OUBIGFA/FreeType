@@ -44,6 +44,14 @@ pub trait LanguageModel: Send + Sync {
     fn top_next(&self, _prev: &str, _limit: usize) -> Vec<(String, f64)> {
         Vec::new()
     }
+
+    /// 上屏联想用：逐个给出 prev 后面接过的词和它的「提升度」
+    /// `ln P(cur | prev) - ln P(cur)`（比随便出现多常见多少）。
+    ///
+    /// 和 [`LanguageModel::top_next`] 分开：那边各模型的分数含义不一样（条件概率或提升度），
+    /// 也不带词频，直接拿来排联想全是冷僻词。这里不排序、不复制词，由引擎配上词频再排
+    /// （见 `Engine::predict_after`）。默认不提供。
+    fn next_lifts(&self, _prev: &str, _visit: &mut dyn FnMut(&str, f64)) {}
 }
 
 /// 内存二元语言模型。
@@ -192,6 +200,21 @@ impl LanguageModel for BigramLm {
             }
         }
         self.backoff.ln() + unigram
+    }
+
+    fn next_lifts(&self, prev: &str, visit: &mut dyn FnMut(&str, f64)) {
+        let (Some(row), Some(prev_count)) = (self.bigram.get(prev), self.unigram.get(prev)) else {
+            return;
+        };
+        if *prev_count <= 0.0 || self.total <= 0.0 {
+            return;
+        }
+        for (word, count) in row {
+            let unigram = self.unigram.get(word).copied().unwrap_or(0.0);
+            if *count > 0.0 && unigram > 0.0 {
+                visit(word, (count / prev_count).ln() - (unigram / self.total).ln());
+            }
+        }
     }
 
     fn top_next(&self, prev: &str, limit: usize) -> Vec<(String, f64)> {

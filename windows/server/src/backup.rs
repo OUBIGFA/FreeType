@@ -208,7 +208,74 @@ fn prepare(mut data: SettingsBackup) -> Result<PreparedBackup, String> {
     Ok(PreparedBackup { data, learned })
 }
 
+/// 合并恢复时各类数据新增了多少。
+#[derive(Default)]
+pub(crate) struct MergeCounts {
+    pub quick_phrases: usize,
+    pub common_phrases: usize,
+    pub dictionaries: usize,
+}
+
 impl PreparedBackup {
+    /// 合并恢复用的设置：以本机为底，只采纳备份里和出厂默认值不同的项
+    /// （那台设备上用户改过的）；备份里还是默认值的项不动本机。
+    /// 主词库路径是各设备自己的，备份里总是空的，所以不会被改。
+    pub fn merged_config(&self, local: &Config) -> Config {
+        let values = (
+            serde_json::to_value(local),
+            serde_json::to_value(&self.data.config),
+            serde_json::to_value(Config::default()),
+        );
+        let (Ok(Value::Object(mut merged)), Ok(Value::Object(remote)), Ok(Value::Object(default))) = values else {
+            return local.clone();
+        };
+        for (key, value) in remote {
+            if default.get(&key) != Some(&value) {
+                merged.insert(key, value);
+            }
+        }
+        serde_json::from_value::<Config>(Value::Object(merged)).map_or_else(|_| local.clone(), Config::sanitized)
+    }
+
+    /// 把备份里的快捷短语、常用语、导入的词库并进本机的文件：只添加，不删除。
+    /// 同名词库保留本机的；同一条快捷短语（编码和内容都相同）取备份里的权重。
+    pub fn merge_files(&self, store: &Store) -> Result<MergeCounts, String> {
+        let mut counts = MergeCounts::default();
+        let mut phrases = store.load_quick_phrases();
+        let before = phrases.clone();
+        let remote = self.data.quick_phrases.iter().map(|p| msime::QuickPhrase {
+            code: p.code.clone(),
+            text: p.text.clone(),
+            weight: p.weight,
+        });
+        counts.quick_phrases = msime::merge_quick_phrases(&mut phrases, remote.collect());
+        if phrases != before {
+            store.save_quick_phrases(&phrases).map_err(|error| format!("保存快捷短语失败：{error}"))?;
+        }
+        let mut common = store.load_common_phrases()?;
+        let before = common.len();
+        common.extend(self.data.common_phrases.iter().cloned());
+        let common = normalize_common_phrases(common)?;
+        counts.common_phrases = common.len() - before;
+        if counts.common_phrases > 0 {
+            store.set_common_phrases(common)?;
+        }
+        let dicts = store.dir().join("dicts");
+        let existing: HashSet<String> = dictionary_paths(&dicts)?
+            .iter()
+            .filter_map(|path| path.file_stem().and_then(|name| name.to_str()).map(str::to_lowercase))
+            .collect();
+        for dict in &self.data.dictionaries {
+            if existing.contains(&dict.name.to_lowercase()) {
+                continue;
+            }
+            write_atomic(&dicts.join(format!("{}.txt", dict.name)), &dict.text)
+                .map_err(|error| format!("写入词库「{}」失败：{error}", dict.name))?;
+            counts.dictionaries += 1;
+        }
+        Ok(counts)
+    }
+
     pub fn restored_config(&self, store: &Store) -> Config {
         let mut config = self.data.config.clone();
         if self.data.main_lexicon.is_some() {

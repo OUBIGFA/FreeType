@@ -83,6 +83,8 @@ struct State {
     want_before: bool,
     /// 服务进程那边在组字、开着面板（键要先问它）。
     busy: bool,
+    /// 候选窗里是上屏联想：不算在组字（照常读光标前的字，不认的键交给应用）。
+    predicting: bool,
 }
 
 #[implement(
@@ -121,6 +123,7 @@ impl TextService {
                 caps: false,
                 want_before: false,
                 busy: false,
+                predicting: false,
             })),
             instance,
             _dll: DllRef::new(),
@@ -421,7 +424,21 @@ fn apply_document(state: &Rc<RefCell<State>>, context: &ITfContext, frame: &Fram
 /// 记下应答里的状态（中英文、要不要光标前的字），更新任务栏按钮。
 fn note_frame(state: &Rc<RefCell<State>>, frame: &Frame) {
     note_preview(state, frame);
-    state.borrow_mut().busy = !frame.preedit.is_empty() || !frame.candidates.is_empty() || frame.title.is_some();
+    let mut s = state.borrow_mut();
+    s.predicting = frame.predict && !frame.candidates.is_empty();
+    s.busy = !s.predicting && (!frame.preedit.is_empty() || !frame.candidates.is_empty() || frame.title.is_some());
+}
+
+/// 收起上屏联想：一会儿没选、来了翻不成键码的键、候选窗摆不出来。
+/// 服务进程那边也要收起，不然看不见的联想词还会吃掉数字键和空格。
+fn dismiss_prediction(state: &Rc<RefCell<State>>) {
+    if !state.borrow().predicting {
+        return;
+    }
+    if let Some(frame) = call(state, &Request::Reset { commit: false }) {
+        note_frame(state, &frame);
+        show_window(state, &frame);
+    }
 }
 
 /// OnTestKeyDown 只询问是否接收按键，预判结果不能提前改变真实组字状态。
@@ -448,6 +465,12 @@ fn show_window(state: &Rc<RefCell<State>>, frame: &Frame) {
     };
     if let Some(window) = &s.window {
         window.update(frame, caret);
+    }
+    let unseen = wants && frame.predict && (caret.is_none() || s.window.is_none());
+    drop(s);
+    if unseen {
+        // 不知道光标在哪、联想词摆不出来：不留看不见的联想
+        dismiss_prediction(state);
     }
 }
 
@@ -630,6 +653,7 @@ fn on_click(state: &Weak<RefCell<State>>, click: Click) {
         Click::Select(index) => Request::Select { index },
         Click::Page(next) => Request::Page { next },
         Click::Forget(index) => Request::Forget { index },
+        Click::Dismiss => Request::Reset { commit: false },
         Click::Settings => Request::Command {
             command: Command::OpenSettings,
         },
@@ -937,6 +961,8 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         let context = pic.ok()?.clone();
         self.state.borrow_mut().context = Some(context.clone());
         let Some(key) = translate(wparam, lparam, false) else {
+            // 翻不成键码的键（功能键等）交给应用；显示着的联想词先收起
+            dismiss_prediction(&self.state);
             return Ok(composing(&self.state).into());
         };
         // 没在组字时带上光标前的字（标点、自动加空格看它）
@@ -1068,5 +1094,16 @@ mod tests {
         let predicted_commit = Frame { handled: true, commit: Some("你".into()), ..Frame::default() };
         note_preview(&service.state, &predicted_commit);
         assert!(composing(&service.state), "预判上屏也不能提前结束正在进行的组字");
+    }
+
+    #[test]
+    fn next_word_predictions_are_not_a_composition() {
+        let service = TextService::new(HINSTANCE::default());
+        let frame = Frame { handled: true, commit: Some("今天".into()), candidates: vec!["下雨".into()], predict: true, ..Frame::default() };
+        note_frame(&service.state, &frame);
+        assert!(!composing(&service.state), "联想词显示着时不认的键要交给应用，还要照常读光标前的字");
+        assert!(service.state.borrow().predicting);
+        note_frame(&service.state, &Frame::default());
+        assert!(!service.state.borrow().predicting);
     }
 }

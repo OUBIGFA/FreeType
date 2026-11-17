@@ -45,7 +45,7 @@ if ($ReleaseTag -and ($ReleaseTag -notin @($Version, "freetype-$Version") -or $V
     throw 'ReleaseTag must match a non-test Version, and release builds must run all tests'
 }
 $Identifier = 'io.github.oubigfa.freetype'
-$MygoVersion = 'v0.9.1'
+$MygoVersion = 'v0.9.2'
 $SelfUpdateVersion = 'v1.7.1'
 $BuildNumber = Get-Date -Format 'yyyyMMddHHmmss'
 $AppDir = Join-Path $Root 'windows\app'
@@ -85,7 +85,7 @@ function Write-Utf8([string]$Path, [string]$Text) {
 function Sha256([string]$Path) { (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant() }
 
 function Find-NsisCompiler {
-    # Follow mygo v0.9.1's selection so the tests and record use the actual compiler.
+    # Follow mygo v0.9.2's selection so the tests and record use the actual compiler.
     $Command = Get-Command makensis -CommandType Application -ErrorAction SilentlyContinue
     if ($Command) { return $Command.Source }
     $Candidates = @(

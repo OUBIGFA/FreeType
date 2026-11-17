@@ -8,8 +8,8 @@
 | 来源 | 固定修订 | 用途 | 许可状态 |
 | --- | --- | --- | --- |
 | WowType | `5656e136e9f5fc32837c87bc1a2242ec159a32d7` | 保留历史；Rust 引擎、C ABI 和行为测试 | README 明确 MIT 或 Apache-2.0 任选；本次选择 Apache-2.0，原文和依据见 [authorization.json](manifests/authorization.json) |
-| mygo | `v0.9.1`（`13a0b3e7b3e161454889ff8e1bbf16ab6ffbbe0d`） | Windows 托盘、设置窗口和安装器 | MIT |
-| msime-windows | `26796f3ed646e2ce75ba39bca6f1352caca9fd67` | 参照词库、快捷短语批量文件格式，以及单按 Shift、成对标点后挪光标的处理思路；本地对照副本在 `.local/references/msime-windows`（不入库） | GPL-3.0；未复制代码或数据 |
+| mygo | `v0.9.2`（`25ce62f4d357cd6d29da04300e3fbc352d79daa4`） | Windows 托盘、设置窗口和安装器 | MIT |
+| msime-windows | `26796f3ed646e2ce75ba39bca6f1352caca9fd67` | 参照词库、快捷短语批量文件格式，单按 Shift、成对标点后挪光标的处理思路，以及 v0.14.0 公开文档中数据同步的远端布局与合并规则（独立实现）；本地对照副本在 `.local/references/msime-windows`（不入库） | GPL-3.0；未复制代码或数据 |
 | rime-frost（白霜） | `555a736932de245d7f59f640a98bd58f368792b3` | 默认中文主库、细胞词库、字表与英文词表；由雾凇发展而来，不另叠加雾凇整库 | GPL-3.0，许可证随数据分发 |
 | rime-wanxiang-data（万象） | `4b50697bc3fa45ea7f79faebcc731fb42a3b6d8c` | 默认核心词库补缺；只使用字词数据，不复制程序代码或语法模型 | 原创数据为 CC BY 4.0；保留作者署名、来源、改动说明及许可范围 |
 | WowType 词级语言模型 `words.lm` | 构建时下载并校验 SHA-256 | 整句排序 | CC BY-SA 4.0（见 `data/SOURCE.txt`） |

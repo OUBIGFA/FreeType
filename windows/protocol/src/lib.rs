@@ -231,6 +231,12 @@ pub struct Config {
     pub clipboard_history: bool,
     /// 邮箱、网址补全：打 @ 出常用邮箱后缀，打 gmail. 出 .com 等。
     pub email_completion: bool,
+    /// 上屏联想：一个词上屏以后，候选窗接着给出常跟在它后面的词（默认关）。
+    pub predict_next: bool,
+    /// 上屏联想时数字键选联想词（关掉以后数字照常打出来，联想词只能用空格或鼠标选）。
+    pub predict_digits: bool,
+    /// 上屏联想时空格选第一个联想词（关掉以后空格照常打出来）。
+    pub predict_space: bool,
 
     // —— 快捷键（off 表示不用） ——
     /// 表情面板：off ctrl+shift+e ctrl+alt+e。
@@ -300,6 +306,9 @@ impl Default for Config {
             toolbar: true,
             clipboard_history: false,
             email_completion: true,
+            predict_next: false,
+            predict_digits: true,
+            predict_space: true,
             hotkey_emoji: "off".into(),
             hotkey_punct: "off".into(),
             hotkey_traditional: "off".into(),
@@ -529,6 +538,8 @@ pub enum Request {
     ExportSettings { path: String },
     InspectSettingsBackup { path: String },
     ImportSettings { path: String },
+    /// 把一份全部设置备份合并进当前数据（数据同步的恢复）：不删除、不替换本机已有的内容。
+    MergeSettings { path: String },
     /// 学到的词（用户词库）。
     ListUserWords,
     /// 忘掉这些学到的词（用户词库和选词习惯都去掉）。
@@ -603,6 +614,9 @@ pub struct Frame {
     /// 候选能长按、右键忘掉（引擎的候选；工具栏、邮箱补全这些不能）。
     #[serde(default)]
     pub forgettable: bool,
+    /// 这些候选是上屏联想：没有在组字，不认的键照常交给应用，一会儿不选就收起来。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub predict: bool,
     #[serde(default)]
     pub mode: Mode,
     /// 中文标点（状态显示用）。

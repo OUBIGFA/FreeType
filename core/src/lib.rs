@@ -21,6 +21,7 @@ pub mod llama;
 pub mod lm;
 pub mod msime;
 pub mod nnlm;
+pub mod predict;
 pub mod preedit;
 pub mod rank;
 pub mod session;
@@ -39,7 +40,7 @@ pub mod wordlm;
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
@@ -190,6 +191,8 @@ pub struct Engine {
     last_word: RwLock<String>,
     /// 上一次 input() 给出的候选：文本 -> 分词，选词时用它知道整句是哪几个词。
     last_words: RwLock<HashMap<String, Vec<String>>>,
+    /// 上屏联想用的词频表（词的哈希 -> ln 词频），第一次联想时建，见 [`predict`]。
+    word_prior: OnceLock<HashMap<u64, f32>>,
     /// 简繁字符映射表。
     converter: RwLock<Arc<Converter>>,
     /// 英文词表：小写编码 -> 上屏形式（github -> GitHub）。
@@ -212,6 +215,7 @@ impl Engine {
             pairs: RwLock::new(UserPairs::default()),
             last_word: RwLock::new(String::new()),
             last_words: RwLock::new(HashMap::new()),
+            word_prior: OnceLock::new(),
             converter: RwLock::new(Arc::new(Converter::new())),
             english: RwLock::new(Arc::new(HashMap::new())),
             nnlm: RwLock::new(None),
@@ -363,13 +367,18 @@ impl Engine {
     /// 光标前的最后一个词：上一次选的词，而且光标前的文本正好以它结尾
     /// （中间换了输入框、删了字，就不算）。
     fn start_word(&self) -> Option<String> {
+        let context = self.context.read().ok()?.clone();
+        self.start_word_in(&context)
+    }
+
+    /// 同 [`Engine::start_word`]，光标前的文本由调用方给（上屏联想用上屏之后的文本）。
+    fn start_word_in(&self, context: &str) -> Option<String> {
         let last = self.last_word.read().ok()?.clone();
         if last.is_empty() {
             return None;
         }
         // 记的是词库里的写法，光标前是上屏的（开着繁体就是转换过的）字
         let shown = self.shown_text(&last);
-        let context = self.context.read().ok()?;
         let matches = context.trim_end().ends_with(&shown)
             || crate::autospace::without_boundary_spaces(context.trim_end()).ends_with(&crate::autospace::without_boundary_spaces(&shown));
         matches.then_some(last)

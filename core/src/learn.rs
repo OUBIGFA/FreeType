@@ -73,6 +73,14 @@ impl UserPairs {
         }
     }
 
+    /// prev 后面学过的词（上屏联想按它们的热度加分）。
+    pub fn after(&self, prev: &str) -> impl Iterator<Item = (&str, HistoryEntry)> {
+        self.map
+            .get(prev)
+            .into_iter()
+            .flat_map(|next| next.iter().map(|(cur, entry)| (cur.as_str(), *entry)))
+    }
+
     /// 去掉和 word 有关的搭配（它在前或在后的都去掉），返回去掉了几条。
     pub fn remove_word(&mut self, word: &str) -> usize {
         let mut removed = self.map.remove(word).map_or(0, |next| next.len());

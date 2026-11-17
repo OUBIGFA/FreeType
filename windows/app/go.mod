@@ -5,7 +5,7 @@ go 1.27.4
 require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/creativeprojects/go-selfupdate v1.7.1
-	github.com/egoist/mygo v0.9.1
+	github.com/egoist/mygo v0.9.2
 	github.com/google/go-github/v93 v93.0.0
 	golang.org/x/sys v0.50.0
 )

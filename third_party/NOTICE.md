@@ -30,7 +30,7 @@ FreeType 复用其 Rust 引擎、C ABI 和行为测试，并增加 Windows 服�
 ### Rust 与 Go 模块
 
 - Rust 包由 `Cargo.lock` 固定；许可原文位于 `third-party/rust/<包名>@<版本>/`。包含 `windows` 系列绑定、Serde 和 Unicode 相关组件等。MIT、Apache、Unicode 等声明分别保留，不统一改写成一种许可。
-- mygo 固定为 `v0.9.1`，来源 `https://github.com/egoist/mygo`，采用 MIT 许可。应用和运行时的许可及附属声明位于 `third-party/go/github.com/egoist/mygo@v0.9.1/`。
+- mygo 固定为 `v0.9.2`，来源 `https://github.com/egoist/mygo`，采用 MIT 许可。应用和运行时的许可及附属声明位于 `third-party/go/github.com/egoist/mygo@v0.9.2/`。
 - 更新功能使用 `github.com/creativeprojects/go-selfupdate v1.7.1`。它和其余实际导入的 Go 模块按 `windows/app/go.mod`、`go.sum` 固定，原文位于 `third-party/go/<模块>@<版本>/`，完整列表见随包清单。
 - `github.com/hashicorp/go-cleanhttp v0.5.2`、`go-retryablehttp v0.7.8`、`go-version v1.9.0` 使用 MPL-2.0。FreeType 未修改这些模块；每个模块目录的 `source/` 内提供对应的原始 Go 模块 zip，可离线取得其源码。修改这些模块时必须同步更新对应源码及声明。
 - Go 运行时使用 Go `1.27.4`，保留 BSD 许可、PATENTS 和标准库内附依赖声明，见 `third-party/toolchain/go@go1.27.4/`。

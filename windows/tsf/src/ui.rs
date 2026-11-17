@@ -47,6 +47,9 @@ const CARET_RETRY_MS: u32 = 15;
 /// 发给自己的消息：回到应用的消息循环以后，叫文本服务去挪光标（见 [`set_caret_handler`]）。
 const WM_CARET_TICK: u32 = WM_APP + 1;
 const HINT_MS: u32 = 1000;
+/// 上屏联想显示着没人选：过这么久自己收起（见 [`Click::Dismiss`]）。
+const PREDICT_TIMER: usize = 4;
+const PREDICT_MS: u32 = 6000;
 /// 按住多久算长按。
 const LONG_PRESS_MS: u32 = 500;
 /// 鼠标离开窗口（TrackMouseEvent）。
@@ -60,6 +63,8 @@ pub enum Click {
     /// 删除这一页第几个候选的记忆。
     Forget(usize),
     Settings,
+    /// 上屏联想一会儿没选：收起来（服务进程那边也结束联想，数字键、空格不再选词）。
+    Dismiss,
 }
 
 thread_local! {
@@ -596,6 +601,16 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             caret_tick(hwnd);
             LRESULT(0)
         }
+        WM_TIMER if wparam.0 == PREDICT_TIMER => {
+            // 鼠标正停在联想词上：用户可能要点，下一轮再看
+            if data_of(hwnd).is_none_or(|d| d.hovered.is_none()) {
+                unsafe {
+                    let _ = KillTimer(Some(hwnd), PREDICT_TIMER);
+                }
+                dispatch(Click::Dismiss);
+            }
+            LRESULT(0)
+        }
         WM_TIMER if wparam.0 == HINT_TIMER => {
             unsafe {
                 let _ = KillTimer(Some(hwnd), HINT_TIMER);
@@ -714,6 +729,7 @@ impl CandidateWindow {
     pub fn hide(&self) {
         menu::close();
         unsafe {
+            let _ = KillTimer(Some(self.hwnd), PREDICT_TIMER);
             let _ = ShowWindow(self.hwnd, SW_HIDE);
         }
     }
@@ -762,6 +778,14 @@ impl CandidateWindow {
             return;
         };
         self.show(view, caret);
+        unsafe {
+            // 每来一批新的联想词重新计时；换成普通候选就不计了
+            if frame.predict {
+                SetTimer(Some(self.hwnd), PREDICT_TIMER, PREDICT_MS, None);
+            } else {
+                let _ = KillTimer(Some(self.hwnd), PREDICT_TIMER);
+            }
+        }
     }
 
     /// 编辑区挪了位置（应用排好版以后）：窗口跟过去。

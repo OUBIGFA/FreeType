@@ -6,10 +6,10 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// 全部设置备份放在常规页末尾；恢复快照会替换数据，先校验再让用户确认。
+// 全部设置备份放在「数据与同步」页开头；恢复快照会替换数据，先校验再让用户确认。
 func (s *settings) backupSection(c *ui.Context) {
-	section(c, "一键导入、导出", func() {
-		s.settingRow(c, "general/全部设置和数据", func() {
+	section(c, "一键导入导出", func() {
+		s.settingRow(c, "sync/全部设置和数据", func() {
 			if ui.Button(c, "导入…").Label("导入全部设置").Clicked() {
 				s.chooseSettingsBackup()
 			}
@@ -58,19 +58,7 @@ func (s *settings) importSettingsBackup(path string) {
 				s.notice = "导入失败：" + err.Error()
 				return
 			}
-			s.config = *response.Config
-			s.loaded = true
-			s.status = *response.Status
-			s.statusErr = ""
-			s.dicts, s.phrases, s.common = response.Dictionaries, response.QuickPhrases, response.CommonPhrases
-			s.words, s.wordsLoaded = response.UserWords, true
-			s.report, s.reportErrors = "", nil
-			if s.onTray != nil {
-				s.onTray(s.config.TrayIcon)
-			}
-			if s.onAutomaticUpdate != nil {
-				s.onAutomaticUpdate(s.config.AutoUpdate)
-			}
+			s.applyRestored(response)
 			s.notice = "已导入全部设置和数据"
 			if response.Report != nil && response.Report.Note != "" {
 				s.notice += "（" + response.Report.Note + "）"

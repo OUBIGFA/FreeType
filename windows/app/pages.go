@@ -23,6 +23,7 @@ var pages = []struct {
 	{"phrases", "快捷短语", &icons.phrases},
 	{"common", "常用语", &icons.common},
 	{"learned", "学到的词", &icons.learned},
+	{"sync", "数据与同步", &icons.sync},
 	{"about", "关于", &icons.about},
 }
 
@@ -97,6 +98,8 @@ func (s *settings) body(c *ui.Context, p palette) {
 					s.commonPage(c)
 				case "learned":
 					s.learnedPage(c)
+				case "sync":
+					s.syncPage(c)
 				case "about":
 					s.aboutPage(c)
 				default:
@@ -210,8 +213,6 @@ func (s *settings) generalPage(c *ui.Context) {
 			changed = choose(c, "提示位置", positions, &s.config.HintPosition, 200) || changed
 		})
 	})
-	s.appPresetSection(c)
-	s.backupSection(c)
 	if changed {
 		s.saveConfig()
 	}
@@ -447,6 +448,17 @@ func (s *settings) featuresPage(c *ui.Context) {
 		changed = s.settingSwitch(c, "features/快捷短语混入候选", false, &s.config.QuickPhrases) || changed
 		changed = s.settingSwitch(c, "features/输出繁体", false, &s.config.Traditional) || changed
 	})
+	section(c, "联想", func() {
+		changed = s.settingSwitch(c, "features/上屏联想", false, &s.config.PredictNext) || changed
+		if s.config.PredictNext || s.showSetting("features/数字键选联想词") || s.showSetting("features/空格选第一个联想词") {
+			changed = s.settingSwitch(c, "features/数字键选联想词", true, &s.config.PredictDigits) || changed
+			changed = s.settingSwitch(c, "features/空格选第一个联想词", true, &s.config.PredictSpace) || changed
+		}
+	})
+	if s.config.PredictNext {
+		hint(c, "联想词来自随包语言模型和你自己的输入习惯：连着用过的搭配会排到前面，记录在「学到的词」的学习数据里，随学习备份一起导入导出。")
+	}
+	s.appPresetSection(c)
 	if changed {
 		s.saveConfig()
 	}
@@ -483,7 +495,7 @@ func (s *settings) shortcutsPage(c *ui.Context) {
 				{"Ctrl + Delete", "删除光标处学错的词的记忆（也可以长按或右键候选）"},
 				{"[ ]", "启用「以词定字」后，选择候选的第一个 / 最后一个字；设置为翻页键时用于翻页"},
 				{"v + 空格", "启用工具栏后，在全拼状态下打开剪贴板、常用语、符号和表情"},
-				{"Esc", "清空当前输入，或关闭工具栏和表情面板"},
+				{"Esc", "清空当前输入，或关闭工具栏、表情面板和上屏联想"},
 			} {
 				ui.Row(c).Padding(11, 18).Gap(16).AlignItems(ui.Center).Children(func() {
 					ui.Row(c).Width(180).Gap(4).Children(func() {

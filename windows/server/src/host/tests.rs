@@ -1575,3 +1575,230 @@ fn add_user_word_accepts_tones_and_uppercase() {
     assert!(typing(&mut host, "lvxia").candidates.iter().any(|c| c == "女侠"));
     cleanup(&host);
 }
+
+/// 上屏联想的测试宿主：「今天」后面模型里有「下雨」「天气」。
+fn predict_host(name: &str) -> Host {
+    let mut host = host(name);
+    let lexicon = wowtype_core::MemoryLexicon::from_tsv_str(
+        "jin tian\t今天\t500000\nxia yu\t下雨\t20000\ntian qi\t天气\t60000\nkai hui\t开会\t30000\nbu cuo\t不错\t40000\n",
+    )
+    .unwrap();
+    let lm = wowtype_core::BigramLm::from_bigram_tsv_str(
+        "今天\t下雨\t300\n今天\t天气\t200\n天气\t不错\t300\n开会\t今天\t5\n不错\t今天\t5\n下雨\t今天\t5\n",
+    )
+    .unwrap();
+    host.install_engine(Ok(Engine::new(std::sync::Arc::new(lexicon), std::sync::Arc::new(lm))));
+    host
+}
+
+fn commit_today(host: &mut Host) -> Frame {
+    typing(host, "jintian");
+    press(host, 0x20)
+}
+
+#[test]
+fn prediction_is_off_by_default() {
+    let mut host = predict_host("predict-off");
+    assert!(!host.config().predict_next);
+    let frame = commit_today(&mut host);
+    assert_eq!(frame.commit.as_deref(), Some("今天"));
+    assert!(frame.candidates.is_empty() && !frame.predict);
+    cleanup(&host);
+}
+
+#[test]
+fn prediction_follows_a_commit_and_chains_with_digits_space_and_mouse() {
+    let mut host = predict_host("predict-chain");
+    configure(&mut host, |c| c.predict_next = true);
+    let frame = commit_today(&mut host);
+    assert_eq!(frame.commit.as_deref(), Some("今天"));
+    assert!(frame.predict && frame.preedit.is_empty() && !frame.forgettable);
+    assert_eq!(frame.candidates, ["下雨", "天气"]);
+    assert_eq!(frame.cursor, Some(0), "空格选的那个高亮");
+    // 数字键选第二个：上屏并接着联想
+    let frame = press(&mut host, '2' as u32);
+    assert!(frame.handled);
+    assert_eq!(frame.commit.as_deref(), Some("天气"));
+    assert_eq!(frame.candidates, ["不错"]);
+    // 空格选第一个；后面没有可联想的了，候选窗收起
+    let frame = press(&mut host, 0x20);
+    assert_eq!(frame.commit.as_deref(), Some("不错"));
+    assert!(frame.candidates.is_empty() && !frame.predict);
+    // 鼠标点
+    let shown = commit_today(&mut host).candidates;
+    let frame = host.handle(1, Request::Select { index: 1 }).frame.unwrap();
+    assert_eq!(frame.commit, Some(shown[1].clone()));
+    cleanup(&host);
+}
+
+#[test]
+fn prediction_steps_aside_for_other_keys() {
+    let mut host = predict_host("predict-keys");
+    configure(&mut host, |c| c.predict_next = true);
+    // 字母：直接开始打拼音
+    commit_today(&mut host);
+    let frame = press(&mut host, 'k' as u32);
+    assert!(frame.handled && !frame.predict);
+    assert_eq!(frame.preedit, "k");
+    press(&mut host, keysym::ESCAPE);
+    // Esc：吃掉这个键，只收起联想
+    assert!(commit_today(&mut host).predict);
+    let frame = press(&mut host, keysym::ESCAPE);
+    assert!(frame.handled && frame.candidates.is_empty());
+    assert!(!press(&mut host, keysym::ESCAPE).handled, "收起以后 Esc 归应用");
+    // 超出个数的数字：照常打出来（中文后面自动加了空格），不选词
+    assert!(commit_today(&mut host).predict);
+    let frame = press(&mut host, '9' as u32);
+    assert_eq!(frame.commit.as_deref(), Some(" 9"));
+    assert!(frame.candidates.is_empty());
+    // 退格、方向键、回车：交给应用，联想收起
+    for sym in [keysym::BACKSPACE, keysym::LEFT, keysym::RETURN] {
+        assert!(commit_today(&mut host).predict);
+        let frame = press(&mut host, sym);
+        assert!(!frame.handled && frame.candidates.is_empty() && frame.commit.is_none(), "{sym:#x}");
+        assert!(!press(&mut host, 0x20).handled, "收起以后空格归应用");
+    }
+    // 标点照常上屏
+    assert!(commit_today(&mut host).predict);
+    let frame = press(&mut host, ',' as u32);
+    assert_eq!(frame.commit.as_deref(), Some("，"));
+    assert!(frame.candidates.is_empty());
+    cleanup(&host);
+}
+
+#[test]
+fn prediction_keys_can_be_switched_off_separately() {
+    let mut host = predict_host("predict-switches");
+    configure(&mut host, |c| {
+        c.predict_next = true;
+        c.predict_digits = false;
+        c.predict_space = false;
+    });
+    let frame = commit_today(&mut host);
+    assert_eq!(frame.labels, ["", ""], "数字键不选词时不标序号");
+    assert_eq!(frame.cursor, None);
+    assert_eq!(press(&mut host, '1' as u32).commit.as_deref(), Some(" 1"), "数字照常打出来");
+    assert!(commit_today(&mut host).predict);
+    assert!(!press(&mut host, 0x20).handled, "空格照常打出来");
+    cleanup(&host);
+}
+
+#[test]
+fn prediction_is_dropped_when_caret_focus_or_mode_changes() {
+    let mut host = predict_host("predict-drop");
+    configure(&mut host, |c| c.predict_next = true);
+    // 光标挪走了（DLL 带来的光标前的字变了）
+    assert!(commit_today(&mut host).predict);
+    let key = Key { keysym: '1' as u32, ..Key::default() };
+    let frame = host.handle(1, Request::Key { key, before: Some("今天，".into()) }).frame.unwrap();
+    assert!(!frame.handled && frame.commit.is_none() && frame.candidates.is_empty());
+    // 换输入框
+    assert!(commit_today(&mut host).predict);
+    let frame = host.handle(1, Request::Focus { active: true, before: Some("今天".into()) }).frame.unwrap();
+    assert!(frame.candidates.is_empty());
+    // 收起（一会儿没选）
+    assert!(commit_today(&mut host).predict);
+    assert!(host.handle(1, Request::Reset { commit: false }).frame.unwrap().candidates.is_empty());
+    assert!(!press(&mut host, 0x20).handled);
+    // 切到英文
+    assert!(commit_today(&mut host).predict);
+    let frame = host.handle(1, Request::ToggleMode { shift: None }).frame.unwrap();
+    assert!(frame.candidates.is_empty());
+    cleanup(&host);
+}
+
+#[test]
+fn chosen_predictions_are_learned_once_and_rank_first_later() {
+    let mut host = predict_host("predict-learn");
+    configure(&mut host, |c| c.predict_next = true);
+    assert_eq!(commit_today(&mut host).candidates[1], "天气");
+    // 预判（OnTestKeyDown）不学习
+    let learned = host.engine.as_ref().unwrap().export_learning().unwrap();
+    let preview = Key { keysym: '2' as u32, test: true, ..Key::default() };
+    assert!(host.handle(1, Request::Key { key: preview, before: None }).frame.unwrap().handled);
+    assert_eq!(host.engine.as_ref().unwrap().export_learning().unwrap(), learned);
+    let pairs = host.engine.as_ref().unwrap().pair_count();
+    assert_eq!(press(&mut host, '2' as u32).commit.as_deref(), Some("天气"));
+    assert_eq!(host.engine.as_ref().unwrap().pair_count(), pairs + 1, "只学一次");
+    press(&mut host, keysym::ESCAPE);
+    // 选过的搭配排到「下雨」前面
+    assert_eq!(commit_today(&mut host).candidates[0], "天气");
+    // 模型里没有的搭配：用户自己连着打过两次也会出现
+    for _ in 0..2 {
+        press(&mut host, keysym::ESCAPE);
+        commit_today(&mut host);
+        typing(&mut host, "kaihui");
+        press(&mut host, 0x20);
+    }
+    press(&mut host, keysym::ESCAPE);
+    assert!(commit_today(&mut host).candidates.iter().any(|c| c == "开会"));
+    cleanup(&host);
+}
+
+#[test]
+fn merge_settings_adds_remote_data_without_dropping_local_data() {
+    let mut source = learning_host("merge-source");
+    configure(&mut source, |c| {
+        c.page_size = 9;
+        c.predict_next = true;
+    });
+    assert!(source.handle(1, Request::SetQuickPhrases {
+        phrases: vec![freetype_protocol::QuickPhrase { code: "dz".into(), text: "远端地址".into(), weight: 20 }],
+    }).ok);
+    assert!(source.handle(1, settings_request(serde_json::json!({"op": "set_common_phrases", "phrases": ["远端常用语", "两边都有"]}))).ok);
+    std::fs::create_dir_all(source.data_dir().join("dicts")).unwrap();
+    std::fs::write(source.data_dir().join("dicts/人名.txt"), "阿特\ta te\t800\n").unwrap();
+    std::fs::write(source.data_dir().join("dicts/共有.txt"), "远端\tyuan duan\t800\n").unwrap();
+    source.recent_emoji = vec!["😊".into()];
+    for _ in 0..3 { source.engine.as_ref().unwrap().record_selection_with_pinyin("阿特", Some("a te")); }
+    let snapshot = source.data_dir().join("snapshot.json");
+    assert!(source.handle(1, learning_request("export_settings", &snapshot)).ok);
+
+    let mut target = learning_host("merge-target");
+    configure(&mut target, |c| {
+        c.font_size = 24;
+        c.horizontal = false;
+    });
+    target.mode = Mode::English;
+    assert!(target.handle(1, Request::SetQuickPhrases {
+        phrases: vec![freetype_protocol::QuickPhrase { code: "yx".into(), text: "本机邮箱".into(), weight: 10 }],
+    }).ok);
+    assert!(target.handle(1, settings_request(serde_json::json!({"op": "set_common_phrases", "phrases": ["本机常用语", "两边都有"]}))).ok);
+    std::fs::create_dir_all(target.data_dir().join("dicts")).unwrap();
+    std::fs::write(target.data_dir().join("dicts/共有.txt"), "本机\tben ji\t100\n").unwrap();
+    target.recent_emoji = vec!["🎉".into()];
+    target.engine.as_ref().unwrap().record_selection_with_pinyin("旧词", Some("jiu ci"));
+
+    let result = target.handle(1, learning_request("merge_settings", &snapshot));
+    assert!(result.ok, "{result:?}");
+    // 设置：采纳远端改过的项，本机改过而远端没改的留着
+    assert_eq!(target.config.page_size, 9);
+    assert!(target.config.predict_next);
+    assert_eq!(target.config.font_size, 24);
+    assert!(!target.config.horizontal);
+    assert_eq!(target.mode, Mode::English, "中英文状态是各设备自己的");
+    let codes: Vec<String> = target.store.list_quick_phrases().into_iter().map(|p| p.code).collect();
+    assert_eq!(codes, ["dz", "yx"], "列表按编码排");
+    assert_eq!(target.store.load_common_phrases().unwrap(), ["本机常用语", "两边都有", "远端常用语"]);
+    let mut names: Vec<String> = target.store.list_dictionaries().into_iter().map(|d| d.name).collect();
+    names.sort();
+    assert_eq!(names, ["人名", "共有"]);
+    assert_eq!(std::fs::read_to_string(target.data_dir().join("dicts/共有.txt")).unwrap(), "本机\tben ji\t100\n", "同名词库保留本机的");
+    assert_eq!(target.recent_emoji, ["🎉", "😊"]);
+    let engine = target.engine.as_ref().unwrap();
+    assert_eq!((engine.history_count("阿特"), engine.history_count("旧词")), (3, 1));
+    assert!(engine.input("ate").iter().any(|c| c.text == "阿特"), "并进来的词马上能用");
+    // 再合并一次不重复、不累加
+    let again = target.handle(1, learning_request("merge_settings", &snapshot));
+    assert!(again.ok);
+    assert_eq!(target.store.list_quick_phrases().len(), 2);
+    assert_eq!(target.store.load_common_phrases().unwrap().len(), 3);
+    assert_eq!(target.engine.as_ref().unwrap().history_count("阿特"), 3);
+    // 坏文件不动数据
+    let bad = target.data_dir().join("bad.json");
+    std::fs::write(&bad, "{}").unwrap();
+    assert!(!target.handle(1, learning_request("merge_settings", &bad)).ok);
+    assert_eq!(target.config.page_size, 9);
+    cleanup(&source);
+    cleanup(&target);
+}
