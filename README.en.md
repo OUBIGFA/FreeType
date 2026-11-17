@@ -67,6 +67,7 @@ The candidate window has four selected-candidate styles:
 - When enabled, clipboard history keeps the latest 20 items in memory.
 - A learning backup contains personal input habits. Do not share it in public.
 - Update checks connect to GitHub, and downloads use its release asset servers. Automatic updates are off by default. Update requests do not include typed text or learning data.
+- Cloud sync is off by default. When enabled, settings, dictionaries, and learning data are backed up to your configured WebDAV or S3 storage. Sync passwords and secret keys are excluded from backups.
 
 ## System requirements
 

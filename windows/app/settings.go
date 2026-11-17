@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,6 +20,9 @@ type settings struct {
 	apply func(fn func())
 	// inline：后台的事也在当前线程做完（测试用）。
 	inline bool
+	// 保存请求按操作顺序发送；旧应答不能覆盖用户随后改过的界面值。
+	configSaveTail <-chan struct{}
+	configRevision uint64
 	// 选文件、存文件、打开文件夹（测试里换掉）。
 	openFile   func(title string) string
 	openTable  func(title string) string
@@ -127,6 +131,7 @@ func (s *settings) background(work func() func()) {
 
 // refresh 重新读状态、设置、词库和快捷短语。
 func (s *settings) refresh() {
+	revision := s.configRevision
 	s.background(func() func() {
 		status, err := s.backend.Call(op("status"))
 		if err != nil {
@@ -142,7 +147,7 @@ func (s *settings) refresh() {
 			if status.Status != nil {
 				s.status = *status.Status
 			}
-			if cerr == nil && config.Config != nil {
+			if cerr == nil && config.Config != nil && revision == s.configRevision {
 				s.config = *config.Config
 				s.loaded = true
 			}
@@ -161,12 +166,25 @@ func (s *settings) refresh() {
 // saveConfig 把整份设置交给服务进程（立即生效）。
 func (s *settings) saveConfig() {
 	c := s.config
+	c.AppPresetRules = slices.Clone(c.AppPresetRules)
+	s.configRevision++
+	revision := s.configRevision
+	previous := s.configSaveTail
+	done := make(chan struct{})
+	s.configSaveTail = done
 	if s.onTray != nil {
 		s.onTray(c.TrayIcon)
 	}
 	s.background(func() func() {
+		if previous != nil {
+			<-previous
+		}
 		resp, err := s.backend.Call(op("set_config", "config", c))
+		close(done)
 		return func() {
+			if revision != s.configRevision {
+				return
+			}
 			if err != nil {
 				s.notice = "保存失败：" + err.Error()
 				return

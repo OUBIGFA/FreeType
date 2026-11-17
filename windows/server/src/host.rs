@@ -276,6 +276,16 @@ impl Host {
 
     /// 后台载入好了：装上引擎，套用设置和用户数据。
     pub fn install_engine(&mut self, result: Result<Engine, String>) {
+        let result = result.and_then(|engine| {
+            if let Some(current) = self.engine.as_deref() {
+                // 载入期间旧引擎仍接受输入，磁盘快照可能已过期。整体接续最新学习状态，
+                // 既保留刚学到的词，也避免合并快照把刚删除的词重新带回来。
+                let learning = current.export_learning().map_err(|e| format!("读取当前学习记录失败：{e:#}"))?;
+                engine.clear_learned();
+                engine.import_learning(&learning).map_err(|e| format!("接续学习记录失败：{e:#}"))?;
+            }
+            Ok(engine)
+        });
         self.detach();
         match result {
             Ok(mut engine) => {
@@ -370,11 +380,10 @@ impl Host {
     }
 
     /// 改一项设置并存盘（快捷键、状态栏切换的）。
-    fn change_config(&mut self, change: impl FnOnce(&mut Config)) {
+    fn change_config(&mut self, change: impl FnOnce(&mut Config)) -> Result<(), String> {
         let mut config = self.config.clone();
         change(&mut config);
-        let _ = self.store.save_config(&config.clone().sanitized());
-        self.set_config(config);
+        self.save_config(config)
     }
 
     pub fn connect(&mut self, id: ClientId, app: String) {
@@ -668,13 +677,17 @@ impl Host {
     }
 
     fn toggle_punct(&mut self, id: ClientId) -> Response {
-        self.change_config(|c| c.fullwidth_punct = !c.fullwidth_punct);
+        if let Err(error) = self.change_config(|c| c.fullwidth_punct = !c.fullwidth_punct) {
+            return Response::error(error);
+        }
         let hint = if self.config.fullwidth_punct { "中文标点" } else { "英文标点" };
         self.hint_frame(id, Some(hint.into()))
     }
 
     fn toggle_traditional(&mut self, id: ClientId) -> Response {
-        self.change_config(|c| c.traditional = !c.traditional);
+        if let Err(error) = self.change_config(|c| c.traditional = !c.traditional) {
+            return Response::error(error);
+        }
         let hint = if self.config.traditional { "繁體" } else { "简体" };
         self.hint_frame(id, Some(hint.into()))
     }
@@ -915,7 +928,9 @@ impl Host {
                 Response::ok()
             }
             Command::ToggleStatusBar => {
-                self.change_config(|c| c.status_bar = !c.status_bar);
+                if let Err(error) = self.change_config(|c| c.status_bar = !c.status_bar) {
+                    return Response::error(error);
+                }
                 Response {
                     config: Some(self.config.clone()),
                     ..Response::ok()
@@ -1323,7 +1338,7 @@ impl Host {
                         weight: freq.clamp(1.0, f64::from(u32::MAX)) as u32,
                     })
                     .collect();
-                match std::fs::write(&path, msime::format_dictionary(&entries)) {
+                match crate::store::write_atomic(Path::new(&path), &msime::format_dictionary(&entries)) {
                     Ok(()) => Response {
                         report: Some(ImportReport {
                             added: entries.len(),

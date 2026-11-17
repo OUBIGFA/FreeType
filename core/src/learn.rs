@@ -19,6 +19,35 @@ use anyhow::{Context, Result};
 use crate::lm::LanguageModel;
 use crate::HistoryEntry;
 
+/// 两份学习数据都先完整写入并刷盘，再替换旧文件；临时文件独占创建，避免误覆盖。
+pub(crate) fn write_atomic(path: &Path, data: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let filename = path.file_name().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "缺少文件名"))?;
+    let (temporary, mut file) = loop {
+        let mut name = std::ffi::OsString::from(".");
+        name.push(filename);
+        name.push(format!(".{}-{}.tmp", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        let temporary = path.with_file_name(name);
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&temporary) {
+            Ok(file) => break (temporary, file),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    };
+    let result = file.write_all(data.as_bytes()).and_then(|()| file.sync_all());
+    drop(file);
+    let result = result.and_then(|()| std::fs::rename(&temporary, path));
+    if let Err(error) = result {
+        if let Err(cleanup) = std::fs::remove_file(&temporary) {
+            return Err(std::io::Error::new(error.kind(), format!("{error}；临时文件清理失败：{cleanup}")));
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
 /// 半衰期：30 天（毫秒）。
 pub const HALF_LIFE_MS: f64 = 30.0 * 24.0 * 3600.0 * 1000.0;
 
@@ -178,10 +207,7 @@ pub fn save_history<P: AsRef<Path>>(
             entry.count, entry.last_used_ms
         ));
     }
-    // 先写临时文件再改名，写到一半断电也不会把旧文件弄坏
-    let tmp = path.with_extension("tsv.tmp");
-    std::fs::write(&tmp, out).with_context(|| format!("写入 {}", tmp.display()))?;
-    std::fs::rename(&tmp, path).with_context(|| format!("改名为 {}", path.display()))?;
+    write_atomic(path, &out).with_context(|| format!("保存 {}", path.display()))?;
     Ok(())
 }
 

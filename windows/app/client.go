@@ -17,10 +17,11 @@ import (
 
 // pipeClient 连 \\.\pipe\FreeType-<SID>；断了下次调用时重连。
 type pipeClient struct {
-	mu     sync.Mutex
-	path   string
-	file   *os.File
-	reader *bufio.Reader
+	mu      sync.Mutex
+	path    string
+	file    *os.File
+	reader  *bufio.Reader
+	timeout time.Duration // 零值使用管理请求的默认上限；测试可缩短。
 }
 
 func currentUserSID() (string, error) {
@@ -56,11 +57,26 @@ func (p *pipeClient) Call(req Request) (Response, error) {
 	defer p.mu.Unlock()
 	for attempt := 0; attempt < 2; attempt++ {
 		if p.file == nil {
-			f, err := os.OpenFile(p.path, os.O_RDWR, 0)
+			name, err := windows.UTF16PtrFromString(p.path)
+			if err != nil {
+				return Response{}, err
+			}
+			// 重叠句柄交给 Go 的轮询器，SetDeadline 才能真正取消管道等待。
+			handle, err := windows.CreateFile(name, windows.GENERIC_READ|windows.GENERIC_WRITE,
+				0, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_OVERLAPPED, 0)
 			if err != nil {
 				return Response{}, fmt.Errorf("连不上输入法服务：%w", err)
 			}
+			f := os.NewFile(uintptr(handle), p.path)
 			p.file, p.reader = f, bufio.NewReader(f)
+		}
+		timeout := p.timeout
+		if timeout <= 0 {
+			timeout = 30 * time.Second
+		}
+		if err := p.file.SetDeadline(time.Now().Add(timeout)); err != nil {
+			p.close()
+			return Response{}, fmt.Errorf("无法设置服务应答期限：%w", err)
 		}
 		line, err := json.Marshal(req)
 		if err != nil {
@@ -71,6 +87,7 @@ func (p *pipeClient) Call(req Request) (Response, error) {
 			if reply, err = p.reader.ReadBytes('\n'); err == nil {
 				var resp Response
 				if err := json.Unmarshal(reply, &resp); err != nil {
+					p.close()
 					return Response{}, err
 				}
 				if !resp.OK {
@@ -78,9 +95,15 @@ func (p *pipeClient) Call(req Request) (Response, error) {
 				}
 				return resp, nil
 			}
+			// 请求已发出时结果可能已生效，断连或超时都不能重放切换/导入等操作。
+			p.close()
+			return Response{}, fmt.Errorf("输入法服务未返回结果，请刷新后检查操作是否生效：%w", err)
 		}
 		// 连接断了（服务进程重启过）：重连再试一次
 		p.close()
+		if errors.Is(err, os.ErrDeadlineExceeded) {
+			return Response{}, fmt.Errorf("输入法服务应答超时：%w", err)
+		}
 	}
 	return Response{}, errors.New("输入法服务没有应答")
 }

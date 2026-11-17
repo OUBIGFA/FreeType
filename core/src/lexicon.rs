@@ -397,6 +397,22 @@ impl MemoryLexicon {
     /// 从 TSV 文本加载。
     pub fn from_tsv_str(data: &str) -> Result<Self> {
         let mut lex = Self::new();
+        Self::visit_tsv(data, |pinyin, word, freq| {
+            // 音节不认识（各地方言音、冷僻拼音）时跳过这一行。
+            if lex.insert(pinyin, word, freq).is_err() {
+                lex.skipped += 1;
+            }
+        })?;
+        Ok(lex)
+    }
+
+    /// 与载入使用同一格式校验；备份不查询词条，不必构建整份查询索引。
+    /// 未知音节或非有限频次与 from_tsv_str 一样由载入时跳过，不拒绝整份文件。
+    pub fn validate_tsv_str(data: &str) -> Result<()> {
+        Self::visit_tsv(data, |_, _, _| {})
+    }
+
+    fn visit_tsv(data: &str, mut visit: impl FnMut(&str, &str, f64)) -> Result<()> {
         for (line_no, raw) in data.lines().enumerate() {
             let line = raw.trim_end();
             if line.is_empty() || line.starts_with('#') {
@@ -412,14 +428,9 @@ impl MemoryLexicon {
             let freq: f64 = freq
                 .parse()
                 .with_context(|| format!("第 {} 行频次不是数字: {freq}", line_no + 1))?;
-            // 音节不认识（各地方言音、冷僻拼音）时跳过这一行，
-            // 不要让一条脏数据毁掉整个词库。
-            match lex.insert(pinyin, word, freq) {
-                Ok(()) => {}
-                Err(_) => lex.skipped += 1,
-            }
+            visit(pinyin, word, freq);
         }
-        Ok(lex)
+        Ok(())
     }
 
     /// 给「占位频次」的词估一个频次。
@@ -804,6 +815,8 @@ pub struct UserLexicon {
     phrases: RwLock<Vec<(String, String)>>,
     /// 导入的词库（比如水杉格式的批量文件）：只读，整份替换，不写回用户词库，也不提前排。
     extra: RwLock<Vec<(String, String, f64)>>,
+    // 导入词库只在导入/删除时重建，不能随每次选词学习重建几十万条数据。
+    extra_snapshot: RwLock<Arc<MemoryLexicon>>,
     snapshot: RwLock<Arc<MemoryLexicon>>,
 }
 
@@ -820,6 +833,7 @@ impl UserLexicon {
             learned_codes: RwLock::new(Vec::new()),
             phrases: RwLock::new(Vec::new()),
             extra: RwLock::new(Vec::new()),
+            extra_snapshot: RwLock::new(Arc::new(MemoryLexicon::new())),
             snapshot: RwLock::new(Arc::new(MemoryLexicon::new())),
         }
     }
@@ -831,6 +845,9 @@ impl UserLexicon {
         {
             let mut words = self.words.write().unwrap();
             if let Some(slot) = words.iter_mut().find(|(_, w, _)| w == word) {
+                if slot.0 == pinyin && slot.2 == freq {
+                    return Ok(());
+                }
                 slot.0 = pinyin;
                 slot.2 = freq;
             } else {
@@ -901,7 +918,7 @@ impl UserLexicon {
         for (pinyin, word, freq) in words {
             out.push_str(&format!("{}\t{}\t{}\n", pinyin, word, freq as i64));
         }
-        fs::write(path.as_ref(), out)
+        crate::learn::write_atomic(path.as_ref(), &out)
             .with_context(|| format!("写入用户词库失败: {}", path.as_ref().display()))
     }
 
@@ -910,6 +927,10 @@ impl UserLexicon {
         let data = fs::read_to_string(path.as_ref())
             .with_context(|| format!("读取用户词库失败: {}", path.as_ref().display()))?;
         let mut added = 0;
+        // 批量合并后只建一次索引；逐条调用 add 会使启动耗时随学习词数平方增长。
+        let mut words = self.words.write().map_err(|_| anyhow!("user words lock poisoned"))?;
+        let mut positions: HashMap<String, usize> = words.iter().enumerate()
+            .map(|(i, (_, word, _))| (word.clone(), i)).collect();
         for line in data.lines() {
             if line.trim().is_empty() || line.starts_with('#') {
                 continue;
@@ -919,9 +940,19 @@ impl UserLexicon {
                 continue;
             };
             let freq = cols.next().and_then(|f| f.parse().ok()).unwrap_or(1000.0);
-            if self.add(pinyin, word, freq).is_ok() {
+            if let Ok(pinyin) = user_reading(pinyin, word, freq) {
+                if let Some(&index) = positions.get(word) {
+                    words[index] = (pinyin, word.to_string(), freq);
+                } else {
+                    positions.insert(word.to_string(), words.len());
+                    words.push((pinyin, word.to_string(), freq));
+                }
                 added += 1;
             }
+        }
+        drop(words);
+        if added > 0 {
+            self.rebuild();
         }
         Ok(added)
     }
@@ -1046,10 +1077,21 @@ impl UserLexicon {
             .filter(|(pinyin, word, _)| !word.is_empty() && parse_pinyin_keys(pinyin).is_ok())
             .collect();
         let count = words.len();
+        if self.extra.read().is_ok_and(|existing| *existing == words) {
+            return count;
+        }
+        let mut snapshot = MemoryLexicon::new();
+        for (pinyin, word, freq) in &words {
+            let _ = snapshot.insert(pinyin, word, *freq);
+        }
+        // 第一次模糊匹配也不能把导入词库的索引构建推给按键线程。
+        snapshot.prepare_fuzzy();
         if let Ok(mut slot) = self.extra.write() {
             *slot = words;
         }
-        self.rebuild();
+        if let Ok(mut slot) = self.extra_snapshot.write() {
+            *slot = Arc::new(snapshot);
+        }
         count
     }
 
@@ -1066,7 +1108,6 @@ impl UserLexicon {
             false
         });
         words.extend(self.custom_words());
-        words.extend(self.extra_words());
         let mut tsv = String::new();
         for (pinyin, word, freq) in &words {
             tsv.push_str(&format!("{}\t{}\t{}\n", pinyin, word, freq));
@@ -1108,12 +1149,18 @@ impl Lexicon for UserLexicon {
         if let Ok(snapshot) = self.snapshot.read() {
             result.extend(snapshot.lookup(query));
         }
+        if let Ok(snapshot) = self.extra_snapshot.read() {
+            result.extend(snapshot.lookup(query));
+        }
         result
     }
 
     fn lookup_common(&self, query: &[SyllableQuery]) -> Vec<LexEntry> {
         let mut result = self.base.lookup_common(query);
         if let Ok(snapshot) = self.snapshot.read() {
+            result.extend(snapshot.lookup_common(query));
+        }
+        if let Ok(snapshot) = self.extra_snapshot.read() {
             result.extend(snapshot.lookup_common(query));
         }
         result
@@ -1126,6 +1173,7 @@ impl Lexicon for UserLexicon {
                 .read()
                 .map(|s| s.has_longer(query))
                 .unwrap_or(true)
+            || self.extra_snapshot.read().map(|s| s.has_longer(query)).unwrap_or(true)
     }
 
     fn prepare_fuzzy(&self) {
@@ -1137,15 +1185,20 @@ impl Lexicon for UserLexicon {
         if let Ok(snapshot) = self.snapshot.read() {
             result.extend(snapshot.lookup_fuzzy(query, groups));
         }
+        if let Ok(snapshot) = self.extra_snapshot.read() {
+            result.extend(snapshot.lookup_fuzzy(query, groups));
+        }
         result
     }
 
     fn total_freq(&self) -> f64 {
         self.base.total_freq() + self.snapshot.read().map(|s| s.total_freq()).unwrap_or(0.0)
+            + self.extra_snapshot.read().map(|s| s.total_freq()).unwrap_or(0.0)
     }
 
     fn len(&self) -> usize {
         self.base.len() + self.snapshot.read().map(|s| s.len()).unwrap_or(0)
+            + self.extra_snapshot.read().map(|s| s.len()).unwrap_or(0)
     }
 }
 
@@ -1413,6 +1466,34 @@ mod tests {
     }
 
     #[test]
+    fn learned_and_imported_layers_keep_independent_lifetimes() {
+        let lex = UserLexicon::new(Arc::new(MemoryLexicon::new()));
+        let q = [Syllable::from_text("ni").unwrap().query(false)];
+        lex.set_extra_words(vec![("ni".into(), "泥".into(), 100.0)]);
+        lex.set_custom_tsv("ni\t妮\t200\n");
+        lex.add("ni", "你", 300.0).unwrap();
+        assert_eq!(lex.lookup(&q).len(), 3);
+        assert_eq!(lex.total_freq(), 600.0);
+        lex.add("ni", "你", 400.0).unwrap();
+        assert_eq!(lex.total_freq(), 700.0);
+        lex.clear();
+        assert_eq!(lex.lookup(&q).len(), 2, "clearing learning must keep imported and custom words");
+        lex.set_extra_words(Vec::new());
+        assert_eq!(lex.lookup(&q).iter().map(|e| e.word.as_str()).collect::<Vec<_>>(), vec!["妮"]);
+        lex.set_custom_tsv("");
+        assert!(lex.lookup(&q).is_empty());
+    }
+
+    #[test]
+    fn backup_validation_matches_dictionary_loading_without_building_indexes() {
+        for text in ["ni\t你\t3\n", "unknown\t字\t3\n", "ni\t你\tNaN\n",
+            "# comment\n", "ni\t你\tbad\n", "ni\t你\n", "ni\t你\t3\textra\n"] {
+            assert_eq!(MemoryLexicon::validate_tsv_str(text).is_ok(),
+                MemoryLexicon::from_tsv_str(text).is_ok(), "{text:?}");
+        }
+    }
+
+    #[test]
     fn apostrophe_and_multi_syllable() {
         let lex = lex();
         let xi = Syllable::from_text("xi").unwrap();
@@ -1565,6 +1646,39 @@ mod tests {
         let _ = std::fs::remove_file(cache_path(&path));
         std::fs::write(&path, body).expect("写临时词库失败");
         path
+    }
+
+    #[test]
+    fn saving_user_words_replaces_the_file_instead_of_truncating_it() {
+        use std::io::Read;
+        let old = "ni\t你\t1000\n";
+        let path = temp_lexicon("atomic-user", old);
+        let mut previous = std::fs::File::open(&path).unwrap();
+        let lex = UserLexicon::new(Arc::new(MemoryLexicon::new()));
+        lex.add("hao", "好", 2000.0).unwrap();
+        lex.save_tsv(&path).unwrap();
+        let mut text = String::new();
+        previous.read_to_string(&mut text).unwrap();
+        assert_eq!(text, old, "an existing reader must retain the complete previous file");
+        assert!(std::fs::read_to_string(&path).unwrap().contains("好"));
+        drop(previous);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn failed_atomic_learning_save_preserves_target_and_unrelated_temp() {
+        let root = std::env::temp_dir().join(format!("learning-atomic-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("user.tsv")).unwrap();
+        let other = root.join("user.tsv.tmp");
+        std::fs::write(&other, "unrelated").unwrap();
+        let lex = UserLexicon::new(Arc::new(MemoryLexicon::new()));
+        assert!(lex.save_tsv(root.join("user.tsv")).is_err());
+        assert!(root.join("user.tsv").is_dir());
+        assert_eq!(std::fs::read_to_string(&other).unwrap(), "unrelated");
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 2);
+        std::fs::remove_file(other).unwrap();
+        std::fs::remove_dir(root.join("user.tsv")).unwrap();
+        std::fs::remove_dir(root).unwrap();
     }
 
     fn cleanup(path: &std::path::Path) {

@@ -235,7 +235,7 @@ fn prepare(mut data: SettingsBackup) -> Result<PreparedBackup, String> {
         if text.trim().is_empty() {
             return Err("备份中的主词库为空".into());
         }
-        MemoryLexicon::from_tsv_str(text).map_err(|error| format!("备份中的主词库不正确：{error:#}"))?;
+        MemoryLexicon::validate_tsv_str(text).map_err(|error| format!("备份中的主词库不正确：{error:#}"))?;
     }
     // 用真实核心校验整份学习记录，并预先生成恢复后的数据；不改动运行中的引擎。
     let learned = Engine::new(Arc::new(MemoryLexicon::new()), Arc::new(BigramLm::default()));

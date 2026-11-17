@@ -1536,6 +1536,38 @@ fn lexicon_change_is_handed_to_the_loader() {
 }
 
 #[test]
+fn reloading_lexicon_preserves_learning_and_deletions_made_during_loading() {
+    let mut host = host("reload-learning");
+    let old = host.engine.as_ref().unwrap();
+    old.add_user_word("ni hao", "你好", 3000.0).unwrap();
+    // The loader read this snapshot, then the user kept typing in the old engine.
+    let stale = old.export_learning().unwrap();
+    let loaded = Engine::new(std::sync::Arc::new(wowtype_core::MemoryLexicon::new()),
+        std::sync::Arc::new(wowtype_core::BigramLm::default()));
+    loaded.import_learning(&stale).unwrap();
+    old.forget_word("你好");
+    old.add_user_word("ce shi", "测试", 4000.0).unwrap();
+    let expected = old.export_learning().unwrap();
+    host.install_engine(Ok(loaded));
+    assert_eq!(host.engine.as_ref().unwrap().export_learning().unwrap(), expected,
+        "switching dictionaries must neither lose new learning nor resurrect deleted words");
+    cleanup(&host);
+}
+
+#[test]
+fn command_config_save_failure_is_reported_without_changing_effective_config() {
+    let mut host = host("command-save-error");
+    std::fs::create_dir_all(host.data_dir().join("config.json")).unwrap();
+    for command in [Command::TogglePunct, Command::ToggleTraditional, Command::ToggleStatusBar] {
+        let before = host.config.clone();
+        let response = host.handle(1, Request::Command { command });
+        assert!(!response.ok, "failed storage must not be reported as a successful toggle");
+        assert_eq!(host.config, before, "failed storage must preserve the previous setting");
+    }
+    cleanup(&host);
+}
+
+#[test]
 fn import_bare_words_and_add_user_word_use_lexicon_readings() {
     let mut host = host("readings");
     let lexicon = host.data_dir().with_extension("readings.tsv");

@@ -14,8 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 INCLUDE = ROOT / "windows/app/installer.nsh"
 
 
-@unittest.skipUnless(os.name == "nt", "Windows update handoff")
-class UpdateHandoffTests(unittest.TestCase):
+class ServerFixture:
     def setUp(self):
         scratch = Path(os.environ.get("FREETYPE_TEST_TEMP", ROOT / "_temp/update-tests"))
         scratch.mkdir(parents=True, exist_ok=True)
@@ -135,6 +134,9 @@ class UpdateHandoffTests(unittest.TestCase):
         self.assertTrue(response["ok"], response)
         return response
 
+
+@unittest.skipUnless(os.name == "nt", "Windows update handoff")
+class UpdateHandoffTests(ServerFixture, unittest.TestCase):
     def start_installer(self, *, abort=False):
         installer = self.root / "overwrite.exe"
         script = self.root / "overwrite.nsi"

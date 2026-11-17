@@ -173,9 +173,16 @@ mod app {
             });
             host.set_desktop(Box::new(desktop::start(bar_tx, clipboard_on.clone())));
         }
+        let mut next_save = std::time::Instant::now() + SAVE_INTERVAL;
         loop {
+            // 定时保存以经过的时间为准，不能等消息队列连续空闲 30 秒。
+            // 持续输入和托盘轮询都会产生消息，否则学习记录可能整天不落盘。
+            if std::time::Instant::now() >= next_save {
+                host.save_if_dirty();
+                next_save = std::time::Instant::now() + SAVE_INTERVAL;
+            }
             clipboard_on.store(host.config().clipboard_history, Ordering::Relaxed);
-            match inbox.recv_timeout(SAVE_INTERVAL) {
+            match inbox.recv_timeout(next_save.saturating_duration_since(std::time::Instant::now())) {
                 Ok(Event::Bar(event)) => {
                     let request = match event {
                         BarEvent::Foreground(app) => {
@@ -220,7 +227,7 @@ mod app {
                         return 0;
                     }
                 }
-                Err(mpsc::RecvTimeoutError::Timeout) => host.save_if_dirty(),
+                Err(mpsc::RecvTimeoutError::Timeout) => {},
                 Err(mpsc::RecvTimeoutError::Disconnected) => return 1,
             }
         }

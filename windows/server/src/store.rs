@@ -255,7 +255,7 @@ impl Store {
 
     pub fn export_quick_phrases(&self, path: &Path) -> Result<usize, String> {
         let phrases = self.load_quick_phrases();
-        fs::write(path, msime::format_quick_phrases(&phrases)).map_err(|e| format!("写入文件失败：{e}"))?;
+        write_atomic(path, &msime::format_quick_phrases(&phrases)).map_err(|e| format!("写入文件失败：{e}"))?;
         Ok(phrases.len())
     }
 
