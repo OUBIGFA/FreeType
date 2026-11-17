@@ -151,6 +151,9 @@ pub fn load_engine(resources: &Path, store_dir: &Path, lexicon: &str) -> Result<
             Err(_) => std::sync::Arc::new(wowtype_core::BigramLm::default()),
         };
     let engine = Engine::new(std::sync::Arc::new(lexicon), lm);
+    // 模糊音和默认开启的纠错兜底都使用此索引。必须在后台载入阶段建好，
+    // 否则 ready 后的首次按键仍会遍历整份词库，可能超过 TSF 的 1.5 秒等待上限。
+    engine.prepare_fuzzy();
     let _ = engine.load_english(resources.join("english.txt"));
     let _ = engine.load_conversion(resources.join("s2t.tsv"));
     let store = Store::new(store_dir.to_path_buf());

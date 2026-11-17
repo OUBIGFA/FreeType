@@ -213,6 +213,42 @@ class UpdateHandoffTests(unittest.TestCase):
         self.wait_for(self.mutex_exists, "Server did not restart after the installer exited")
         self.assertIsNone(server.poll())
 
+    def test_ready_server_does_not_build_fuzzy_index_on_first_input(self):
+        # The small handoff fixture hides the cost of a lazy index over the full
+        # shipped dictionary. Use both a fresh snapshot and a cached restart.
+        for name in ("lexicon.tsv", "words.lm", "english.txt"):
+            shutil.copyfile(ROOT / ".local/data" / name, self.resources / name)
+        timings = []
+        for fuzzy, code, expected in [(True, "nihao", "你好"), (False, "yingai", "应该")]:
+            (self.data / "config.json").write_text(
+                json.dumps({"fuzzy": fuzzy, "predict_next": True}), encoding="utf-8")
+            server = self.launch(self.server)
+            connection = self.connect()
+            deadline = time.monotonic() + 45
+            while not self.call(connection, "hello", session=True, app="startup-test.exe")["status"]["ready"]:
+                self.assertLess(time.monotonic(), deadline, "The full dictionary never became ready")
+                time.sleep(0.05)
+            for attempt in range(2):
+                self.call(connection, "reset", commit=False)
+                self.call(connection, "focus", active=True, before="")
+                for char in code:
+                    started = time.perf_counter()
+                    for test in [True, False]:
+                        frame = self.call(connection, "key", key={
+                            "keysym": ord(char), "modifiers": 0, "test": test})["frame"]
+                        self.assertTrue(frame["handled"], frame)
+                    timings.append((fuzzy, attempt, char, time.perf_counter() - started))
+                    self.assertTrue(frame["candidates"], frame)
+                self.assertIn(expected, frame["candidates"], frame)
+            self.call(connection, "shutdown")
+            self.assertEqual(server.wait(timeout=10), 0)
+            connection.close()
+        # Leave a wide margin over normal millisecond queries while catching the
+        # measured 1.4–1.5 s index build, which can exceed the TSF 1.5 s timeout.
+        slow = [(fuzzy, attempt, char, round(seconds * 1000, 1))
+                for fuzzy, attempt, char, seconds in timings if seconds >= 0.5]
+        self.assertFalse(slow, f"Input after ready exceeded 500 ms (fuzzy, attempt, key, ms): {slow}")
+
 
 if __name__ == "__main__":
     unittest.main()
