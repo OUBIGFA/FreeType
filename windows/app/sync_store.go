@@ -32,6 +32,8 @@ type remoteEntry struct {
 type remoteStore interface {
 	// Put 上传；body 要能回到开头（S3 签名前先算一遍摘要）。
 	Put(key string, body io.ReadSeeker, size int64) error
+	// PutNew 仅创建新文件；同名已存在时返回 errRemoteExists，绝不覆盖。
+	PutNew(key string, body io.ReadSeeker, size int64) error
 	Get(key string, w io.Writer) error
 	// List 只列 dir 这一层；目录不存在时返回空。
 	List(dir string) ([]remoteEntry, error)
@@ -40,6 +42,8 @@ type remoteStore interface {
 	// Probe 检查地址和凭据能不能用。
 	Probe() error
 }
+
+var errRemoteExists = errors.New("远端同名文件已存在")
 
 // 等服务端开始应答最多这么久；传输本身不设总时长（快照可能很大、网可能很慢）。
 const remoteHeaderTimeout = 30 * time.Second
@@ -185,15 +189,30 @@ func (w *webdavStore) ensureDirs(parts []string) error {
 }
 
 func (w *webdavStore) Put(key string, body io.ReadSeeker, size int64) error {
+	return w.put(key, body, size, false)
+}
+
+func (w *webdavStore) PutNew(key string, body io.ReadSeeker, size int64) error {
+	return w.put(key, body, size, true)
+}
+
+func (w *webdavStore) put(key string, body io.ReadSeeker, size int64, onlyNew bool) error {
 	parts := cleanKey(key)
 	if err := w.ensureDirs(parts[:len(parts)-1]); err != nil {
 		return err
 	}
-	resp, err := w.do(http.MethodPut, w.address(parts, false), body, size, map[string]string{"Content-Type": "application/octet-stream"})
+	headers := map[string]string{"Content-Type": "application/octet-stream"}
+	if onlyNew {
+		headers["If-None-Match"] = "*"
+	}
+	resp, err := w.do(http.MethodPut, w.address(parts, false), body, size, headers)
 	if err != nil {
 		return fmt.Errorf("上传失败：%w", err)
 	}
 	defer resp.Body.Close()
+	if onlyNew && resp.StatusCode == http.StatusPreconditionFailed {
+		return errRemoteExists
+	}
 	if resp.StatusCode/100 != 2 {
 		return remoteError("上传", resp)
 	}
@@ -434,7 +453,7 @@ func sigV4(method, path, query string, headers map[string]string, payloadHash, r
 const emptySHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 // do 发一个签好名的请求。parts 是桶里的对象路径（已含同步根目录）。
-func (s *s3Store) do(method string, parts []string, query map[string]string, body io.ReadSeeker, size int64) (*http.Response, error) {
+func (s *s3Store) do(method string, parts []string, query map[string]string, body io.ReadSeeker, size int64, conditions ...map[string]string) (*http.Response, error) {
 	host := s.endpoint.Host
 	path := s3Path(parts)
 	if s.pathStyle {
@@ -475,6 +494,12 @@ func (s *s3Store) do(method string, parts []string, query map[string]string, bod
 		"x-amz-date":           s.now().UTC().Format("20060102T150405Z"),
 		"x-amz-content-sha256": payloadHash,
 	}
+	for _, fields := range conditions {
+		for name, value := range fields {
+			headers[name] = value
+			req.Header.Set(name, value)
+		}
+	}
 	req.Header.Set("x-amz-date", headers["x-amz-date"])
 	req.Header.Set("x-amz-content-sha256", payloadHash)
 	req.Header.Set("Authorization", sigV4(method, path, rawQuery, headers, payloadHash, s.region, s.accessKey, s.secretKey))
@@ -498,11 +523,26 @@ func (s *s3Store) object(key string) []string {
 }
 
 func (s *s3Store) Put(key string, body io.ReadSeeker, size int64) error {
-	resp, err := s.do(http.MethodPut, s.object(key), nil, body, size)
+	return s.put(key, body, size, false)
+}
+
+func (s *s3Store) PutNew(key string, body io.ReadSeeker, size int64) error {
+	return s.put(key, body, size, true)
+}
+
+func (s *s3Store) put(key string, body io.ReadSeeker, size int64, onlyNew bool) error {
+	conditions := map[string]string{}
+	if onlyNew {
+		conditions["if-none-match"] = "*"
+	}
+	resp, err := s.do(http.MethodPut, s.object(key), nil, body, size, conditions)
 	if err != nil {
 		return fmt.Errorf("上传失败：%w", err)
 	}
 	defer resp.Body.Close()
+	if onlyNew && resp.StatusCode == http.StatusPreconditionFailed {
+		return errRemoteExists
+	}
 	if resp.StatusCode/100 != 2 {
 		return remoteError("上传", resp)
 	}

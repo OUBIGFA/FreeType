@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +14,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -52,12 +56,15 @@ func TestSigV4MatchesAWSDocumentedExamples(t *testing.T) {
 
 // fakeDAV 是内存里的 WebDAV 服务端：只在已有目录里放文件，和真的一样对缺目录的 PUT 回 409。
 type fakeDAV struct {
+	mu    sync.Mutex
 	t     *testing.T
 	dirs  map[string]bool
 	files map[string][]byte
 }
 
 func (f *fakeDAV) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if user, password, ok := r.BasicAuth(); !ok || user != "me" || password != "secret" {
 		w.WriteHeader(http.StatusUnauthorized)
 		return
@@ -76,6 +83,10 @@ func (f *fakeDAV) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusCreated)
 		}
 	case http.MethodPut:
+		if _, exists := f.files[path]; exists && r.Header.Get("If-None-Match") == "*" {
+			w.WriteHeader(http.StatusPreconditionFailed)
+			return
+		}
 		if !f.dirs[parent] {
 			w.WriteHeader(http.StatusConflict)
 			return
@@ -196,15 +207,21 @@ func TestWebDAVStoreCreatesFoldersListsOneLevelAndHandlesChineseFolders(t *testi
 
 // fakeS3 是内存里的 S3 兼容服务端（路径风格）。它用同一套算法重算签名，签名不对回 403。
 type fakeS3 struct {
+	mu      sync.Mutex
 	t       *testing.T
 	objects map[string][]byte
 }
 
 func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	headers := map[string]string{
 		"host":                 r.Host,
 		"x-amz-date":           r.Header.Get("x-amz-date"),
 		"x-amz-content-sha256": r.Header.Get("x-amz-content-sha256"),
+	}
+	if value := r.Header.Get("If-None-Match"); value != "" {
+		headers["if-none-match"] = value
 	}
 	want := sigV4(r.Method, r.URL.EscapedPath(), r.URL.RawQuery, headers, headers["x-amz-content-sha256"], "auto", "key", "secret")
 	if r.Header.Get("Authorization") != want {
@@ -247,6 +264,10 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		xml.NewEncoder(w).Encode(listing)
 	case r.Method == http.MethodPut:
+		if _, exists := f.objects[key]; exists && r.Header.Get("If-None-Match") == "*" {
+			w.WriteHeader(http.StatusPreconditionFailed)
+			return
+		}
 		f.objects[key], _ = io.ReadAll(r.Body)
 	case r.Method == http.MethodGet:
 		data, ok := f.objects[key]
@@ -362,11 +383,22 @@ func (m *memStore) Get(key string, w io.Writer) error {
 	return err
 }
 
+func (m *memStore) PutNew(key string, body io.ReadSeeker, size int64) error {
+	if _, exists := m.files[key]; exists {
+		return errRemoteExists
+	}
+	return m.Put(key, body, size)
+}
+
 func (m *memStore) List(dir string) ([]remoteEntry, error) {
 	seen := map[string]bool{}
 	var entries []remoteEntry
 	for key, data := range m.files {
-		rest, ok := strings.CutPrefix(key, dir+"/")
+		prefix := dir
+		if prefix != "" {
+			prefix += "/"
+		}
+		rest, ok := strings.CutPrefix(key, prefix)
 		if !ok {
 			continue
 		}
@@ -394,24 +426,24 @@ func (m *memStore) Probe() error {
 
 const deviceA, deviceB = "0123456789abcdef0123456789abcdef", "fedcba9876543210fedcba9876543210"
 
-func TestSnapshotsAreKeptPerDeviceAndPrunedByNumericRevision(t *testing.T) {
+func TestFlatSnapshotsKeepEachDevicesHistoryAndReadLegacyFallback(t *testing.T) {
 	store := &memStore{files: map[string][]byte{}}
 	file := filepath.Join(t.TempDir(), "snapshot.json")
 	start := time.Unix(1_700_000_000, 0)
 	for i := 0; i < 8; i++ {
-		if err := os.WriteFile(file, []byte(fmt.Sprintf("快照 %d", i)), 0o600); err != nil {
+		if err := os.WriteFile(file, []byte(fmt.Sprintf(`{"snapshot":%d}`, i)), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := uploadSnapshot(store, deviceA, "办公室", file, start.Add(time.Duration(i)*time.Hour)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	revisions, err := listRevisions(store, deviceA)
-	if err != nil || len(revisions) != keepSnapshots {
-		t.Fatalf("每台设备保留最近 %d 份：%v %v", keepSnapshots, revisions, err)
+	snapshots, err := listFlatSnapshots(store, true)
+	if err != nil || len(snapshots) != keepSnapshots {
+		t.Fatalf("每台设备保留最近 %d 份：%v %v", keepSnapshots, snapshots, err)
 	}
-	if revisions[0] != "sync-"+start.Add(7*time.Hour).Format("20060102150405") {
-		t.Fatalf("最新的应留着并排在最前：%v", revisions)
+	if snapshots[0].Revision != "sync-"+start.Add(7*time.Hour).Format("20060102150405")+"-办公室" {
+		t.Fatalf("最新的应留着并排在最前：%v", snapshots)
 	}
 	// 另一台设备的东西不受影响
 	if _, err := uploadSnapshot(store, deviceB, "", file, start.Add(-time.Hour)); err != nil {
@@ -428,8 +460,10 @@ func TestSnapshotsAreKeptPerDeviceAndPrunedByNumericRevision(t *testing.T) {
 	store.files[snapshotKey(deviceB, "9-100")] = []byte("旧")
 	store.files[snapshotKey(deviceB, "10-9")] = []byte("新")
 	store.files["devices/"+deviceB+"/notes.txt"] = []byte("不是快照")
-	delete(store.files, snapshotKey(deviceB, devices[1].Revision))
-	revisions, _ = listRevisions(store, deviceB)
+	delete(store.files, devices[1].snapshotKey())
+	store.files[deviceInfoKey(deviceB)] = []byte(`{"revision":"20-1","uploaded_unix":20}`)
+	devices, _ = listDevices(store)
+	revisions, _ := listRevisions(store, deviceB)
 	if len(revisions) != 2 || revisions[0] != "10-9" || revisions[1] != "9-100" {
 		t.Fatalf("修订号要按数值排：%v", revisions)
 	}
@@ -444,8 +478,16 @@ func TestSnapshotsAreKeptPerDeviceAndPrunedByNumericRevision(t *testing.T) {
 	if err := downloadSnapshot(store, devices[0], out); err != nil {
 		t.Fatal(err)
 	}
-	if data, _ := os.ReadFile(out); string(data) != "快照 7" {
+	if data, _ := os.ReadFile(out); string(data) != `{"snapshot":7}` {
 		t.Fatalf("应下载设备信息指向的快照：%q", data)
+	}
+	// 列表显示后最新文件被移除，手动恢复仍能找到同一电脑的上一份。
+	delete(store.files, devices[0].snapshotKey())
+	if err := downloadSnapshot(store, devices[0], out); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(out); string(data) != `{"snapshot":6}` {
+		t.Fatal("手动恢复应退回同一电脑现存的最新备份")
 	}
 	// 设备信息文件里写的标识、修订号不能拿来拼别的路径
 	store.files[deviceInfoKey(deviceB)] = []byte(`{"device_id":"../x","revision":"../../secret","uploaded_unix":5}`)
@@ -477,7 +519,7 @@ func TestSyncFolderAndNamesAcrossProviders(t *testing.T) {
 					t.Fatal(err)
 				}
 				file := filepath.Join(t.TempDir(), "snapshot.json")
-				if err := os.WriteFile(file, []byte("完整备份"), 0600); err != nil {
+				if err := os.WriteFile(file, []byte(`{"format":"freetype-settings","value":"完整备份"}`), 0600); err != nil {
 					t.Fatal(err)
 				}
 				now := time.Date(2026, 11, 17, 14, 30, 5, 0, time.Local)
@@ -495,13 +537,18 @@ func TestSyncFolderAndNamesAcrossProviders(t *testing.T) {
 					base = "/dav/" + base
 					files = dav.files
 				}
-				for _, name := range []string{"sync-20261117143005.json", "sync-20261117143006.json"} {
-					if string(files[base+"devices/"+deviceA+"/"+name]) != "完整备份" {
+				for _, name := range []string{"sync-20261117143005-电脑.json", "sync-20261117143006-电脑.json"} {
+					if !json.Valid(files[base+name]) || !bytes.Contains(files[base+name], []byte("完整备份")) {
 						t.Fatalf("缺少指定快照 %s: %v", name, files)
 					}
 				}
-				if len(files) != 3 {
-					t.Fatalf("应有两份快照和一份设备索引：%v", files)
+				if len(files) != 2 {
+					t.Fatalf("只能有两份直接位于 FreeType 的快照，不应有设备索引或子目录：%v", files)
+				}
+				for dir := range dav.dirs {
+					if strings.Contains(dir, "/devices") {
+						t.Fatal("不应创建 devices 目录")
+					}
 				}
 				devices, err := listDevices(store)
 				if err != nil || len(devices) != 1 {
@@ -509,6 +556,9 @@ func TestSyncFolderAndNamesAcrossProviders(t *testing.T) {
 				}
 				if err := downloadSnapshot(store, devices[0], file); err != nil {
 					t.Fatal(err)
+				}
+				if got, _ := os.ReadFile(file); string(got) != `{"format":"freetype-settings","value":"完整备份"}` {
+					t.Fatal("恢复后数据必须与原始快照完全一致")
 				}
 			})
 		}
@@ -542,22 +592,98 @@ func TestSyncReadsLegacyLocationWithoutWritingOutsideFreeType(t *testing.T) {
 	if got, _ := os.ReadFile(file); string(got) != "旧备份" {
 		t.Fatalf("%s", got)
 	}
+	if err := os.WriteFile(file, []byte(`{"value":"新备份"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := uploadSnapshot(store, deviceA, "电脑", file, time.Date(2026, 11, 17, 14, 30, 5, 0, time.Local)); err != nil {
 		t.Fatal(err)
 	}
 	devices, err = listDevices(store)
-	if err != nil || len(devices) != 1 || devices[0].Revision != "sync-20261117143005" {
+	if err != nil || len(devices) != 1 || devices[0].Revision != "sync-20261117143005-电脑" {
 		t.Fatalf("%+v %v", devices, err)
 	}
-	if len(dav.files) != 4 || dav.files["/dav/FreeType/devices/"+deviceA+"/sync-20261117143005.json"] == nil {
+	if len(dav.files) != 3 || dav.files["/dav/FreeType/sync-20261117143005-电脑.json"] == nil {
 		t.Fatalf("新上传没有进入 FreeType：%v", dav.files)
+	}
+}
+
+func TestSimultaneousUploadsWithSameComputerNameNeverOverwrite(t *testing.T) {
+	for _, provider := range []string{"webdav", "s3"} {
+		t.Run(provider, func(t *testing.T) {
+			dav := &fakeDAV{t: t, dirs: map[string]bool{"": true, "/dav": true}, files: map[string][]byte{}}
+			s3 := &fakeS3{t: t, objects: map[string][]byte{}}
+			var service http.Handler = dav
+			if provider == "s3" {
+				service = s3
+			}
+			var contenders atomic.Int32
+			ready := make(chan struct{})
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// 让两台设备都读到空目录，再同时争抢同一个名字。
+				if r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "sync-20261117143005-办公_电脑__.json") {
+					if contenders.Add(1) == 2 {
+						close(ready)
+					}
+					select {
+					case <-ready:
+					case <-time.After(5 * time.Second):
+						t.Error("两个上传没有同时到达")
+						w.WriteHeader(500)
+						return
+					}
+					if r.Header.Get("If-None-Match") != "*" {
+						t.Error("创建备份必须阻止覆盖")
+					}
+				}
+				service.ServeHTTP(w, r)
+			}))
+			defer server.Close()
+			c := syncSettings{Provider: provider, WebDAVURL: server.URL + "/dav/FreeType", WebDAVUser: "me", WebDAVPassword: "secret", S3Endpoint: server.URL, S3Region: "auto", S3Bucket: "bucket", S3Prefix: "FreeType", S3AccessKey: "key", S3SecretKey: "secret", S3PathStyle: true}
+			file := filepath.Join(t.TempDir(), "snapshot.json")
+			body := []byte("{\n  \"value\": \"完整备份\"\n}\n")
+			if err := os.WriteFile(file, body, 0600); err != nil {
+				t.Fatal(err)
+			}
+			errors := make(chan error, 2)
+			for _, id := range []string{deviceA, deviceB} {
+				go func(id string) {
+					store, err := openRemoteStore(c)
+					if err == nil {
+						_, err = uploadSnapshot(store, id, "办公/电脑:*", file, time.Date(2026, 11, 17, 14, 30, 5, 0, time.Local))
+					}
+					errors <- err
+				}(id)
+			}
+			for i := 0; i < 2; i++ {
+				if err := <-errors; err != nil {
+					t.Fatal(err)
+				}
+			}
+			store, _ := openRemoteStore(c)
+			devices, err := listDevices(store)
+			if err != nil || len(devices) != 2 || devices[0].Revision == devices[1].Revision {
+				t.Fatalf("同秒同电脑名应保留两台设备的备份：%+v %v", devices, err)
+			}
+			entries, err := store.List("")
+			if err != nil || len(entries) != 2 {
+				t.Fatalf("只能有两份直接可见的备份：%v %v", entries, err)
+			}
+			for _, d := range devices {
+				if err := downloadSnapshot(store, d, file); err != nil {
+					t.Fatal(err)
+				}
+				if got, _ := os.ReadFile(file); !bytes.Equal(got, body) {
+					t.Fatal("恢复必须保留原始数据及换行")
+				}
+			}
+		})
 	}
 }
 
 func TestFailedUploadLeavesDeviceInfoPointingAtTheLastGoodSnapshot(t *testing.T) {
 	store := &memStore{files: map[string][]byte{}}
 	file := filepath.Join(t.TempDir(), "snapshot.json")
-	os.WriteFile(file, []byte("好的"), 0o600)
+	os.WriteFile(file, []byte(`{"value":"好的"}`), 0o600)
 	first, err := uploadSnapshot(store, deviceA, "pc", file, time.Unix(100, 0))
 	if err != nil {
 		t.Fatal(err)
@@ -570,6 +696,52 @@ func TestFailedUploadLeavesDeviceInfoPointingAtTheLastGoodSnapshot(t *testing.T)
 	devices, _ := listDevices(store)
 	if len(devices) != 1 || devices[0].Revision != first.Revision {
 		t.Fatalf("失败的上传不应改设备信息：%+v", devices)
+	}
+}
+
+func TestFlatRetentionPreservesOtherComputerAndUnrelatedFiles(t *testing.T) {
+	store := &memStore{files: map[string][]byte{"说明.txt": []byte("保留")}}
+	file := filepath.Join(t.TempDir(), "snapshot.json")
+	if err := os.WriteFile(file, []byte(`{"value":"备份"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 11, 17, 14, 30, 5, 0, time.Local)
+	if _, err := uploadVersionedSnapshot(store, deviceB, "家里电脑", file, now, syncVersion{}, 1); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := uploadVersionedSnapshot(store, deviceA, "办公电脑", file, now.Add(time.Duration(i)*time.Second), syncVersion{}, 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"说明.txt", "sync-20261117143005-家里电脑.json", "sync-20261117143007-办公电脑.json"} {
+		if _, exists := store.files[name]; !exists {
+			t.Fatalf("不应删除 %s", name)
+		}
+	}
+	if len(store.files) != 3 {
+		t.Fatalf("本机只应保留一份，其他电脑和无关文件保留：%v", store.files)
+	}
+}
+
+func TestFlatSnapshotListingReadsOnlyTheHeader(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "snapshot.json")
+	body := []byte(`{"large":"` + strings.Repeat("x", 1<<20) + `"}`)
+	if err := os.WriteFile(file, body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	store := &memStore{files: map[string][]byte{}}
+	d, err := uploadSnapshot(store, deviceA, "办公电脑", file, time.Date(2026, 11, 17, 14, 30, 5, 0, time.Local))
+	if err != nil {
+		t.Fatal(err)
+	}
+	header := &syncHeaderReader{}
+	read, err := header.Write(store.files[d.snapshotKey()])
+	if !errors.Is(err, errSyncHeaderComplete) || read > 16<<10 {
+		t.Fatal("列举备份不应下载完整大文件", read, err)
+	}
+	if parsed, err := parseSyncHeader(header.line, d.Revision); err != nil || parsed.ID != deviceA {
+		t.Fatal("首行应足够恢复设备信息", err)
 	}
 }
 
@@ -657,8 +829,8 @@ func TestSyncPageUploadsListsAndMergesThroughTheBackend(t *testing.T) {
 	if _, err := os.Stat(exported); !os.IsNotExist(err) {
 		t.Fatalf("临时快照没有删掉：%s", exported)
 	}
-	if len(store.files) != 2 || len(s.syncDevices) != 1 || !tt.HasText("（这台电脑）") {
-		t.Fatalf("上传后应有快照和设备信息，并列出这台电脑：%v %+v", store.files, s.syncDevices)
+	if len(store.files) != 1 || len(s.syncDevices) != 1 || !tt.HasText("（这台电脑）") {
+		t.Fatalf("上传后只应有一份备份，并列出这台电脑：%v %+v", store.files, s.syncDevices)
 	}
 	// 另一台电脑的快照：刷新后能看到，点恢复、确认后交给服务进程合并
 	store.files[snapshotKey(deviceB, "50-1")] = []byte(`{"format":"freetype-settings"}`)

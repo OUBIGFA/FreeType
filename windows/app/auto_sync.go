@@ -407,15 +407,7 @@ func (a *autoSync) cycle(c syncSettings) (string, error) {
 	}
 	incoming := filepath.Join(work, "incoming.json")
 	// 自动恢复只接受刚比较的精确修订，不能静默退回另一份旧快照。
-	out, err := os.Create(incoming)
-	if err != nil {
-		return "", err
-	}
-	err = newest.snapshotStore(store).Get(snapshotKey(newest.ID, newest.Revision), out)
-	if closeErr := out.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
+	if err = downloadExactSnapshot(store, newest, incoming); err != nil {
 		return "", err
 	}
 	got, err := snapshotHash(incoming)

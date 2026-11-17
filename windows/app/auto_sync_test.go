@@ -291,10 +291,10 @@ func TestAutoSyncRejectsCorruptCloudAndChangedLocalBeforeReplacing(t *testing.T)
 				t.Fatal(err)
 			}
 			if failure == "metadata" {
-				store.files[deviceInfoKey(deviceB)] = []byte(`{broken`)
+				store.files[device.snapshotKey()] = []byte(`{broken`)
 			}
 			if failure == "checksum" {
-				store.files[snapshotKey(deviceB, device.Revision)] = []byte(`{"value":"corrupt"}`)
+				store.files[device.snapshotKey()] = bytes.Replace(store.files[device.snapshotKey()], []byte(`"value":"remote"`), []byte(`"value":"broken"`), 1)
 			}
 			a.openStore = func(syncSettings) (remoteStore, error) { return store, nil }
 			if _, err = a.cycle(c); err == nil {
@@ -303,7 +303,7 @@ func TestAutoSyncRejectsCorruptCloudAndChangedLocalBeforeReplacing(t *testing.T)
 			if b.imports != 0 || string(b.data) != `{"value":"keep"}` {
 				t.Fatal("本机被覆盖")
 			}
-			if _, ok := store.files[deviceInfoKey(deviceA)]; ok {
+			if len(store.files) != 1 {
 				t.Fatal("错误地用本机覆盖云端")
 			}
 		})

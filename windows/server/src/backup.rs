@@ -52,6 +52,9 @@ pub(crate) struct SettingsBackup {
     // 本地一键备份由设置程序附加账号和计划；服务只接受它，不恢复或上传连接配置。
     #[serde(default, skip_serializing, rename = "sync_connection")]
     _sync_connection: Option<Value>,
+    // 云端平铺备份内嵌设备索引；它不属于输入数据，也不参与再次导出。
+    #[serde(default, skip_serializing, rename = "sync_metadata")]
+    _sync_metadata: Option<Value>,
 }
 
 pub(crate) struct PreparedBackup {
@@ -160,6 +163,7 @@ pub(crate) fn snapshot(
         status_bar_position,
         main_lexicon,
         _sync_connection: None,
+        _sync_metadata: None,
     };
     let prepared = prepare(data)?;
     let text = serde_json::to_string_pretty(&prepared.data).map_err(|error| error.to_string())? + "\n";

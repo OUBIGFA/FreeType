@@ -3,10 +3,11 @@ package main
 // 数据同步：把「全部设置」快照手动上传到用户自己的 WebDAV 或 S3 兼容存储，
 // 再在另一台电脑（或本机）上合并恢复。数据只发往用户填写的地址。
 //
-// 远端布局（每台设备只写自己的目录，多台设备同时上传不会互相覆盖）：
+// 远端布局：备份直接放在 FreeType 内，时间和电脑名用于辨认。
 //
-//	<根>/FreeType/devices/<设备标识>.json                         设备信息
-//	<根>/FreeType/devices/<设备标识>/sync-年月日时分秒.json          快照
+//	<根>/FreeType/sync-年月日时分秒-电脑名.json
+//
+// 设备信息放在每份备份的首行，不单独生成索引文件或设备目录。
 //
 // 同步的地址、账号和设备标识存在用户数据目录的 sync.json，不进快照、不被恢复覆盖；
 // 密码和密钥用 Windows DPAPI（当前用户）加密后才写盘。
@@ -171,7 +172,7 @@ func openRemoteStore(c syncSettings) (remoteStore, error) {
 	return w, nil
 }
 
-// syncDevice 是远端的设备信息文件。
+// syncDevice 是备份内的设备与版本信息；兼容读取旧版独立设备索引。
 type syncDevice struct {
 	ID       string `json:"device_id"`
 	Hostname string `json:"hostname"`
@@ -183,6 +184,14 @@ type syncDevice struct {
 	Hash     string `json:"sha256,omitempty"`
 	// 旧目录只读；恢复必须使用列举这条记录的同一位置。
 	legacy bool
+	flat   bool
+}
+
+func (d syncDevice) snapshotKey() string {
+	if d.flat {
+		return d.Revision + ".json"
+	}
+	return snapshotKey(d.ID, d.Revision)
 }
 
 func (d syncDevice) snapshotStore(fallback remoteStore) remoteStore {
@@ -200,6 +209,13 @@ func snapshotKey(id, revision string) string { return "devices/" + id + "/" + re
 // revisionOrder 把修订号拆成 (秒级时间戳, 序号)；兼容旧版以进程号作序号。
 func revisionOrder(revision string) (int64, int64, bool) {
 	if stamp, ok := strings.CutPrefix(revision, "sync-"); ok {
+		if len(stamp) < 14 {
+			return 0, 0, false
+		}
+		if len(stamp) > 14 && (stamp[14] != '-' || len(stamp) == 15 || strings.ContainsAny(stamp[15:], `<>:"/\|?*`) || strings.ContainsAny(stamp[15:], "\r\n\x00")) {
+			return 0, 0, false
+		}
+		stamp = stamp[:14]
 		when, err := time.ParseInLocation("20060102150405", stamp, time.Local)
 		return when.Unix(), 0, err == nil && when.Format("20060102150405") == stamp
 	}
@@ -234,7 +250,7 @@ func listRevisions(store remoteStore, id string) ([]string, error) {
 	return revisions, nil
 }
 
-// uploadSnapshot 把 file（全部设置备份）传成这台设备的新快照，更新设备信息，清掉多出来的旧快照。
+// uploadSnapshot 把 file（全部设置备份）传成一份带设备信息的文件，清掉本机多余的旧备份。
 func uploadSnapshot(store remoteStore, id, hostname, file string, now time.Time) (syncDevice, error) {
 	return uploadVersionedSnapshot(store, id, hostname, file, now, syncVersion{}, keepSnapshots)
 }
@@ -243,48 +259,56 @@ func uploadVersionedSnapshot(store remoteStore, id, hostname, file string, now t
 	if !deviceIDPattern.MatchString(id) {
 		return syncDevice{}, errors.New("设备标识不对，请重新保存同步设置")
 	}
-	body, err := os.Open(file)
+	body, err := os.ReadFile(file)
 	if err != nil {
 		return syncDevice{}, err
 	}
-	defer body.Close()
-	info, err := body.Stat()
+	// 上传前读取同层快照，保留份数仍按设备计算，不删其他电脑的备份。
+	snapshots, err := listFlatSnapshots(store, true)
 	if err != nil {
 		return syncDevice{}, err
 	}
-	// 秒级命名仍不能覆盖已有快照；同一秒再次上传时顺延到下一个空闲秒。
-	revisions, err := listRevisions(store, id)
-	if err != nil {
-		return syncDevice{}, err
-	}
-	used := make(map[string]bool, len(revisions))
-	for _, revision := range revisions {
-		used[revision] = true
-	}
-	stamp := now
-	for used["sync-"+stamp.Format("20060102150405")] {
-		stamp = stamp.Add(time.Second)
+	used := make(map[string]bool, len(snapshots))
+	for _, snapshot := range snapshots {
+		used[snapshot.Revision] = true
 	}
 	device := syncDevice{
-		ID: id, Hostname: hostname, Uploaded: now.Unix(), Size: info.Size(),
-		Revision: "sync-" + stamp.Format("20060102150405"),
+		ID: id, Hostname: hostname, Uploaded: now.Unix(), Size: int64(len(body)), flat: true,
 		Modified: version.Modified, Origin: version.Origin, Hash: version.Hash,
 	}
-	if err := store.Put(snapshotKey(id, device.Revision), body, info.Size()); err != nil {
-		return syncDevice{}, err
-	}
-	// 快照传完才改设备信息：中途失败时别的设备看到的仍是上一份完整快照
-	meta, err := json.Marshal(device)
-	if err != nil {
-		return syncDevice{}, err
-	}
-	if err := store.Put(deviceInfoKey(id), bytes.NewReader(meta), int64(len(meta))); err != nil {
-		return syncDevice{}, err
+	stamp := now
+	for conflicts := 0; ; conflicts++ {
+		if conflicts == 100 {
+			return syncDevice{}, errors.New("远端同名备份持续冲突，请稍后重试")
+		}
+		for {
+			device.Revision = "sync-" + stamp.Format("20060102150405") + "-" + syncComputerName(hostname, id)
+			stamp = stamp.Add(time.Second)
+			if !used[device.Revision] {
+				break
+			}
+		}
+		data, err := packSyncSnapshot(body, device)
+		if err != nil {
+			return syncDevice{}, err
+		}
+		err = store.PutNew(device.snapshotKey(), bytes.NewReader(data), int64(len(data)))
+		if errors.Is(err, errRemoteExists) {
+			continue
+		}
+		if err != nil {
+			return syncDevice{}, err
+		}
+		break
 	}
 	// 只清理上传前列出的旧快照，刚上传的始终保留。清理失败留待下次上传再处理。
-	for i, revision := range revisions {
-		if i >= keep-1 {
-			_ = store.Delete(snapshotKey(id, revision))
+	kept := 1
+	for _, snapshot := range snapshots {
+		if snapshot.ID == id {
+			if kept >= keep {
+				_ = store.Delete(snapshot.snapshotKey())
+			}
+			kept++
 		}
 	}
 	return device, nil
@@ -297,10 +321,15 @@ func listDevices(store remoteStore) ([]syncDevice, error) {
 
 // 自动覆盖前必须读懂全部设备记录，不能跳过损坏记录后错误宣布本机最新。
 func readDevices(store remoteStore, strict bool) ([]syncDevice, error) {
+	snapshots, err := listFlatSnapshots(store, strict)
+	if err != nil {
+		return nil, err
+	}
 	devices, err := readDevicesAt(store, strict)
 	if err != nil {
 		return nil, err
 	}
+	snapshots = append(snapshots, devices...)
 	if source, ok := store.(interface{ legacyStore() remoteStore }); ok && source.legacyStore() != nil {
 		older, err := readDevicesAt(source.legacyStore(), strict)
 		if err != nil {
@@ -308,20 +337,20 @@ func readDevices(store remoteStore, strict bool) ([]syncDevice, error) {
 		}
 		for _, old := range older {
 			old.legacy = true
-			found := false
-			for i, current := range devices {
-				if old.ID == current.ID {
-					if compareSyncVersions(deviceVersion(old), deviceVersion(current)) > 0 {
-						devices[i] = old
-					}
-					found = true
-					break
-				}
-			}
-			if !found {
-				devices = append(devices, old)
-			}
+			snapshots = append(snapshots, old)
 		}
+	}
+	latest := map[string]syncDevice{}
+	for _, candidate := range snapshots {
+		current, exists := latest[candidate.ID]
+		comparison := compareSyncVersions(deviceVersion(candidate), deviceVersion(current))
+		if !exists || comparison > 0 || (comparison == 0 && (candidate.Uploaded > current.Uploaded || candidate.Uploaded == current.Uploaded && candidate.Revision > current.Revision)) {
+			latest[candidate.ID] = candidate
+		}
+	}
+	devices = nil
+	for _, device := range latest {
+		devices = append(devices, device)
 	}
 	sort.Slice(devices, func(i, j int) bool { return devices[i].Uploaded > devices[j].Uploaded })
 	return devices, nil
@@ -370,6 +399,22 @@ func readDevicesAt(store remoteStore, strict bool) ([]syncDevice, error) {
 // downloadSnapshot 把一台设备最近的快照下载到 file。设备信息指向的快照不在了，
 // 就退回这台设备目录下实际存在的最新一份。
 func downloadSnapshot(store remoteStore, device syncDevice, file string) error {
+	if device.flat {
+		first := downloadExactSnapshot(store, device, file)
+		if first == nil {
+			return nil
+		}
+		snapshots, err := listFlatSnapshots(store, false)
+		if err != nil {
+			return err
+		}
+		for _, snapshot := range snapshots {
+			if snapshot.ID == device.ID && snapshot.Revision != device.Revision {
+				return downloadExactSnapshot(store, snapshot, file)
+			}
+		}
+		return first
+	}
 	store = device.snapshotStore(store)
 	if !deviceIDPattern.MatchString(device.ID) {
 		return errors.New("设备标识不对")
