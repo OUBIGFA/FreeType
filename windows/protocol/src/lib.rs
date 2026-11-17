@@ -211,7 +211,7 @@ pub struct Config {
     /// 输出繁体。
     pub traditional: bool,
     /// 指定软件自动切换中英文（总开关）：只在焦点从别的程序切进规则里的程序时切换一次，
-    /// 之后在这个程序里怎么切都不干预；没有规则的程序沿用当时的状态。
+    /// 软件内部可手动切换；离开后恢复基础状态，不覆盖普通程序或全局记忆。
     pub app_presets: bool,
     /// 各程序切进来时的状态，见 [`Config::app_presets`]。
     pub app_preset_rules: Vec<AppPreset>,

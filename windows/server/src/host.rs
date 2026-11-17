@@ -10,8 +10,8 @@
 //! 记住的中英文状态之外还有两件事影响实际的输入状态：
 //!
 //! - **大写锁定**：开着时一律按英文输入（[`Host::effective`]），不改记住的状态，关掉就回去；
-//! - **指定软件的预设**：前台换到规则里的程序时把记住的状态切一次（[`Host::foreground`]），
-//!   之后在这个程序里怎么切都不再干预。
+//! - **指定软件的预设**：切入时建立当前程序的临时状态（[`Host::foreground`]），
+//!   软件内可手动切换；离开即丢弃，不覆盖普通程序的状态或全局记忆。
 //!
 //! TSF 先问「要不要这个键」（test）再真正按下：test 在会话副本上算一遍并记下结果，
 //! 普通编辑键直接接纳这份结果；涉及学习、删除记录的键只在真正按下时执行。test 说不要的键不会再真按，这时副本直接留下
@@ -89,6 +89,8 @@ pub struct Host {
     caps: bool,
     /// 最近到前台的程序；指定软件的预设只在它变了的那一刻套用一次。
     foreground: String,
+    /// 当前指定软件的临时状态；手动切换也只改它，离开后恢复基础状态。
+    preset_mode: Option<Mode>,
     /// 预设刚切换了状态：下一次输入框得到焦点时在光标旁提示一次。
     preset_hint: bool,
     /// 工具栏只读取独立常用语；快捷短语由引擎按编码匹配。
@@ -198,6 +200,7 @@ impl Host {
             app_modes: HashMap::new(),
             caps: false,
             foreground: String::new(),
+            preset_mode: None,
             preset_hint: false,
             phrases: Vec::new(),
             recent_emoji,
@@ -321,10 +324,15 @@ impl Host {
     }
 
     fn set_config(&mut self, config: Config) {
-        let current_mode = self.current_mode();
+        // 保存设置、改变范围时只迁移基础状态，不能把当前软件的临时模式变成全局记忆。
+        let current_mode = self.base_mode_of(self.current_app());
         let old_scope = self.config.mode_scope.clone();
         let old_lexicon = self.config.lexicon.clone();
         self.config = config.sanitized();
+        if !self.config.app_presets || !self.config.app_preset_rules.iter().any(|rule| rule.app == self.foreground) {
+            self.preset_mode = None;
+            self.preset_hint = false;
+        }
         if self.config.lexicon != old_lexicon {
             self.lexicon_change = Some(self.config.lexicon.clone());
         }
@@ -348,7 +356,7 @@ impl Host {
     fn save_config(&mut self, config: Config) -> Result<(), String> {
         let config = config.sanitized();
         if config.default_mode == DefaultMode::Global && self.config.default_mode != DefaultMode::Global {
-            self.store.save_mode(self.current_mode()).map_err(|e| format!("保存中英文状态失败：{e}"))?;
+            self.store.save_mode(self.base_mode_of(self.current_app())).map_err(|e| format!("保存中英文状态失败：{e}"))?;
         }
         self.store.save_config(&config).map_err(|e| format!("保存设置失败：{e}"))?;
         self.set_config(config);
@@ -398,6 +406,18 @@ impl Host {
     }
 
     fn mode_of(&self, app: &str) -> Mode {
+        if app == self.foreground {
+            if let Some(mode) = self.preset_mode {
+                return mode;
+            }
+        }
+        self.base_mode_of(app)
+    }
+
+    fn base_mode_of(&self, app: &str) -> Mode {
+        if app.is_empty() {
+            return self.mode;
+        }
         if self.config.default_mode != DefaultMode::Global && self.config.mode_scope == "app" {
             self.app_modes.get(app).copied().unwrap_or(self.config.default_mode.resolve(self.mode))
         } else {
@@ -406,14 +426,18 @@ impl Host {
     }
 
     fn set_mode(&mut self, app: &str, mode: Mode) -> Result<(), String> {
-        if self.config.default_mode == DefaultMode::Global {
-            self.store.save_mode(mode).map_err(|e| format!("保存中英文状态失败：{e}"))?;
+        if app == self.foreground && self.preset_mode.is_some() {
+            self.preset_mode = Some(mode);
+        } else {
+            if self.config.default_mode == DefaultMode::Global {
+                self.store.save_mode(mode).map_err(|e| format!("保存中英文状态失败：{e}"))?;
+            }
+            if self.config.default_mode != DefaultMode::Global && self.config.mode_scope == "app" {
+                self.app_modes.insert(app.to_string(), mode);
+            }
+            // 打开设置后原应用会失焦；保留最后的普通模式，供启用全局时沿用。
+            self.mode = mode;
         }
-        if self.config.default_mode != DefaultMode::Global && self.config.mode_scope == "app" {
-            self.app_modes.insert(app.to_string(), mode);
-        }
-        // 打开设置后原应用会失焦；仍需保留最后的主动选择，供启用全局时沿用。
-        self.mode = mode;
         // 别的连接（托盘、其他应用）也能切状态，旧状态下缓存的按键结果随之作废。
         for client in self.clients.values_mut() {
             client.pending = None;
@@ -480,35 +504,51 @@ impl Host {
 
     /// 前台窗口换到了 `app` 这个程序（小写文件名；桌面线程的事件，或输入框得到焦点时查到的）。
     ///
-    /// 指定软件的预设只在这里套用：从别的程序切进规则里的程序时切一次，已经是那个状态就不动。
+    /// 指定软件的预设只在这里套用：切入时建立临时状态，离开时丢弃。
     /// 同一个程序里换窗口（查找框、保存对话框）不算，用户在里面手动切换的结果留着；
-    /// 没有规则的程序什么都不改。
+    /// 普通程序始终使用自己的基础状态。即使切入时模式相同，也要隔离后续手动切换。
     pub fn foreground(&mut self, app: &str) {
+        // 桌面事件与管道请求经过不同队列。焦点请求可能已处理新窗口，旧事件才送达；
+        // 只有仍与系统前台一致的事件才能改变状态，FreeType 自己的窗口也不算离开。
+        if self.desktop.as_ref().is_some_and(|desktop| desktop.foreground_app().as_deref() != Some(app)) {
+            return;
+        }
         if app == self.foreground {
             return;
         }
+        let previous = self.current_mode();
         self.foreground = app.to_string();
-        if !self.config.app_presets {
-            return;
+        self.preset_mode = self.config.app_presets.then(|| {
+            self.config.app_preset_rules.iter().find(|rule| rule.app == app).map(|rule| rule.mode)
+        }).flatten();
+        if self.focused.is_some_and(|id| self.app_of(id) != app) {
+            self.focused = None;
         }
-        let rule = self.config.app_preset_rules.iter().find(|rule| rule.app == app);
-        let Some(mode) = rule.map(|rule| rule.mode) else {
-            return;
-        };
-        if self.mode_of(app) == mode {
-            return;
+        for client in self.clients.values_mut() {
+            client.pending = None;
         }
-        if let Err(error) = self.set_mode(app, mode) {
-            crate::log(&error);
-            return;
-        }
-        self.preset_hint = true;
+        self.preset_hint = previous != self.current_mode();
         self.notify_bar();
     }
 
-    /// 状态栏、托盘看的状态：有焦点时取当前应用，否则保留最后的主动选择。
+    /// 首个焦点或按键可能先于桌面事件到达，处理前先同步真实前台。
+    fn refresh_foreground(&mut self) {
+        if let Some(app) = self.desktop.as_ref().and_then(|desktop| desktop.foreground_app()) {
+            self.foreground(&app);
+        }
+    }
+
+    fn current_app(&self) -> &str {
+        if !self.foreground.is_empty() {
+            &self.foreground
+        } else {
+            self.focused.and_then(|id| self.clients.get(&id)).map(|client| client.state.app.as_str()).unwrap_or("")
+        }
+    }
+
+    /// 状态栏、托盘跟随当前前台；不能被旧输入框尚未送达的失焦通知拖回旧模式。
     fn current_mode(&self) -> Mode {
-        self.focused.map(|id| self.mode_of(&self.app_of(id))).unwrap_or(self.mode)
+        self.mode_of(self.current_app())
     }
 
     fn notify_bar(&mut self) {
@@ -671,6 +711,7 @@ impl Host {
     }
 
     fn key(&mut self, id: ClientId, key: Key, before: Option<String>) -> Response {
+        self.refresh_foreground();
         // 每个键都带着大写锁定的状态：在没有 FreeType 的窗口里开关过也能跟上
         if self.set_caps(key.modifiers & modifier::CAPS != 0) {
             self.notify_bar();
@@ -730,6 +771,7 @@ impl Host {
     }
 
     fn toggle_mode(&mut self, id: ClientId, shift: Option<String>) -> Response {
+        self.refresh_foreground();
         if let Some(side) = shift.as_deref() {
             let allowed = match self.config.shift_toggle.as_str() {
                 "both" => true,
@@ -750,7 +792,7 @@ impl Host {
         }
         let app = match self.clients.get(&id) {
             Some(client) => client.state.app.clone(),
-            None => self.focused.map(|f| self.app_of(f)).unwrap_or_default(),
+            None => self.current_app().to_string(),
         };
         let current = if app.is_empty() { self.current_mode() } else { self.mode_of(&app) };
         let mode = match current {
@@ -798,16 +840,16 @@ impl Host {
 
     fn focus(&mut self, id: ClientId, active: bool, before: Option<String>) -> Response {
         if active {
+            self.refresh_foreground();
+            // TSF 的异步编辑会话可能在应用已退到后台后才报告焦点，不能抢占当前输入框。
+            if self.desktop.is_some() && !self.foreground.is_empty() && self.app_of(id) != self.foreground {
+                return self.with_client(id, |state, env| state.current(false, env));
+            }
+        }
+        if active {
             self.focused = Some(id);
         } else if self.focused == Some(id) {
             self.focused = None;
-        }
-        if active {
-            // 前台换程序的事件和这条焦点消息谁先到不一定：这里也查一次，
-            // 让预设先生效，这次应答里的状态和提示才是对的
-            if let Some(app) = self.desktop.as_ref().and_then(|desktop| desktop.foreground_app()) {
-                self.foreground(&app);
-            }
         }
         // 预设刚切换了状态：和手动切换一样提示一次
         let preset_hint = active && std::mem::take(&mut self.preset_hint) && self.config.hint_on_toggle;

@@ -600,14 +600,15 @@ fn app_preset_applies_once_when_switching_into_the_app() {
     });
     host.foreground("notepad.exe");
     assert_eq!(status_mode(&mut host), Mode::Chinese, "没有规则的程序不动");
+    host.connect(2, "code.exe".into());
     host.foreground("code.exe");
     assert_eq!(status_mode(&mut host), Mode::English, "切进规则里的程序：切一次");
     // 在这个程序里手动切回中文，再换它自己的窗口（查找框、对话框）：不重置
-    host.handle(1, Request::ToggleMode { shift: None });
+    host.handle(2, Request::ToggleMode { shift: None });
     host.foreground("code.exe");
     assert_eq!(status_mode(&mut host), Mode::Chinese, "同一个程序里不再干预");
     host.foreground("explorer.exe");
-    assert_eq!(status_mode(&mut host), Mode::Chinese, "没有规则的程序沿用当时的状态");
+    assert_eq!(status_mode(&mut host), Mode::Chinese, "没有规则的程序恢复原状态");
     host.foreground("code.exe");
     assert_eq!(status_mode(&mut host), Mode::English, "离开后再切回来：重新套用一次");
     host.foreground("wechat.exe");
@@ -673,6 +674,171 @@ fn app_preset_sets_the_apps_own_mode_when_modes_are_per_app() {
     host.foreground("code.exe");
     assert!(!key_with(&mut host, 2, 'a' as u32, 0).handled, "规则里的程序切成英文");
     assert!(press(&mut host, 'n' as u32).handled, "记事本各记各的，还是中文");
+    cleanup(&host);
+}
+
+#[test]
+fn app_preset_restores_normal_mode_after_leaving() {
+    for (name, default_mode, scope) in [
+        ("shared", DefaultMode::Chinese, "global"),
+        ("remembered", DefaultMode::Global, "app"),
+        ("per-app", DefaultMode::Chinese, "app"),
+    ] {
+        let mut host = host(&format!("preset-restore-{name}"));
+        configure(&mut host, |c| {
+            c.default_mode = default_mode;
+            c.mode_scope = scope.into();
+            c.app_presets = true;
+            c.app_preset_rules = vec![preset("code.exe", Mode::English)];
+        });
+        host.connect(2, "code.exe".into());
+        host.foreground("notepad.exe");
+        host.handle(1, Request::Focus { active: true, before: None });
+        for _ in 0..3 {
+            host.foreground("code.exe");
+            assert_eq!(host.handle(2, Request::Focus { active: true, before: None }).frame.unwrap().mode, Mode::English);
+            assert!(!key_with(&mut host, 2, 'n' as u32, 0).handled);
+            host.foreground("notepad.exe");
+            // 前台通知先于旧输入框失焦到达时，状态也必须已经恢复。
+            assert_eq!(status_mode(&mut host), Mode::Chinese, "{name}: 规则不能污染原状态");
+            host.handle(1, Request::Focus { active: true, before: None });
+            host.handle(2, Request::Focus { active: false, before: None });
+            assert!(press(&mut host, 'n' as u32).handled);
+            press(&mut host, keysym::ESCAPE);
+        }
+        cleanup(&host);
+    }
+}
+
+#[test]
+fn app_preset_same_mode_still_isolates_manual_changes_and_chained_rules() {
+    let mut host = host("preset-same-mode");
+    configure(&mut host, |c| {
+        c.app_presets = true;
+        c.app_preset_rules = vec![preset("code.exe", Mode::English), preset("chat.exe", Mode::Chinese)];
+    });
+    host.connect(2, "code.exe".into());
+    host.connect(3, "chat.exe".into());
+    host.foreground("notepad.exe");
+    host.handle(1, Request::ToggleMode { shift: None });
+    host.foreground("code.exe");
+    assert_eq!(host.handle(2, Request::ToggleMode { shift: None }).frame.unwrap().mode, Mode::Chinese);
+    host.foreground("code.exe");
+    assert_eq!(key_with(&mut host, 2, 'n' as u32, 0).mode, Mode::Chinese, "软件内部手动切换必须保留");
+    host.foreground("chat.exe");
+    assert_eq!(status_mode(&mut host), Mode::Chinese);
+    host.foreground("notepad.exe");
+    assert_eq!(status_mode(&mut host), Mode::English, "连续经过多条规则后仍恢复原英文");
+    assert!(!press(&mut host, 'n' as u32).handled);
+    cleanup(&host);
+}
+
+#[test]
+fn app_preset_does_not_persist_temporary_mode_when_saving_settings_or_restarting() {
+    let mut host = host("preset-persistence");
+    configure(&mut host, |c| {
+        c.default_mode = DefaultMode::Global;
+        c.app_presets = true;
+        c.app_preset_rules = vec![preset("code.exe", Mode::English)];
+    });
+    host.connect(2, "code.exe".into());
+    host.foreground("code.exe");
+    host.handle(2, Request::Focus { active: true, before: None });
+    host.handle(2, Request::ToggleMode { shift: None });
+    host.handle(2, Request::ToggleMode { shift: None });
+    configure(&mut host, |c| c.font_size = 22);
+    assert_eq!(status_mode(&mut host), Mode::English, "保存无关设置不能重置软件内状态");
+    let mut restarted = Host::new(Store::new(host.data_dir()));
+    assert_eq!(status_mode(&mut restarted), Mode::Chinese, "临时规则及软件内切换不能写成全局记忆");
+    host.foreground("notepad.exe");
+    assert_eq!(status_mode(&mut host), Mode::Chinese);
+    cleanup(&host);
+}
+
+#[test]
+fn app_preset_rejects_delayed_foreground_and_background_focus_notifications() {
+    let mut host = host("preset-stale-events");
+    configure(&mut host, |c| {
+        c.app_presets = true;
+        c.app_preset_rules = vec![preset("code.exe", Mode::English)];
+    });
+    host.connect(2, "code.exe".into());
+    let foreground = std::rc::Rc::new(std::cell::RefCell::new(Some("code.exe".into())));
+    host.set_desktop(Box::new(Foreground(foreground.clone())));
+    host.handle(2, Request::Focus { active: true, before: None });
+    host.handle(2, Request::ToggleMode { shift: None });
+    // 输入框已查询到 Code 是前台，旧的 Notepad 通知才从另一个队列送达。
+    host.foreground("notepad.exe");
+    host.foreground("code.exe");
+    assert_eq!(status_mode(&mut host), Mode::Chinese, "延迟通知不能重新套用英文规则");
+    *foreground.borrow_mut() = Some("notepad.exe".into());
+    host.handle(1, Request::Focus { active: true, before: None });
+    host.handle(2, Request::Focus { active: true, before: None });
+    host.foreground("code.exe");
+    assert_eq!(status_mode(&mut host), Mode::Chinese);
+    // 状态栏按钮必须操作当前软件，不能被后台输入框抢走。
+    host.handle(99, Request::ToggleMode { shift: None });
+    assert!(!press(&mut host, 'n' as u32).handled);
+    cleanup(&host);
+}
+
+#[test]
+fn app_preset_disabling_or_removing_rule_restores_base_mode() {
+    for remove in [false, true] {
+        let mut host = host(&format!("preset-disable-{remove}"));
+        configure(&mut host, |c| {
+            c.default_mode = DefaultMode::Global;
+            c.app_presets = true;
+            c.app_preset_rules = vec![preset("code.exe", Mode::English)];
+        });
+        host.connect(2, "code.exe".into());
+        host.foreground("code.exe");
+        host.handle(2, Request::Focus { active: true, before: None });
+        configure(&mut host, |c| {
+            if remove { c.app_preset_rules.clear(); } else { c.app_presets = false; }
+        });
+        assert_eq!(status_mode(&mut host), Mode::Chinese, "关闭或移除规则后恢复原状态");
+        cleanup(&host);
+    }
+}
+
+#[test]
+fn app_preset_first_key_observes_foreground_before_delayed_events() {
+    let mut host = host("preset-first-key");
+    configure(&mut host, |c| {
+        c.app_presets = true;
+        c.app_preset_rules = vec![preset("code.exe", Mode::English)];
+    });
+    host.connect(2, "code.exe".into());
+    let foreground = std::rc::Rc::new(std::cell::RefCell::new(Some("code.exe".into())));
+    host.set_desktop(Box::new(Foreground(foreground.clone())));
+    assert!(!key_with(&mut host, 2, 'n' as u32, 0).handled, "首键先于焦点与桌面事件到达仍用预设");
+    host.handle(2, Request::ToggleMode { shift: None });
+    let preview = Key { keysym: 'n' as u32, test: true, ..Key::default() };
+    assert!(host.handle(2, Request::Key { key: preview, before: None }).frame.unwrap().handled);
+    *foreground.borrow_mut() = Some("notepad.exe".into());
+    host.handle(1, Request::Focus { active: true, before: None });
+    *foreground.borrow_mut() = Some("code.exe".into());
+    let frame = key_with(&mut host, 2, 'n' as u32, 0);
+    assert_eq!(frame.mode, Mode::English);
+    assert!(!frame.handled && frame.preedit.is_empty(), "重入后旧中文按键预判必须失效");
+    cleanup(&host);
+}
+
+#[test]
+fn app_preset_keeps_caps_lock_separate_from_restored_mode() {
+    let mut host = host("preset-caps");
+    configure(&mut host, |c| {
+        c.app_presets = true;
+        c.app_preset_rules = vec![preset("code.exe", Mode::English)];
+    });
+    host.connect(2, "code.exe".into());
+    host.foreground("code.exe");
+    host.handle(2, Request::CapsLock { on: true });
+    host.foreground("notepad.exe");
+    assert_eq!(status_mode(&mut host), Mode::English);
+    host.handle(1, Request::CapsLock { on: false });
+    assert_eq!(status_mode(&mut host), Mode::Chinese, "关闭大写锁定后恢复规则之前的中文");
     cleanup(&host);
 }
 

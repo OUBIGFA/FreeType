@@ -83,7 +83,7 @@ func (s *settings) appPresetSection(c *ui.Context) {
 		s.settingBlock(c, "features/指定软件规则", func() {
 			p := colors(c)
 			ui.Column(c).Padding(14, 18).Gap(10).Children(func() {
-				ui.Text(c, "只有从其他程序切入时应用一次；在程序内部手动切换后会保持。没有规则的程序不受影响。\n规则保存在 FreeType 用户设置中，重启后仍然有效。").TextColor(p.muted).Wrap()
+				ui.Text(c, "从其他程序切入时应用一次；在程序内部可手动切换。离开后恢复原来的模式，不影响其他程序和全局记忆。\n规则保存在 FreeType 用户设置中，重启后仍然有效。").TextColor(p.muted).Wrap()
 				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 					if len(s.apps) > 0 {
 						options := []string{"手动输入"}
