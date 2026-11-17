@@ -85,6 +85,8 @@ type settings struct {
 	newStore func(syncSettings) (remoteStore, error)
 	// 正在做的同步动作的说明（空：没有在做）；做完的结果和它是不是失败。
 	syncBusy, syncMessage string
+	syncMessageArea       string
+	showSyncHelp          bool
 	syncFailed            bool
 	syncDevices           []syncDevice
 	syncListed            bool
@@ -271,7 +273,13 @@ func (s *settings) export(request, title, name string) {
 		if path == "" {
 			return nil
 		}
-		resp, err := s.backend.Call(op(request, "path", path))
+		var resp Response
+		var err error
+		if request == "export_settings" {
+			resp, err = s.exportSettingsBackup(path)
+		} else {
+			resp, err = s.backend.Call(op(request, "path", path))
+		}
 		return func() {
 			if err != nil {
 				s.notice = "导出失败：" + err.Error()

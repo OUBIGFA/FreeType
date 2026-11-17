@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -86,7 +87,12 @@ func (f *fakeBackend) Call(r Request) (Response, error) {
 	case "import_learning":
 		f.words = append(f.words, UserWord{Word: "恢复词", Pinyin: "hui fu ci", Freq: 3000})
 		return Response{OK: true, UserWords: f.words, Report: &ImportReport{Added: 3}}, nil
-	case "export_settings", "inspect_settings_backup":
+	case "export_settings":
+		if err := os.WriteFile(r["path"].(string), []byte(`{"format":"freetype-settings","version":1}`), 0600); err != nil {
+			return Response{}, err
+		}
+		return Response{OK: true, Report: &ImportReport{Added: 5}}, nil
+	case "inspect_settings_backup":
 		return Response{OK: true, Report: &ImportReport{Added: 5, Note: "全部设置、1 份词库、1 条快捷短语、1 条常用语、2 条学到的词及使用记录"}}, nil
 	case "import_settings":
 		f.config.PageSize, f.config.TrayIcon = 9, false
@@ -444,11 +450,22 @@ func TestCommonPhrasesPageImportsAndExportsJson(t *testing.T) {
 
 func TestFullSettingsImportNeedsConfirmationAndRefreshesAllData(t *testing.T) {
 	s, b := newTestSettings()
+	s.syncDir = t.TempDir()
+	s.loadSync()
+	s.sync.WebDAVUser, s.sync.WebDAVPassword = "existing-account", "existing-password"
+	if !s.saveSync() {
+		t.Fatal(s.syncMessage)
+	}
+	previous := s.sync
+	backup := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(backup, []byte(`{"format":"freetype-settings","version":1}`), 0600); err != nil {
+		t.Fatal(err)
+	}
 	s.openFile = func(title string) string {
 		if title != "导入全部设置" {
 			t.Fatalf("导入标题：%s", title)
 		}
-		return `C:\test\settings.json`
+		return backup
 	}
 	var tray bool = true
 	s.onTray = func(show bool) { tray = show }
@@ -462,18 +479,25 @@ func TestFullSettingsImportNeedsConfirmationAndRefreshesAllData(t *testing.T) {
 	if err := tt.Click("导入并替换"); err != nil {
 		t.Fatal(err)
 	}
-	if b.last("import_settings")["path"] != `C:\test\settings.json` {
+	if b.last("import_settings")["path"] != backup {
 		t.Fatal("导入路径错误")
 	}
 	if s.config.PageSize != 9 || tray || s.dicts[0].Name != "恢复词库" || s.phrases[0].Text != "恢复短语" || s.common[0] != "恢复常用语" || s.words[0].Word != "恢复词" {
 		t.Fatalf("导入后必须刷新全部数据与托盘开关：%+v", s)
+	}
+	if saved, err := loadSyncSettings(s.syncDir); err != nil || saved != previous {
+		t.Fatal("旧备份不得改变同步账号和密码", err)
 	}
 }
 
 func TestFullSettingsImportCancelAndInvalidFilePreserveCurrentData(t *testing.T) {
 	for _, invalid := range []bool{false, true} {
 		s, b := newTestSettings()
-		s.openFile = func(string) string { return `C:\test\settings.json` }
+		backup := filepath.Join(t.TempDir(), "settings.json")
+		if err := os.WriteFile(backup, []byte(`{"format":"freetype-settings","version":1}`), 0600); err != nil {
+			t.Fatal(err)
+		}
+		s.openFile = func(string) string { return backup }
 		if invalid {
 			b.failRequest = "inspect_settings_backup"
 		}
@@ -494,18 +518,98 @@ func TestFullSettingsImportCancelAndInvalidFilePreserveCurrentData(t *testing.T)
 
 func TestFullSettingsExportUsesPortableJson(t *testing.T) {
 	s, b := newTestSettings()
+	s.syncDir = t.TempDir()
+	s.loadSync()
+	s.sync.WebDAVUser, s.sync.WebDAVPassword = "test-account", "test-password-not-exported"
+	s.sync.S3AccessKey, s.sync.S3SecretKey = "test-key", "test-secret-not-exported"
+	s.sync.Automatic, s.sync.Schedule, s.sync.DailyTime = true, "daily", "22:15"
+	if !s.saveSync() {
+		t.Fatal(s.syncMessage)
+	}
+	backup := filepath.Join(t.TempDir(), "all.json")
 	s.saveFile = func(title, name string) string {
 		if title != "导出全部设置" || name != "FreeType 全部设置.json" {
 			t.Fatalf("导出信息错误：%s %s", title, name)
 		}
-		return `C:\test\all.json`
+		return backup
 	}
 	tt := open(t, s, "数据与同步")
 	if err := tt.Click("导出全部设置"); err != nil {
 		t.Fatal(err)
 	}
-	if b.last("export_settings")["path"] != `C:\test\all.json` {
+	if b.last("export_settings") == nil {
 		t.Fatal("必须导出完整备份")
+	}
+	data, err := os.ReadFile(backup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"test-account", "test-key", "22:15"} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("缺少账号或计划 %s", want)
+		}
+	}
+	for _, secret := range []string{"test-password-not-exported", "test-secret-not-exported", "webdav_password", "s3_secret_key", s.sync.DeviceID} {
+		if strings.Contains(string(data), secret) {
+			t.Fatal("导出泄漏了密码、密钥或设备身份")
+		}
+	}
+	// 在另一台电脑导入：恢复账号和计划，清除旧密码，保留目标设备身份并暂停同步。
+	// 即使文件被加入凭据或设备字段，也不能从备份导入它们。
+	var edited map[string]json.RawMessage
+	if err := json.Unmarshal(data, &edited); err != nil {
+		t.Fatal(err)
+	}
+	var connection map[string]any
+	if err := json.Unmarshal(edited["sync_connection"], &connection); err != nil {
+		t.Fatal(err)
+	}
+	connection["webdav_password"], connection["s3_secret_key"] = "injected-password", "injected-secret"
+	connection["device_id"], connection["enabled"] = deviceA, true
+	edited["sync_connection"], _ = json.Marshal(connection)
+	data, _ = json.Marshal(edited)
+	if err := os.WriteFile(backup, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	target, _ := newTestSettings()
+	target.syncDir = t.TempDir()
+	target.loadSync()
+	target.sync.WebDAVPassword, target.sync.S3SecretKey, target.sync.Enabled = "old-password", "old-secret", true
+	if !target.saveSync() {
+		t.Fatal(target.syncMessage)
+	}
+	id := target.sync.DeviceID
+	target.importSettingsBackup(backup)
+	saved, err := loadSyncSettings(target.syncDir)
+	if err != nil || saved.WebDAVUser != "test-account" || saved.S3AccessKey != "test-key" || saved.DailyTime != "22:15" || !saved.Automatic || saved.Enabled || saved.WebDAVPassword != "" || saved.S3SecretKey != "" || saved.DeviceID != id {
+		t.Fatalf("导入账号、计划、凭据隔离失败：%v", err)
+	}
+	// 无效计划和服务拒绝导入时，都不能先改连接配置。
+	for _, fail := range []string{"invalid-plan", "import_settings"} {
+		connection["daily_time"] = "22:15"
+		if fail == "invalid-plan" {
+			connection["daily_time"] = "invalid"
+		}
+		edited["sync_connection"], _ = json.Marshal(connection)
+		data, _ = json.Marshal(edited)
+		if err := os.WriteFile(backup, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		fresh, backend := newTestSettings()
+		fresh.syncDir = t.TempDir()
+		fresh.loadSync()
+		if !fresh.saveSync() {
+			t.Fatal(fresh.syncMessage)
+		}
+		original := fresh.sync
+		backend.failRequest = fail
+		fresh.importSettingsBackup(backup)
+		if got, err := loadSyncSettings(fresh.syncDir); err != nil || got != original || !strings.HasPrefix(fresh.notice, "导入失败") {
+			t.Fatal("失败的导入不应改变连接设置", err)
+		}
+		if fail == "invalid-plan" && backend.last("import_settings") != nil {
+			t.Fatal("无效同步配置必须在导入数据前拒绝")
+		}
 	}
 }
 
@@ -876,6 +980,9 @@ func TestNewSettingsLayoutsSnapshots(t *testing.T) {
 		{"features-predict-and-presets", "features/上屏联想", "", 1000, 1100},
 		{"sync-webdav", "sync/同步服务", "", 1000, 1100},
 		{"sync-s3-min-window", "sync/上传与恢复", "", 780, 900},
+		{"sync-connection-min", "sync/同步服务", "", 780, 720},
+		{"sync-status-min", "sync/同步计划", "", 780, 720},
+		{"sync-status", "sync/同步计划", "", 1000, 720},
 	} {
 		s, _ := newTestSettings()
 		s.config.Autospace = false
@@ -892,7 +999,7 @@ func TestNewSettingsLayoutsSnapshots(t *testing.T) {
 		case "features-predict-and-presets":
 			s.config.PredictNext, s.config.AppPresets = true, true
 			s.config.AppPresetRules = []AppPreset{{App: "code.exe", Mode: "english"}}
-		case "sync-webdav", "sync-s3-min-window":
+		case "sync-webdav", "sync-s3-min-window", "sync-connection-min", "sync-status-min", "sync-status":
 			s.loadSync()
 			s.sync.Enabled, s.sync.WebDAVURL, s.sync.WebDAVUser = true, "https://dav.jianguoyun.com/dav/FreeType", "me@example.com"
 			s.sync.DeviceID = "0123456789abcdef0123456789abcdef"
@@ -901,6 +1008,11 @@ func TestNewSettingsLayoutsSnapshots(t *testing.T) {
 				{ID: "fedcba9876543210fedcba9876543210", Hostname: "家里的电脑", Uploaded: 1794700000, Size: 820000},
 			}
 			s.syncMessage = "已上传（1.5 MB）"
+			if sample.name == "sync-connection-min" {
+				s.syncMessage, s.syncMessageArea = "连接成功，可以上传和恢复", "connection"
+			}
+			s.sync.Automatic = true
+			s.autoSyncStatus = autoSyncState{Message: "已上传本机最新备份", Last: time.Date(2026, 11, 17, 14, 30, 5, 0, time.Local), Next: time.Date(2026, 11, 17, 15, 0, 5, 0, time.Local), Count: 3}
 			if sample.name == "sync-s3-min-window" {
 				s.sync.Provider = "s3"
 			}

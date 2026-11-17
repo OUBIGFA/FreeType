@@ -97,12 +97,20 @@ func cleanKey(key string) []string {
 // ---------- WebDAV ----------
 
 type webdavStore struct {
+	legacy   *webdavStore
 	base     *url.URL
 	user     string
 	password string
 	client   *http.Client
 	// 已经确认存在的目录，免得每次上传都重建一遍。
 	made map[string]bool
+}
+
+func (w *webdavStore) legacyStore() remoteStore {
+	if w.legacy == nil {
+		return nil
+	}
+	return w.legacy
 }
 
 func newWebDAVStore(address, user, password string) (*webdavStore, error) {
@@ -308,6 +316,7 @@ func (w *webdavStore) Probe() error {
 // ---------- S3 兼容 ----------
 
 type s3Store struct {
+	legacy    *s3Store
 	endpoint  *url.URL
 	region    string
 	bucket    string
@@ -318,6 +327,13 @@ type s3Store struct {
 	pathStyle bool
 	client    *http.Client
 	now       func() time.Time
+}
+
+func (s *s3Store) legacyStore() remoteStore {
+	if s.legacy == nil {
+		return nil
+	}
+	return s.legacy
 }
 
 func newS3Store(c syncSettings) (*s3Store, error) {

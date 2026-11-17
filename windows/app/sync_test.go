@@ -410,7 +410,7 @@ func TestSnapshotsAreKeptPerDeviceAndPrunedByNumericRevision(t *testing.T) {
 	if err != nil || len(revisions) != keepSnapshots {
 		t.Fatalf("每台设备保留最近 %d 份：%v %v", keepSnapshots, revisions, err)
 	}
-	if !strings.HasPrefix(revisions[0], fmt.Sprint(start.Add(7*time.Hour).Unix())+"-") {
+	if revisions[0] != "sync-"+start.Add(7*time.Hour).Format("20060102150405") {
 		t.Fatalf("最新的应留着并排在最前：%v", revisions)
 	}
 	// 另一台设备的东西不受影响
@@ -455,6 +455,102 @@ func TestSnapshotsAreKeptPerDeviceAndPrunedByNumericRevision(t *testing.T) {
 	}
 	if _, err := uploadSnapshot(store, "../x", "", file, start); err == nil {
 		t.Fatal("不合格的设备标识应被拒绝")
+	}
+}
+
+func TestSyncFolderAndNamesAcrossProviders(t *testing.T) {
+	for _, provider := range []string{"webdav", "s3"} {
+		for _, prefix := range []string{"", "备份", "备份/FreeType/"} {
+			t.Run(provider+"/"+prefix, func(t *testing.T) {
+				dav := &fakeDAV{t: t, dirs: map[string]bool{"": true, "/dav": true, "/dav/备份": true}, files: map[string][]byte{}}
+				s3 := &fakeS3{t: t, objects: map[string][]byte{}}
+				var handler http.Handler = dav
+				if provider == "s3" {
+					handler = s3
+				}
+				server := httptest.NewServer(handler)
+				defer server.Close()
+				c := syncSettings{Provider: provider, WebDAVURL: server.URL + "/dav/" + prefix, WebDAVUser: "me", WebDAVPassword: "secret",
+					S3Endpoint: server.URL, S3Region: "auto", S3Bucket: "bucket", S3Prefix: prefix, S3AccessKey: "key", S3SecretKey: "secret", S3PathStyle: true}
+				store, err := openRemoteStore(c)
+				if err != nil {
+					t.Fatal(err)
+				}
+				file := filepath.Join(t.TempDir(), "snapshot.json")
+				if err := os.WriteFile(file, []byte("完整备份"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				now := time.Date(2026, 11, 17, 14, 30, 5, 0, time.Local)
+				for i := 0; i < 2; i++ {
+					if _, err := uploadSnapshot(store, deviceA, "电脑", file, now); err != nil {
+						t.Fatal(err)
+					}
+				}
+				base := "FreeType/"
+				if prefix != "" {
+					base = "备份/FreeType/"
+				}
+				files := s3.objects
+				if provider == "webdav" {
+					base = "/dav/" + base
+					files = dav.files
+				}
+				for _, name := range []string{"sync-20261117143005.json", "sync-20261117143006.json"} {
+					if string(files[base+"devices/"+deviceA+"/"+name]) != "完整备份" {
+						t.Fatalf("缺少指定快照 %s: %v", name, files)
+					}
+				}
+				if len(files) != 3 {
+					t.Fatalf("应有两份快照和一份设备索引：%v", files)
+				}
+				devices, err := listDevices(store)
+				if err != nil || len(devices) != 1 {
+					t.Fatalf("%v %v", devices, err)
+				}
+				if err := downloadSnapshot(store, devices[0], file); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
+	}
+}
+
+func TestSyncReadsLegacyLocationWithoutWritingOutsideFreeType(t *testing.T) {
+	dav := &fakeDAV{t: t, dirs: map[string]bool{"": true, "/dav": true}, files: map[string][]byte{}}
+	server := httptest.NewServer(dav)
+	defer server.Close()
+	old, _ := newWebDAVStore(server.URL+"/dav", "me", "secret")
+	meta := `{"revision":"1700000000-1","uploaded_unix":1700000000}`
+	if err := old.Put(deviceInfoKey(deviceA), strings.NewReader(meta), int64(len(meta))); err != nil {
+		t.Fatal(err)
+	}
+	if err := old.Put(snapshotKey(deviceA, "1700000000-1"), strings.NewReader("旧备份"), int64(len("旧备份"))); err != nil {
+		t.Fatal(err)
+	}
+	store, err := openRemoteStore(syncSettings{WebDAVURL: server.URL + "/dav", WebDAVUser: "me", WebDAVPassword: "secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	devices, err := readDevices(store, true)
+	if err != nil || len(devices) != 1 {
+		t.Fatalf("旧目录不可读：%+v %v", devices, err)
+	}
+	file := filepath.Join(t.TempDir(), "restored.json")
+	if err := downloadSnapshot(store, devices[0], file); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(file); string(got) != "旧备份" {
+		t.Fatalf("%s", got)
+	}
+	if _, err := uploadSnapshot(store, deviceA, "电脑", file, time.Date(2026, 11, 17, 14, 30, 5, 0, time.Local)); err != nil {
+		t.Fatal(err)
+	}
+	devices, err = listDevices(store)
+	if err != nil || len(devices) != 1 || devices[0].Revision != "sync-20261117143005" {
+		t.Fatalf("%+v %v", devices, err)
+	}
+	if len(dav.files) != 4 || dav.files["/dav/FreeType/devices/"+deviceA+"/sync-20261117143005.json"] == nil {
+		t.Fatalf("新上传没有进入 FreeType：%v", dav.files)
 	}
 }
 
@@ -533,6 +629,19 @@ func TestSyncPageUploadsListsAndMergesThroughTheBackend(t *testing.T) {
 	tt.Frame()
 	if !tt.HasText("连接成功，可以上传和恢复") || opened.WebDAVPassword != "pw" {
 		t.Fatalf("测试连接：%q %+v", tt.Texts(), opened)
+	}
+	button, found := tt.Find("保存并测试连接")
+	if !found {
+		t.Fatal("缺少连接按钮")
+	}
+	near := false
+	for _, node := range tt.AccessAll() {
+		if node.Name == "连接成功，可以上传和恢复" && node.Bounds.X > button.X && node.Bounds.Y < button.Y+button.H {
+			near = true
+		}
+	}
+	if !near {
+		t.Fatal("连接结果必须紧邻测试按钮")
 	}
 	if saved, err := loadSyncSettings(s.syncDir); err != nil || !saved.Enabled || saved.WebDAVPassword != "pw" || saved.DeviceID != s.sync.DeviceID {
 		t.Fatalf("同步设置没有保存：%+v %v", saved, err)

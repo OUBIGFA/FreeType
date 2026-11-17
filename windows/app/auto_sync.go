@@ -411,7 +411,7 @@ func (a *autoSync) cycle(c syncSettings) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	err = store.Get(snapshotKey(newest.ID, newest.Revision), out)
+	err = newest.snapshotStore(store).Get(snapshotKey(newest.ID, newest.Revision), out)
 	if closeErr := out.Close(); err == nil {
 		err = closeErr
 	}

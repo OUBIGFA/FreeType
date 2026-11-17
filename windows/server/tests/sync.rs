@@ -79,3 +79,21 @@ fn sync_restore_waits_for_composition_to_finish() {
     assert!(request(&mut host, restore).ok);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn local_backup_accepts_account_settings_but_cloud_export_omits_them() {
+    let (mut host, dir) = test_host("account-backup");
+    let file = dir.join("local.json");
+    assert!(export(&mut host, &file).ok);
+    let mut data: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    data["sync_connection"] = serde_json::json!({"provider":"webdav", "webdav_user":"sample-account"});
+    std::fs::write(&file, serde_json::to_vec(&data).unwrap()).unwrap();
+    let result = request(&mut host, serde_json::json!({"op":"inspect_settings_backup","path":file}));
+    assert!(result.ok, "{:?}", result.error);
+    let result = request(&mut host, serde_json::json!({"op":"import_settings","path":file}));
+    assert!(result.ok, "{:?}", result.error);
+    assert!(export(&mut host, &file).ok);
+    let cloud: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    assert!(cloud.get("sync_connection").is_none());
+    std::fs::remove_dir_all(dir).unwrap();
+}

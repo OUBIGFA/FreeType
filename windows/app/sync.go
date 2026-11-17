@@ -5,8 +5,8 @@ package main
 //
 // 远端布局（每台设备只写自己的目录，多台设备同时上传不会互相覆盖）：
 //
-//	<根>/devices/<设备标识>.json            设备信息：电脑名、最近快照、上传时间、大小
-//	<根>/devices/<设备标识>/<修订号>.json    快照（和「导出全部设置」同一种文件），保留最近几份
+//	<根>/FreeType/devices/<设备标识>.json                         设备信息
+//	<根>/FreeType/devices/<设备标识>/sync-年月日时分秒.json          快照
 //
 // 同步的地址、账号和设备标识存在用户数据目录的 sync.json，不进快照、不被恢复覆盖；
 // 密码和密钥用 Windows DPAPI（当前用户）加密后才写盘。
@@ -146,9 +146,29 @@ func saveSyncSettings(dir string, c syncSettings) error {
 // openRemoteStore 按设置连到远端。
 func openRemoteStore(c syncSettings) (remoteStore, error) {
 	if c.Provider == "s3" {
-		return newS3Store(c)
+		s, err := newS3Store(c)
+		if err != nil {
+			return nil, err
+		}
+		if len(s.prefix) == 0 || s.prefix[len(s.prefix)-1] != "FreeType" {
+			old := *s
+			s.legacy = &old
+			s.prefix = append(append([]string{}, s.prefix...), "FreeType")
+		}
+		return s, nil
 	}
-	return newWebDAVStore(c.WebDAVURL, c.WebDAVUser, c.WebDAVPassword)
+	w, err := newWebDAVStore(c.WebDAVURL, c.WebDAVUser, c.WebDAVPassword)
+	if err != nil {
+		return nil, err
+	}
+	if !strings.HasSuffix(w.base.Path, "/FreeType") {
+		old := *w
+		w.legacy = &old
+		base := *w.base
+		base.Path += "/FreeType"
+		w.base = &base
+	}
+	return w, nil
 }
 
 // syncDevice 是远端的设备信息文件。
@@ -161,6 +181,17 @@ type syncDevice struct {
 	Modified int64  `json:"modified_unix_ms,omitempty"`
 	Origin   string `json:"origin_device,omitempty"`
 	Hash     string `json:"sha256,omitempty"`
+	// 旧目录只读；恢复必须使用列举这条记录的同一位置。
+	legacy bool
+}
+
+func (d syncDevice) snapshotStore(fallback remoteStore) remoteStore {
+	if d.legacy {
+		if source, ok := fallback.(interface{ legacyStore() remoteStore }); ok && source.legacyStore() != nil {
+			return source.legacyStore()
+		}
+	}
+	return fallback
 }
 
 func deviceInfoKey(id string) string         { return "devices/" + id + ".json" }
@@ -168,6 +199,10 @@ func snapshotKey(id, revision string) string { return "devices/" + id + "/" + re
 
 // revisionOrder 把修订号拆成 (秒级时间戳, 序号)；兼容旧版以进程号作序号。
 func revisionOrder(revision string) (int64, int64, bool) {
+	if stamp, ok := strings.CutPrefix(revision, "sync-"); ok {
+		when, err := time.ParseInLocation("20060102150405", stamp, time.Local)
+		return when.Unix(), 0, err == nil && when.Format("20060102150405") == stamp
+	}
 	m := revisionPattern.FindStringSubmatch(revision)
 	if m == nil {
 		return 0, 0, false
@@ -217,9 +252,22 @@ func uploadVersionedSnapshot(store remoteStore, id, hostname, file string, now t
 	if err != nil {
 		return syncDevice{}, err
 	}
+	// 秒级命名仍不能覆盖已有快照；同一秒再次上传时顺延到下一个空闲秒。
+	revisions, err := listRevisions(store, id)
+	if err != nil {
+		return syncDevice{}, err
+	}
+	used := make(map[string]bool, len(revisions))
+	for _, revision := range revisions {
+		used[revision] = true
+	}
+	stamp := now
+	for used["sync-"+stamp.Format("20060102150405")] {
+		stamp = stamp.Add(time.Second)
+	}
 	device := syncDevice{
 		ID: id, Hostname: hostname, Uploaded: now.Unix(), Size: info.Size(),
-		Revision: fmt.Sprintf("%d-%d", now.Unix(), now.Nanosecond()),
+		Revision: "sync-" + stamp.Format("20060102150405"),
 		Modified: version.Modified, Origin: version.Origin, Hash: version.Hash,
 	}
 	if err := store.Put(snapshotKey(id, device.Revision), body, info.Size()); err != nil {
@@ -233,18 +281,10 @@ func uploadVersionedSnapshot(store remoteStore, id, hostname, file string, now t
 	if err := store.Put(deviceInfoKey(id), bytes.NewReader(meta), int64(len(meta))); err != nil {
 		return syncDevice{}, err
 	}
-	// 清理失败不算上传失败，下次上传再清
-	if revisions, err := listRevisions(store, id); err == nil {
-		kept := 0
-		for _, revision := range revisions {
-			// 刚上传的这份无条件保留（系统时钟以前超前过，它也可能排在后面）
-			if revision == device.Revision {
-				continue
-			}
-			kept++
-			if kept >= keep {
-				_ = store.Delete(snapshotKey(id, revision))
-			}
+	// 只清理上传前列出的旧快照，刚上传的始终保留。清理失败留待下次上传再处理。
+	for i, revision := range revisions {
+		if i >= keep-1 {
+			_ = store.Delete(snapshotKey(id, revision))
 		}
 	}
 	return device, nil
@@ -257,6 +297,38 @@ func listDevices(store remoteStore) ([]syncDevice, error) {
 
 // 自动覆盖前必须读懂全部设备记录，不能跳过损坏记录后错误宣布本机最新。
 func readDevices(store remoteStore, strict bool) ([]syncDevice, error) {
+	devices, err := readDevicesAt(store, strict)
+	if err != nil {
+		return nil, err
+	}
+	if source, ok := store.(interface{ legacyStore() remoteStore }); ok && source.legacyStore() != nil {
+		older, err := readDevicesAt(source.legacyStore(), strict)
+		if err != nil {
+			return nil, err
+		}
+		for _, old := range older {
+			old.legacy = true
+			found := false
+			for i, current := range devices {
+				if old.ID == current.ID {
+					if compareSyncVersions(deviceVersion(old), deviceVersion(current)) > 0 {
+						devices[i] = old
+					}
+					found = true
+					break
+				}
+			}
+			if !found {
+				devices = append(devices, old)
+			}
+		}
+	}
+	sort.Slice(devices, func(i, j int) bool { return devices[i].Uploaded > devices[j].Uploaded })
+	return devices, nil
+}
+
+// 新目录与旧目录独立读取，连接或校验失败不能当作「云端没有数据」。
+func readDevicesAt(store remoteStore, strict bool) ([]syncDevice, error) {
 	entries, err := store.List("devices")
 	if err != nil {
 		return nil, err
@@ -298,6 +370,7 @@ func readDevices(store remoteStore, strict bool) ([]syncDevice, error) {
 // downloadSnapshot 把一台设备最近的快照下载到 file。设备信息指向的快照不在了，
 // 就退回这台设备目录下实际存在的最新一份。
 func downloadSnapshot(store remoteStore, device syncDevice, file string) error {
+	store = device.snapshotStore(store)
 	if !deviceIDPattern.MatchString(device.ID) {
 		return errors.New("设备标识不对")
 	}
@@ -372,10 +445,11 @@ func (s *settings) saveSync() bool {
 }
 
 // syncTask 在后台做一件要连远端的事；同一时间只做一件，做完显示结果。
-func (s *settings) syncTask(doing string, work func(store remoteStore) (string, func(), error)) {
+func (s *settings) syncTask(area, doing string, work func(store remoteStore) (string, func(), error)) {
 	if s.syncBusy != "" {
 		return
 	}
+	s.syncMessageArea = area
 	if !s.saveSync() {
 		return
 	}
@@ -420,7 +494,7 @@ func (s *settings) openStore(c syncSettings) (remoteStore, error) {
 }
 
 func (s *settings) testSync() {
-	s.syncTask("正在测试连接…", func(store remoteStore) (string, func(), error) {
+	s.syncTask("connection", "正在测试连接…", func(store remoteStore) (string, func(), error) {
 		return "连接成功，可以上传和恢复", nil, store.Probe()
 	})
 }
@@ -439,7 +513,7 @@ func (s *settings) uploadSync() {
 	id := s.sync.DeviceID
 	config := s.sync
 	manager := s.autoSync
-	s.syncTask("正在上传…", func(store remoteStore) (string, func(), error) {
+	s.syncTask("transfer", "正在上传…", func(store remoteStore) (string, func(), error) {
 		file, err := tempSnapshot()
 		if err != nil {
 			return "", nil, err
@@ -484,7 +558,7 @@ func (s *settings) uploadSync() {
 }
 
 func (s *settings) refreshSyncDevices() {
-	s.syncTask("正在读取设备…", func(store remoteStore) (string, func(), error) {
+	s.syncTask("transfer", "正在读取设备…", func(store remoteStore) (string, func(), error) {
 		devices, err := listDevices(store)
 		if err != nil {
 			return "", nil, err
@@ -498,7 +572,7 @@ func (s *settings) refreshSyncDevices() {
 }
 
 func (s *settings) restoreSync(device syncDevice) {
-	s.syncTask("正在恢复…", func(store remoteStore) (string, func(), error) {
+	s.syncTask("transfer", "正在恢复…", func(store remoteStore) (string, func(), error) {
 		file, err := tempSnapshot()
 		if err != nil {
 			return "", nil, err
