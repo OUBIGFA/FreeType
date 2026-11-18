@@ -2208,10 +2208,11 @@ fn prediction_arrows_work_independently_of_digit_and_space_switches() {
     assert_eq!(frame.cursor, Some(1));
     assert_eq!(frame.labels, ["", ""]);
     assert!(!press(&mut host, 0x20).handled, "左右选词不能悄悄开启空格上屏");
-    commit_today(&mut host);
-    press(&mut host, keysym::RIGHT);
+    let shown = commit_today(&mut host);
+    assert!(shown.predict && shown.candidates.len() >= 2);
+    assert_eq!(press(&mut host, keysym::RIGHT).cursor, Some(1));
     let frame = host.handle(1, Request::Select { index: 0 }).frame.unwrap();
-    assert_eq!(frame.commit.as_deref(), Some("下雨"), "鼠标仍按点中的词上屏");
+    assert_eq!(frame.commit.as_deref(), Some(shown.candidates[0].as_str()), "鼠标仍按点中的词上屏");
     cleanup(&host);
 }
 
