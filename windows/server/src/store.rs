@@ -329,12 +329,24 @@ impl Store {
         reading: &dyn Fn(&[String]) -> Box<dyn dictfmt::Reading>,
     ) -> Result<ImportReport, String> {
         let name = dictionary_name(name).ok_or("词库名称不能为空，也不能是系统保留名")?;
-        let bytes = fs::read(path).map_err(|e| format!("读取文件失败：{e}"))?;
-        let imported = dictfmt::parse_dictionary(&bytes, reading);
+        let imported = dictfmt::parse_dictionary_file(path, reading).map_err(|e| format!("读取文件失败：{e}"))?;
+        if imported.parsed.items.is_empty() && imported.foreign > 0 {
+            // 英文词典（en.dict.yaml）、符号表：没有可以按拼音打出来的中文词条
+            return Err(format!(
+                "文件里的 {} 条都不是中文词语。导入的词库只收带拼音的中文词条",
+                imported.foreign
+            ));
+        }
         let mut report = self.save_dictionary(&name, imported.parsed)?;
         let mut note = format!("识别为{}", imported.format.name());
+        if imported.tables > 0 {
+            note.push_str(&format!("，连同 import_tables 里的 {} 个词典", imported.tables));
+        }
         if imported.annotated > 0 {
             note.push_str(&format!("；{} 条只有词语，已按常用读音自动注音（多音字可能不准）", imported.annotated));
+        }
+        if imported.foreign > 0 {
+            note.push_str(&format!("；{} 条不是中文词语，没有收", imported.foreign));
         }
         report.note = Some(note);
         Ok(report)
@@ -485,6 +497,33 @@ mod tests {
         assert!(store.import_dictionary(&file, "CON", &|_| Box::new(crate::dictfmt::LexiconReading::default())).is_err());
         store.remove_dictionary("我的词库").unwrap();
         assert!(store.list_dictionaries().is_empty());
+        let _ = fs::remove_dir_all(store.dir());
+    }
+
+    #[test]
+    fn rime_dictionary_import_follows_import_tables_on_disk() {
+        let store = temp_store("rime");
+        let source = store.dir().join("rime");
+        fs::create_dir_all(source.join("cn_dicts")).unwrap();
+        let main = source.join("demo.dict.yaml");
+        fs::write(&main, "---\nname: demo\nversion: \"1\"\nimport_tables:\n  - cn_dicts/base\n...\nA\tA\n").unwrap();
+        fs::write(
+            source.join("cn_dicts/base.dict.yaml"),
+            "---\nname: base\nversion: \"1\"\n...\n韵酒\tyun jiu\t500\n",
+        )
+        .unwrap();
+        let reading = |_: &[String]| -> Box<dyn crate::dictfmt::Reading> { Box::new(crate::dictfmt::LexiconReading::default()) };
+        let report = store.import_dictionary(&main, "demo", &reading).unwrap();
+        assert_eq!((report.added, report.skipped), (1, 0));
+        let note = report.note.unwrap();
+        assert!(note.contains("Rime 词典") && note.contains("1 个词典") && note.contains("1 条不是中文词语"), "{note}");
+        assert_eq!(store.load_dictionaries()[0].1[0].word, "韵酒");
+        // 只有英文词条的词典：说明原因，不存空词库
+        let english = source.join("en.dict.yaml");
+        fs::write(&english, "---\nname: en\nversion: \"1\"\n...\nabandon\tabandon\n").unwrap();
+        let error = store.import_dictionary(&english, "en", &reading).unwrap_err();
+        assert!(error.contains("不是中文词语"), "{error}");
+        assert_eq!(store.list_dictionaries().len(), 1);
         let _ = fs::remove_dir_all(store.dir());
     }
 

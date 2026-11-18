@@ -44,6 +44,11 @@ pub fn write(kind: &'static str, detail: &str) {
         return;
     };
     let dir = std::path::PathBuf::from(local).join("FreeType").join("logs");
+    // 卸载以后，还开着的应用里仍载着这个 DLL，连不上服务进程会来记日志：
+    // 不把卸载器删掉的目录再建回来
+    if !dir.is_dir() && !crate::client::installed() {
+        return;
+    }
     if std::fs::create_dir_all(&dir).is_err() {
         return;
     }

@@ -537,6 +537,12 @@ func TestFullSettingsExportUsesPortableJson(t *testing.T) {
 	if err := tt.Click("导出全部设置"); err != nil {
 		t.Fatal(err)
 	}
+	if b.last("export_settings") != nil || !tt.HasText("选择要导出的数据") {
+		t.Fatal("点击导出后应先弹出数据类别选择框")
+	}
+	if err := tt.Click("导出选中的数据"); err != nil {
+		t.Fatal(err)
+	}
 	if b.last("export_settings") == nil {
 		t.Fatal("必须导出完整备份")
 	}
@@ -935,6 +941,9 @@ func TestSnapshots(t *testing.T) {
 	for _, dark := range []bool{false, true} {
 		for _, pg := range pages {
 			s, _ := newTestSettings()
+			if _, err := os.Stat("resources"); err == nil {
+				s.resources = "resources"
+			}
 			s.page = pg.ID
 			if pg.ID == "learned" {
 				s.loadWords()
@@ -1162,5 +1171,71 @@ func TestPredictNextIsOffByDefaultAndSavedFromFeaturesPage(t *testing.T) {
 	}
 	if b.config.PredictSpace || !b.config.PredictDigits {
 		t.Fatalf("子选项没有分别保存：%+v", b.config)
+	}
+}
+
+func TestSelectiveSettingsExportAllowsPickingDataAndBlocksOldServer(t *testing.T) {
+	s, b := newTestSettings()
+	s.syncDir = t.TempDir()
+	s.loadSync()
+	s.sync.WebDAVUser, s.sync.Encrypt = "test-account", true
+	if !s.saveSync() {
+		t.Fatal(s.syncMessage)
+	}
+	backup := filepath.Join(t.TempDir(), "partial.json")
+	s.saveFile = func(string, string) string { return backup }
+	tt := open(t, s, "数据与同步")
+	if err := tt.Click("导出全部设置"); err != nil {
+		t.Fatal(err)
+	}
+	// 只选「设置」和「快捷短语」，不导出词库、常用语、学习记录和同步账号
+	for _, label := range []string{"导出词库", "导出常用语", "导出学习记录", "导出同步账号和计划"} {
+		if err := tt.Click(label); err != nil {
+			t.Fatalf("切换 %s 失败：%v", label, err)
+		}
+	}
+	if err := tt.Click("导出选中的数据"); err != nil {
+		t.Fatal(err)
+	}
+	req := b.last("export_settings")
+	rawParts, _ := json.Marshal(req["parts"])
+	if string(rawParts) != `["settings","quick_phrases"]` {
+		t.Fatalf("应只向服务请求选中的类别：%s", rawParts)
+	}
+	data, err := os.ReadFile(backup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "sync_connection") || strings.Contains(string(data), "test-account") {
+		t.Fatalf("未勾选同步账号时不应写入连接信息：%s", data)
+	}
+	if !strings.Contains(strings.Join(tt.Texts(), " "), "已导出选中的数据：") {
+		t.Fatalf("部分导出提示不对：%q", tt.Texts())
+	}
+	// 只选「同步账号和计划」时，发给服务进程的 parts 必须是空数组 `[]` 而不是 null
+	s.exportParts = []bool{false, false, false, false, false, true}
+	if _, err := s.exportSettingsBackup(backup, s.chosenExportParts()); err != nil {
+		t.Fatal(err)
+	}
+	rawParts, _ = json.Marshal(b.last("export_settings")["parts"])
+	if string(rawParts) != `[]` {
+		t.Fatalf("只导出同步账号时应向服务传空数组：%s", rawParts)
+	}
+	data, _ = os.ReadFile(backup)
+	if !strings.Contains(string(data), `"sync_connection"`) || !strings.Contains(string(data), `"encrypt": true`) {
+		t.Fatalf("应写出同步账号与加密开关：%s", data)
+	}
+}
+
+func TestDictionaryNameDropsRimeSuffix(t *testing.T) {
+	for path, want := range map[string]string{
+		`C:\rime\rime_ice.dict.yaml`: "rime_ice",
+		`C:\rime\plain.yml`:          "plain",
+		`C:\词库\我的词库.txt`:             "我的词库",
+		`C:\词库\a.dict.txt`:           "a.dict",
+	} {
+		if got := dictionaryName(path); got != want {
+			t.Errorf("dictionaryName(%q) = %q, want %q", path, got, want)
+		}
 	}
 }

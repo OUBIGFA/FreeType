@@ -753,11 +753,12 @@ func TestSyncSettingsKeepSecretsEncryptedOnDiskAndDeviceIDStable(t *testing.T) {
 	}
 	c.Enabled, c.WebDAVURL, c.WebDAVUser, c.WebDAVPassword = true, "https://dav.example.com/x", "me", "应用密码-123"
 	c.S3AccessKey, c.S3SecretKey = "example-access-key-id", "s3-secret-456"
+	c.Encrypt, c.EncryptPassword = true, "备份口令-789"
 	if err := saveSyncSettings(dir, c); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(filepath.Join(dir, "sync.json"))
-	for _, secret := range []string{"应用密码-123", "s3-secret-456"} {
+	for _, secret := range []string{"应用密码-123", "s3-secret-456", "备份口令-789"} {
 		if bytes.Contains(raw, []byte(secret)) {
 			t.Fatalf("密码明文写进了文件：%s", raw)
 		}
@@ -818,6 +819,9 @@ func TestSyncPageUploadsListsAndMergesThroughTheBackend(t *testing.T) {
 	if saved, err := loadSyncSettings(s.syncDir); err != nil || !saved.Enabled || saved.WebDAVPassword != "pw" || saved.DeviceID != s.sync.DeviceID {
 		t.Fatalf("同步设置没有保存：%+v %v", saved, err)
 	}
+	// 连接、计划和传输是不同区块；按真实页面滚动到操作，而不是假设全部按钮同屏。
+	s.locateSetting(setting("sync/上传与恢复"))
+	tt.Frame()
 	if err := tt.Click("立即上传"); err != nil {
 		t.Fatal(err)
 	}
@@ -842,6 +846,8 @@ func TestSyncPageUploadsListsAndMergesThroughTheBackend(t *testing.T) {
 	if !tt.HasText("家里的电脑") {
 		t.Fatalf("没有列出另一台电脑：%q", tt.Texts())
 	}
+	s.locateSetting(setting("sync/上传与恢复"))
+	tt.Frame()
 	if err := tt.Click("恢复 家里的电脑"); err != nil {
 		t.Fatal(err)
 	}
@@ -861,11 +867,54 @@ func TestSyncPageUploadsListsAndMergesThroughTheBackend(t *testing.T) {
 	}
 	// 失败要显示原因
 	store.fail = "probe"
+	s.locateSetting(setting("sync/同步服务"))
+	tt.Frame()
 	if err := tt.Click("保存并测试连接"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
 	if !tt.HasText("连接失败：测试错误") {
 		t.Fatalf("没有显示失败原因：%q", tt.Texts())
+	}
+}
+
+func TestSyncBackupPasswordSealsAndOpensSnapshots(t *testing.T) {
+	rawStore := &memStore{files: map[string][]byte{}}
+	file := filepath.Join(t.TempDir(), "snapshot.json")
+	body := []byte("{\n  \"format\": \"freetype-settings\",\n  \"secret_word\": \"绝密词条\"\n}\n")
+	if err := os.WriteFile(file, body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	encConfig := syncSettings{Encrypt: true, EncryptPassword: "correct-horse-battery-staple"}
+	sealedStore := withBackupPassword(rawStore, encConfig)
+	device, err := uploadSnapshot(sealedStore, deviceA, "加密电脑", file, time.Date(2026, 11, 18, 8, 0, 0, 0, time.Local))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire := rawStore.files[device.snapshotKey()]
+	if bytes.Contains(wire, []byte("绝密词条")) || !bytes.Contains(wire, []byte(sealedFormat)) {
+		t.Fatalf("远端快照正文必须加密且不暴露明文词条：%s", wire)
+	}
+	// 首行设备信息保持明文，不填密码也能列举远端设备
+	devices, err := listDevices(rawStore)
+	if err != nil || len(devices) != 1 || devices[0].Hostname != "加密电脑" {
+		t.Fatalf("列举加密快照不应要求密码：%+v %v", devices, err)
+	}
+	out := filepath.Join(t.TempDir(), "restored.json")
+	noPassStore := withBackupPassword(rawStore, syncSettings{})
+	if err := downloadSnapshot(noPassStore, devices[0], out); !errors.Is(err, errBackupLocked) {
+		t.Fatalf("没填密码下载加密快照应提示需要密码：%v", err)
+	}
+	wrongStore := withBackupPassword(rawStore, syncSettings{EncryptPassword: "wrong-password"})
+	if err := downloadSnapshot(wrongStore, devices[0], out); !errors.Is(err, errBackupPassword) {
+		t.Fatalf("密码不对下载加密快照应报错：%v", err)
+	}
+	// 另一台电脑即使没开上传加密，只要填了同一个备份密码就能恢复
+	readerStore := withBackupPassword(rawStore, syncSettings{Encrypt: false, EncryptPassword: "correct-horse-battery-staple"})
+	if err := downloadSnapshot(readerStore, devices[0], out); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(out); !bytes.Equal(got, body) {
+		t.Fatalf("解密后必须与原文完全一致：%s", got)
 	}
 }

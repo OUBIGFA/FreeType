@@ -12,14 +12,14 @@ func (s *settings) commonPage(c *ui.Context) {
 	pageHeader(c, "常用语", "常用语不需要编码。启用工具栏后，在全拼状态下按 v + 空格，再选择「常用语」。")
 	section(c, "添加", func() {
 		s.settingBlock(c, "common/添加常用语", func() {
-			ui.Column(c).Padding(16, 18).Gap(12).Children(func() {
+			ui.Column(c).Padding(12, rowInset, 14, rowInset).Gap(14).Children(func() {
 				ui.Column(c).Children(func() {
 					ui.TextArea(c, &s.newCommon).Label("常用语内容").Placeholder("输入常用语，支持多行").Height(80)
 				})
 				if s.commonError != "" {
 					ui.Text(c, s.commonError).TextColor(c.Theme().Danger).Wrap()
 				}
-				if ui.PrimaryButton(c, "添加常用语").Clicked() {
+				if ui.PrimaryButton(c, "添加常用语").AlignSelf(ui.Start).Clicked() {
 					s.addCommonPhrase()
 				}
 			})
@@ -37,9 +37,9 @@ func (s *settings) commonPage(c *ui.Context) {
 		})
 	})
 	s.reportView(c)
-	ui.Row(c).Margin(16, 0, 0, 0).Gap(12).AlignItems(ui.Center).Children(func() {
-		ui.Textf(c, "全部常用语（%d）", len(s.common)).FontSize(14).FontWeight(600).Grow(1)
-		ui.SearchField(c, &s.commonQuery).Placeholder("搜索常用语").Width(240)
+	ui.Row(c).Margin(18, 0, 0, 0).Padding(0, 4).Gap(12).Wrap().AlignItems(ui.Center).Children(func() {
+		ui.Textf(c, "全部常用语（%d）", len(s.common)).FontSize(textSize(c, 13)).FontWeight(600).TextColor(colors(c).muted).Grow(1).Basis(180).Wrap()
+		ui.SearchField(c, &s.commonQuery).Label("搜索常用语").Placeholder("搜索常用语").Width(240).MaxWidthPercent(100).Shrink(1)
 	})
 	section(c, "", func() {
 		s.settingBlock(c, "common/全部常用语", func() {
@@ -55,14 +55,18 @@ func (s *settings) commonPage(c *ui.Context) {
 				if query != "" {
 					title = "没有匹配的常用语"
 				}
-				row(c, title, "", nil)
+				row(c, title, "在上方添加内容，或导入已有文件。", nil)
 				return
 			}
 			remove := -1
 			ui.List(c, nil, len(shown), func(k int) {
 				i := shown[k]
-				ui.Row(c).Height(phraseRow).Padding(0, 18).Gap(14).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, preview(s.common[i])).Grow(1).Shrink(1).SingleLine()
+				item := ui.Row(c).Height(phraseRow).Padding(0, rowInset).Gap(12).AlignItems(ui.Center)
+				if item.Hovered() {
+					item.Background(colors(c).cardHover)
+				}
+				item.Children(func() {
+					ui.Text(c, preview(s.common[i])).Grow(1).Basis(0).MinWidth(0).Shrink(1).SingleLine().Tooltip(s.common[i])
 					if ui.Button(c, "删除").Label(fmt.Sprintf("删除常用语 %d", i+1)).Clicked() {
 						remove = i
 					}

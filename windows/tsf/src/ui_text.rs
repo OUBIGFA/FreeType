@@ -15,7 +15,7 @@ use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, IDWriteTextLayout,
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
     DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD,
-    DWRITE_TEXT_METRICS, DWRITE_TEXT_RANGE, DWRITE_WORD_WRAPPING_NO_WRAP,
+    DWRITE_LINE_METRICS, DWRITE_TEXT_METRICS, DWRITE_TEXT_RANGE, DWRITE_WORD_WRAPPING_NO_WRAP,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::HDC;
@@ -30,7 +30,15 @@ pub struct Fonts {
     pub main: Font,
     pub small: Font,
     pub hint: Font,
+    /// 候选正文里汉字的墨迹中线在基线上方多远（像素），见 [`Font::rise`]。
+    pub main_rise: f32,
+    /// 标号里数字的墨迹中线在基线上方多远。
+    pub small_rise: f32,
 }
+
+/// 量墨迹中线用的样本：占满字面的汉字、数字。只拿来量这个字体把字画在哪，不是写死的偏移。
+const HAN_SAMPLE: &str = "国";
+const DIGIT_SAMPLE: &str = "0";
 
 impl Fonts {
     pub fn new(size: f32, family: &str) -> Result<Self> {
@@ -60,19 +68,54 @@ impl Fonts {
                 format,
             })
         };
+        let main = make(size, DWRITE_FONT_WEIGHT_NORMAL)?;
+        let small = make((size * 0.78).round(), DWRITE_FONT_WEIGHT_NORMAL)?;
         Ok(Self {
-            main: make(size, DWRITE_FONT_WEIGHT_NORMAL)?,
-            small: make((size * 0.78).round(), DWRITE_FONT_WEIGHT_NORMAL)?,
+            main_rise: main.rise(HAN_SAMPLE)?,
+            small_rise: small.rise(DIGIT_SAMPLE)?,
+            main,
+            small,
             hint: make(size, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
         })
     }
 }
 
+/// 排好的一段文字。
+///
+/// 字体给的行框（上伸、下伸、行距）和字实际画在哪是两回事：有的字体行框上面留得多，
+/// 字就偏下。所以除了框，还记下墨迹的范围和基线，摆位置时按墨迹和基线对齐
+/// （[`Fonts::main_rise`]、[`Text::centered_in`]），换什么字体都居中。
 #[derive(Clone)]
 pub struct Text {
     layout: IDWriteTextLayout,
+    /// 行框加上溢出框外的墨迹；留位置、画的时候都按这个框。
     pub size: SIZE,
     offset: Vector2,
+    /// 墨迹在框里的范围（像素，向外取整）。全是空白的文字没有墨迹，这时是整个框。
+    pub ink: RECT,
+    /// 基线在框里的高度。
+    pub baseline: f32,
+    /// 墨迹上下的中线在框里的高度。
+    middle: f32,
+}
+
+impl Text {
+    /// 墨迹在 `area` 里上下左右都居中时，框的左上角该在哪。
+    pub fn centered_in(&self, area: &RECT) -> (f32, f32) {
+        let x = (area.left + area.right - self.ink.left - self.ink.right) as f32 / 2.0;
+        let y = (area.top + area.bottom) as f32 / 2.0 - self.middle;
+        (x.round(), y.round())
+    }
+
+    /// 框的左上角在 (x, y) 时墨迹占的地方（向外取整）。
+    pub fn ink_at(&self, x: f32, y: f32) -> RECT {
+        RECT {
+            left: (x + self.ink.left as f32).floor() as i32,
+            top: (y + self.ink.top as f32).floor() as i32,
+            right: (x + self.ink.right as f32).ceil() as i32,
+            bottom: (y + self.ink.bottom as f32).ceil() as i32,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -89,6 +132,15 @@ impl Text {
 }
 
 impl Font {
+    /// 这个字体画 `sample` 时，墨迹上下的中线在基线上方多远（像素）。
+    ///
+    /// 从排好的版里量，不查字体文件里的上伸、下伸：那两个数很多中文字体填得不准，
+    /// 而且字体里没有这个字、系统换了别的字体来画时，量到的也是真正用上的那个字体。
+    fn rise(&self, sample: &str) -> Result<f32> {
+        let text = self.text(sample)?;
+        Ok(text.baseline - text.middle)
+    }
+
     pub fn text(&self, text: &str) -> Result<Text> {
         unsafe {
             let layout = self.factory.CreateTextLayout(
@@ -120,19 +172,45 @@ impl Font {
             }
             let mut metrics = DWRITE_TEXT_METRICS::default();
             layout.GetMetrics(&mut metrics)?;
-            layout.SetMaxWidth(metrics.widthIncludingTrailingWhitespace.max(1.0))?;
-            layout.SetMaxHeight(metrics.height.max(1.0))?;
+            let (width, height) = (metrics.widthIncludingTrailingWhitespace.max(1.0), metrics.height.max(1.0));
+            layout.SetMaxWidth(width)?;
+            layout.SetMaxHeight(height)?;
             let overhang = layout.GetOverhangMetrics()?;
             let left = overhang.left.max(0.0).ceil();
             let top = overhang.top.max(0.0).ceil();
+            let size = SIZE {
+                cx: (width + left + overhang.right.max(0.0)).ceil() as i32,
+                cy: (height + top + overhang.bottom.max(0.0)).ceil() as i32,
+            };
+            // 候选都只有一行（换行已经画成 ⏎）；万一有几行，按第一行的基线
+            let mut lines = [DWRITE_LINE_METRICS::default()];
+            let mut count = 0;
+            let _ = layout.GetLineMetrics(Some(&mut lines), &mut count);
+            let baseline = top + if count > 0 { lines[0].baseline } else { height };
+            // 溢出量是从行框的边往外算的：负数表示墨迹在框里面
+            let ink = D2D_RECT_F {
+                left: left - overhang.left,
+                top: top - overhang.top,
+                right: left + width + overhang.right,
+                bottom: top + height + overhang.bottom,
+            };
+            let blank = ink.right <= ink.left || ink.bottom <= ink.top;
             Ok(Text {
                 layout,
-                size: SIZE {
-                    cx: (metrics.widthIncludingTrailingWhitespace + left + overhang.right.max(0.0))
-                        .ceil() as i32,
-                    cy: (metrics.height + top + overhang.bottom.max(0.0)).ceil() as i32,
-                },
+                size,
                 offset: Vector2 { X: left, Y: top },
+                ink: if blank {
+                    RECT { left: 0, top: 0, right: size.cx, bottom: size.cy }
+                } else {
+                    RECT {
+                        left: ink.left.floor() as i32,
+                        top: ink.top.floor() as i32,
+                        right: ink.right.ceil() as i32,
+                        bottom: ink.bottom.ceil() as i32,
+                    }
+                },
+                baseline,
+                middle: if blank { size.cy as f32 / 2.0 } else { (ink.top + ink.bottom) / 2.0 },
             })
         }
     }
@@ -210,21 +288,15 @@ impl Painter {
         }
     }
 
-    pub fn text(&self, area: &RECT, text: &Text, c: COLORREF, center: bool) {
-        let x = area.left
-            + if center {
-                ((area.right - area.left - text.size.cx) / 2).max(0)
-            } else {
-                0
-            };
-        let y = area.top + ((area.bottom - area.top - text.size.cy) / 2).max(0);
+    /// 把文字画出来，框的左上角在 (x, y)。
+    pub fn text(&self, x: f32, y: f32, text: &Text, c: COLORREF) {
         unsafe {
             self.brush.SetColor(&color(c));
             // Windows 不默认启用彩色字形；这里必须显式打开，不能再退回 GDI 拆画 emoji。
             self.target.DrawTextLayout(
                 Vector2 {
-                    X: x as f32 + text.offset.X,
-                    Y: y as f32 + text.offset.Y,
+                    X: x + text.offset.X,
+                    Y: y + text.offset.Y,
                 },
                 &text.layout,
                 &self.brush,

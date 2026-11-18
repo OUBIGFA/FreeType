@@ -1,4 +1,7 @@
 //! 完整设置备份。只读写应用拥有的数据文件；学习记录直接复用核心的备份格式。
+//!
+//! 备份里的数据分成几类（[`BackupPart`]）。导出时可以只选几类：没选的类别不写进文件。
+//! 导入时文件里有哪几类就替换哪几类，没有的类别本机保持不变。云端同步用的快照总是全部类别。
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
@@ -7,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use freetype_protocol::{Config, ImportReport, Mode, QuickPhrase};
+use freetype_protocol::{BackupPart, Config, ImportReport, Mode, QuickPhrase};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use wowtype_core::{msime, BigramLm, Engine, MemoryLexicon};
@@ -57,9 +60,74 @@ pub(crate) struct SettingsBackup {
     _sync_metadata: Option<Value>,
 }
 
+/// 校验过的备份。`data` 里没有的类别是空值，用之前先问 [`PreparedBackup::has`]。
 pub(crate) struct PreparedBackup {
     pub data: SettingsBackup,
     learned: Engine,
+    /// 备份里有的类别。
+    parts: Vec<BackupPart>,
+}
+
+/// 一类数据在备份文件里占哪些字段：（必有的，可以没有的）。
+/// 文件里出现了其中任何一个字段就算有这一类，这时必有的字段都要在。
+fn part_fields(part: BackupPart) -> (&'static [&'static str], &'static [&'static str]) {
+    match part {
+        BackupPart::Settings => (&["config", "mode"], &["status_bar_position"]),
+        BackupPart::Dictionaries => (&["dictionaries"], &["main_lexicon"]),
+        BackupPart::QuickPhrases => (&["quick_phrases"], &[]),
+        BackupPart::CommonPhrases => (&["common_phrases"], &[]),
+        BackupPart::Learning => (&["learning", "recent_emoji"], &[]),
+    }
+}
+
+/// 一类数据在数据目录里是哪些文件（导入的词库 `dicts\*.txt` 另算）。
+/// 自定义主词库的位置记在 `config.json` 里，所以词库这一类也要改它。
+fn part_files(part: BackupPart) -> &'static [&'static str] {
+    match part {
+        BackupPart::Settings => &["config.json", "mode.json", "statusbar.txt"],
+        BackupPart::Dictionaries => &["config.json", MAIN_LEXICON],
+        BackupPart::QuickPhrases => &["quick_phrases.txt"],
+        BackupPart::CommonPhrases => &["common_phrases.json"],
+        BackupPart::Learning => &["user.tsv", "history.tsv", "emoji-recent.txt"],
+    }
+}
+
+fn part_name(part: BackupPart) -> &'static str {
+    match part {
+        BackupPart::Settings => "设置",
+        BackupPart::Dictionaries => "词库",
+        BackupPart::QuickPhrases => "快捷短语",
+        BackupPart::CommonPhrases => "常用语",
+        BackupPart::Learning => "学习记录",
+    }
+}
+
+/// 认出备份文件里有哪几类数据。没有的类别补上空值，好按同一个结构读。
+fn present_parts(value: &mut Value) -> Result<Vec<BackupPart>, String> {
+    let Some(object) = value.as_object_mut() else {
+        return Err("全部设置备份格式不正确：不是 JSON 对象".into());
+    };
+    let mut parts = Vec::new();
+    for part in BackupPart::ALL {
+        let (required, optional) = part_fields(part);
+        if !required.iter().chain(optional).any(|key| object.contains_key(*key)) {
+            for key in required {
+                let empty = match *key {
+                    "config" => serde_json::to_value(Config::default()).map_err(|error| error.to_string())?,
+                    "mode" => serde_json::to_value(Mode::default()).map_err(|error| error.to_string())?,
+                    "learning" => Value::Null,
+                    _ => Value::Array(Vec::new()),
+                };
+                object.insert((*key).to_string(), empty);
+            }
+            continue;
+        }
+        if let Some(missing) = required.iter().find(|key| !object.contains_key(**key)) {
+            return Err(format!("全部设置备份不完整：有{}，但缺少 {missing}", part_name(part)));
+        }
+        parts.push(part);
+    }
+    Ok(parts)
 }
 
 fn optional_text(path: &Path) -> Result<Option<String>, String> {
@@ -87,6 +155,7 @@ fn dictionary_paths(dir: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(paths)
 }
 
+/// 把 `parts` 这几类数据写成备份文件。
 pub(crate) fn export(
     store: &Store,
     config: &Config,
@@ -94,80 +163,100 @@ pub(crate) fn export(
     recent_emoji: &[String],
     engine: &Engine,
     path: &Path,
+    parts: &[BackupPart],
 ) -> Result<ImportReport, String> {
-    let (text, report) = snapshot(store, config, mode, recent_emoji, engine)?;
+    let (text, report) = snapshot_of(store, config, mode, recent_emoji, engine, parts)?;
     write_atomic(path, &text).map_err(|error| format!("写入全部设置备份失败：{error}"))?;
     Ok(report)
 }
 
-/// 同一份序列化用于导出和条件恢复比较，避免下载期间的新编辑被覆盖。
+/// 全部数据的快照。同一份序列化用于导出和条件恢复比较，避免下载期间的新编辑被覆盖。
 pub(crate) fn snapshot(
     store: &Store, config: &Config, mode: Mode, recent_emoji: &[String], engine: &Engine,
 ) -> Result<(String, ImportReport), String> {
-    let quick = optional_text(&store.dir().join("quick_phrases.txt"))?.unwrap_or_default();
-    let parsed = msime::parse_quick_phrases(&quick);
-    if !parsed.errors.is_empty() {
-        return Err("快捷短语文件有错误，请先修正后再备份".into());
+    snapshot_of(store, config, mode, recent_emoji, engine, &BackupPart::ALL)
+}
+
+/// 只读取选中的类别：没选的数据不读、不校验，也不会进文件。
+fn snapshot_of(
+    store: &Store, config: &Config, mode: Mode, recent_emoji: &[String], engine: &Engine, parts: &[BackupPart],
+) -> Result<(String, ImportReport), String> {
+    let has = |part: BackupPart| parts.contains(&part);
+    let mut quick_phrases = Vec::new();
+    if has(BackupPart::QuickPhrases) {
+        let quick = optional_text(&store.dir().join("quick_phrases.txt"))?.unwrap_or_default();
+        let parsed = msime::parse_quick_phrases(&quick);
+        if !parsed.errors.is_empty() {
+            return Err("快捷短语文件有错误，请先修正后再备份".into());
+        }
+        quick_phrases = parsed
+            .items
+            .into_iter()
+            .map(|p| QuickPhrase {
+                code: p.code,
+                text: p.text,
+                weight: p.weight,
+            })
+            .collect();
     }
-    let quick_phrases = parsed
-        .items
-        .into_iter()
-        .map(|p| QuickPhrase {
-            code: p.code,
-            text: p.text,
-            weight: p.weight,
-        })
-        .collect();
     let mut dictionaries = Vec::new();
-    for file in dictionary_paths(&store.dir().join("dicts"))? {
-        let name = file
-            .file_stem()
-            .and_then(|name| name.to_str())
-            .ok_or("词库文件名不是有效文字")?
-            .to_string();
-        let text = fs::read_to_string(&file).map_err(|error| format!("读取词库失败：{error}"))?;
-        dictionaries.push(BackupDictionary { name, text });
+    let mut main_lexicon = None;
+    if has(BackupPart::Dictionaries) {
+        for file in dictionary_paths(&store.dir().join("dicts"))? {
+            let name = file
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .ok_or("词库文件名不是有效文字")?
+                .to_string();
+            let text = fs::read_to_string(&file).map_err(|error| format!("读取词库失败：{error}"))?;
+            dictionaries.push(BackupDictionary { name, text });
+        }
+        if !config.lexicon.is_empty() {
+            main_lexicon =
+                Some(fs::read_to_string(&config.lexicon).map_err(|error| format!("读取自定义主词库失败：{error}"))?);
+        }
     }
-    let main_lexicon = if config.lexicon.is_empty() {
-        None
-    } else {
-        Some(fs::read_to_string(&config.lexicon).map_err(|error| format!("读取自定义主词库失败：{error}"))?)
-    };
     let mut config = config.clone();
     config.lexicon.clear();
-    let status_bar_position = optional_text(&store.dir().join("statusbar.txt"))?
-        .map(|text| {
-            let (x, y) = text.trim().split_once(',').ok_or("悬浮状态栏位置格式不正确")?;
-            Ok::<_, String>([
-                x.trim().parse().map_err(|_| "悬浮状态栏横坐标不正确")?,
-                y.trim().parse().map_err(|_| "悬浮状态栏纵坐标不正确")?,
-            ])
-        })
-        .transpose()?;
-    let learning = serde_json::from_str(
-        &engine
-            .export_learning()
-            .map_err(|error| format!("读取学习记录失败：{error:#}"))?,
-    )
-    .map_err(|error| error.to_string())?;
+    let mut status_bar_position = None;
+    if has(BackupPart::Settings) {
+        status_bar_position = optional_text(&store.dir().join("statusbar.txt"))?
+            .map(|text| {
+                let (x, y) = text.trim().split_once(',').ok_or("悬浮状态栏位置格式不正确")?;
+                Ok::<_, String>([
+                    x.trim().parse().map_err(|_| "悬浮状态栏横坐标不正确")?,
+                    y.trim().parse().map_err(|_| "悬浮状态栏纵坐标不正确")?,
+                ])
+            })
+            .transpose()?;
+    }
+    let (mut learning, mut recent) = (Value::Null, Vec::new());
+    if has(BackupPart::Learning) {
+        learning = serde_json::from_str(
+            &engine
+                .export_learning()
+                .map_err(|error| format!("读取学习记录失败：{error:#}"))?,
+        )
+        .map_err(|error| error.to_string())?;
+        recent = recent_emoji.to_vec();
+    }
     let data = SettingsBackup {
         format: "freetype-settings".into(),
         version: 1,
         config,
         mode,
         quick_phrases,
-        common_phrases: store.load_common_phrases()?,
+        common_phrases: if has(BackupPart::CommonPhrases) { store.load_common_phrases()? } else { Vec::new() },
         dictionaries,
         learning,
-        recent_emoji: recent_emoji.to_vec(),
+        recent_emoji: recent,
         status_bar_position,
         main_lexicon,
         _sync_connection: None,
         _sync_metadata: None,
     };
-    let prepared = prepare(data)?;
-    let text = serde_json::to_string_pretty(&prepared.data).map_err(|error| error.to_string())? + "\n";
-    Ok((text, prepared.report()))
+    let prepared = prepare(data, BackupPart::ALL.into_iter().filter(|part| has(*part)).collect())?;
+    Ok((prepared.text()?, prepared.report()))
 }
 
 /// 首次同步和服务重启后，使用数据文件的时间，不能使用本次导出文件的时间。
@@ -193,12 +282,15 @@ pub(crate) fn modified_unix_ms(store: &Store, config: &Config) -> Result<u64, St
 
 pub(crate) fn read(path: &Path) -> Result<PreparedBackup, String> {
     let text = fs::read_to_string(path).map_err(|error| format!("读取全部设置备份失败：{error}"))?;
-    let data = serde_json::from_str(text.trim_start_matches('\u{feff}'))
+    let mut value: Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
         .map_err(|error| format!("全部设置备份格式不正确：{error}"))?;
-    prepare(data)
+    let parts = present_parts(&mut value)?;
+    let data = serde_json::from_value(value).map_err(|error| format!("全部设置备份格式不正确：{error}"))?;
+    prepare(data, parts)
 }
 
-fn prepare(mut data: SettingsBackup) -> Result<PreparedBackup, String> {
+/// 校验整份备份。没有的类别是空值，下面对各类的检查对空值都成立；学习记录没有就不读。
+fn prepare(mut data: SettingsBackup, parts: Vec<BackupPart>) -> Result<PreparedBackup, String> {
     if data.format != "freetype-settings" || data.version != 1 {
         return Err("不是支持的 FreeType 全部设置备份".into());
     }
@@ -239,10 +331,12 @@ fn prepare(mut data: SettingsBackup) -> Result<PreparedBackup, String> {
     }
     // 用真实核心校验整份学习记录，并预先生成恢复后的数据；不改动运行中的引擎。
     let learned = Engine::new(Arc::new(MemoryLexicon::new()), Arc::new(BigramLm::default()));
-    learned
-        .import_learning(&data.learning.to_string())
-        .map_err(|error| format!("备份中的学习记录不正确：{error:#}"))?;
-    Ok(PreparedBackup { data, learned })
+    if parts.contains(&BackupPart::Learning) {
+        learned
+            .import_learning(&data.learning.to_string())
+            .map_err(|error| format!("备份中的学习记录不正确：{error:#}"))?;
+    }
+    Ok(PreparedBackup { data, learned, parts })
 }
 
 /// 合并恢复时各类数据新增了多少。
@@ -254,6 +348,29 @@ pub(crate) struct MergeCounts {
 }
 
 impl PreparedBackup {
+    /// 备份里有没有这一类数据。
+    pub fn has(&self, part: BackupPart) -> bool {
+        self.parts.contains(&part)
+    }
+
+    /// 写成备份文件的内容：只写有的类别。
+    fn text(&self) -> Result<String, String> {
+        if BackupPart::ALL.into_iter().all(|part| self.has(part)) {
+            // 全部类别：和以前逐字节一样（自动同步按内容比较本机和云端的新旧）
+            return Ok(serde_json::to_string_pretty(&self.data).map_err(|error| error.to_string())? + "\n");
+        }
+        let mut value = serde_json::to_value(&self.data).map_err(|error| error.to_string())?;
+        if let Some(object) = value.as_object_mut() {
+            for part in BackupPart::ALL.into_iter().filter(|part| !self.has(*part)) {
+                let (required, optional) = part_fields(part);
+                for key in required.iter().chain(optional) {
+                    object.remove(*key);
+                }
+            }
+        }
+        Ok(serde_json::to_string_pretty(&value).map_err(|error| error.to_string())? + "\n")
+    }
+
     /// 合并恢复用的设置：以本机为底，只采纳备份里和出厂默认值不同的项
     /// （那台设备上用户改过的）；备份里还是默认值的项不动本机。
     /// 主词库路径是各设备自己的，备份里总是空的，所以不会被改。
@@ -313,31 +430,60 @@ impl PreparedBackup {
         Ok(counts)
     }
 
-    pub fn restored_config(&self, store: &Store) -> Config {
-        let mut config = self.data.config.clone();
-        if self.data.main_lexicon.is_some() {
-            config.lexicon = store.dir().join(MAIN_LEXICON).to_string_lossy().into();
-        }
+    /// 恢复以后的设置。`current` 是本机现在的设置：备份里没有的类别沿用它。
+    /// 设置页的选项和主词库的位置是两类数据，各看各的。
+    pub fn restored_config(&self, store: &Store, current: &Config) -> Config {
+        let mut config = if self.has(BackupPart::Settings) { self.data.config.clone() } else { current.clone() };
+        config.lexicon = if !self.has(BackupPart::Dictionaries) {
+            current.lexicon.clone()
+        } else if self.data.main_lexicon.is_some() {
+            store.dir().join(MAIN_LEXICON).to_string_lossy().into()
+        } else {
+            String::new()
+        };
         config
     }
 
+    /// 备份里有什么（给用户看）：有的类别和条数；不是全部类别时写明不含哪些。
     pub fn report(&self) -> ImportReport {
         let words = self.learned.user_words().len();
+        let (mut added, mut included, mut excluded) = (0, Vec::new(), Vec::new());
+        for part in BackupPart::ALL {
+            if !self.has(part) {
+                excluded.push(part_name(part));
+                continue;
+            }
+            included.push(match part {
+                BackupPart::Settings => "全部设置".to_string(),
+                BackupPart::Dictionaries => format!("{} 份词库", self.data.dictionaries.len()),
+                BackupPart::QuickPhrases => {
+                    added += self.data.quick_phrases.len();
+                    format!("{} 条快捷短语", self.data.quick_phrases.len())
+                }
+                BackupPart::CommonPhrases => {
+                    added += self.data.common_phrases.len();
+                    format!("{} 条常用语", self.data.common_phrases.len())
+                }
+                BackupPart::Learning => {
+                    added += words;
+                    format!("{words} 条学到的词及使用记录")
+                }
+            });
+        }
+        let mut note = if included.is_empty() { "没有输入法数据".to_string() } else { included.join("、") };
+        if !excluded.is_empty() && !included.is_empty() {
+            note.push_str(&format!("；不含{}", excluded.join("、")));
+        }
         ImportReport {
-            added: self.data.quick_phrases.len() + self.data.common_phrases.len() + words,
-            note: Some(format!(
-                "全部设置、{} 份词库、{} 条快捷短语、{} 条常用语、{} 条学到的词及使用记录",
-                self.data.dictionaries.len(),
-                self.data.quick_phrases.len(),
-                self.data.common_phrases.len(),
-                words
-            )),
+            added,
+            note: Some(note),
             ..ImportReport::default()
         }
     }
 
     /// 先生成新文件，再逐一替换应用拥有的文件；失败时还原已经移动的旧文件。
-    pub fn restore_files(&self, store: &Store) -> Result<Option<String>, String> {
+    /// 只动备份里有的类别对应的文件。`current` 是本机现在的设置。
+    pub fn restore_files(&self, store: &Store, current: &Config) -> Result<Option<String>, String> {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|error| error.to_string())?
@@ -350,7 +496,7 @@ impl PreparedBackup {
         let fresh = Store::new(scratch.join("new"));
         let old = scratch.join("old");
         let result = self
-            .stage(&fresh, store)
+            .stage(&fresh, store, current)
             .and_then(|()| self.replace_files(store, &fresh, &old));
         match result {
             Ok(()) => Ok(fs::remove_dir_all(&scratch)
@@ -369,72 +515,90 @@ impl PreparedBackup {
         }
     }
 
-    fn stage(&self, fresh: &Store, store: &Store) -> Result<(), String> {
+    /// 把备份里有的类别写成新文件，放在 `fresh` 里等着替换。
+    fn stage(&self, fresh: &Store, store: &Store, current: &Config) -> Result<(), String> {
         let data = &self.data;
-        let phrases: Vec<_> = data
-            .quick_phrases
-            .iter()
-            .map(|p| msime::QuickPhrase {
-                code: p.code.clone(),
-                text: p.text.clone(),
-                weight: p.weight,
-            })
-            .collect();
         let write = |path: PathBuf, text: String| {
             write_atomic(&path, &text).map_err(|error| format!("准备恢复文件失败：{error}"))
         };
-        fresh
-            .save_config(&self.restored_config(store))
-            .map_err(|error| error.to_string())?;
-        fresh.save_mode(data.mode).map_err(|error| error.to_string())?;
-        fresh.save_quick_phrases(&phrases).map_err(|error| error.to_string())?;
-        write(
-            fresh.dir().join("common_phrases.json"),
-            serde_json::to_string_pretty(&data.common_phrases).map_err(|error| error.to_string())? + "\n",
-        )?;
-        fresh
-            .save_recent_emoji(&data.recent_emoji)
-            .map_err(|error| error.to_string())?;
-        self.learned
-            .save_user_dict(fresh.user_dict_path())
-            .map_err(|error| error.to_string())?;
-        self.learned
-            .save_history(fresh.history_path())
-            .map_err(|error| error.to_string())?;
-        for dict in &data.dictionaries {
+        if self.has(BackupPart::Settings) || self.has(BackupPart::Dictionaries) {
+            fresh
+                .save_config(&self.restored_config(store, current))
+                .map_err(|error| error.to_string())?;
+        }
+        if self.has(BackupPart::Settings) {
+            fresh.save_mode(data.mode).map_err(|error| error.to_string())?;
+            if let Some([x, y]) = data.status_bar_position {
+                write(fresh.dir().join("statusbar.txt"), format!("{x},{y}\n"))?;
+            }
+        }
+        if self.has(BackupPart::QuickPhrases) {
+            let phrases: Vec<_> = data
+                .quick_phrases
+                .iter()
+                .map(|p| msime::QuickPhrase {
+                    code: p.code.clone(),
+                    text: p.text.clone(),
+                    weight: p.weight,
+                })
+                .collect();
+            fresh.save_quick_phrases(&phrases).map_err(|error| error.to_string())?;
+        }
+        if self.has(BackupPart::CommonPhrases) {
             write(
-                fresh.dir().join("dicts").join(format!("{}.txt", dict.name)),
-                dict.text.clone(),
+                fresh.dir().join("common_phrases.json"),
+                serde_json::to_string_pretty(&data.common_phrases).map_err(|error| error.to_string())? + "\n",
             )?;
         }
-        if let Some(text) = &data.main_lexicon {
-            write(fresh.dir().join(MAIN_LEXICON), text.clone())?;
+        if self.has(BackupPart::Learning) {
+            fresh
+                .save_recent_emoji(&data.recent_emoji)
+                .map_err(|error| error.to_string())?;
+            self.learned
+                .save_user_dict(fresh.user_dict_path())
+                .map_err(|error| error.to_string())?;
+            self.learned
+                .save_history(fresh.history_path())
+                .map_err(|error| error.to_string())?;
         }
-        if let Some([x, y]) = data.status_bar_position {
-            write(fresh.dir().join("statusbar.txt"), format!("{x},{y}\n"))?;
+        if self.has(BackupPart::Dictionaries) {
+            for dict in &data.dictionaries {
+                write(
+                    fresh.dir().join("dicts").join(format!("{}.txt", dict.name)),
+                    dict.text.clone(),
+                )?;
+            }
+            if let Some(text) = &data.main_lexicon {
+                write(fresh.dir().join(MAIN_LEXICON), text.clone())?;
+            }
         }
         Ok(())
     }
 
     fn replace_files(&self, store: &Store, fresh: &Store, old: &Path) -> Result<(), String> {
         // Windows 文件名不区分大小写。每个文件只替换一次，分别保留原名称和备份名称。
-        let mut paths: BTreeMap<String, (PathBuf, PathBuf)> = PROFILE_FILES
-            .iter()
+        // 只列备份里有的类别的文件：别的类别的文件留在原处不动。
+        let mut paths: BTreeMap<String, (PathBuf, PathBuf)> = BackupPart::ALL
+            .into_iter()
+            .filter(|part| self.has(*part))
+            .flat_map(part_files)
             .map(|name| (name.to_string(), (PathBuf::from(name), PathBuf::from(name))))
             .collect();
-        for path in dictionary_paths(&store.dir().join("dicts"))? {
-            let relative = path
-                .strip_prefix(store.dir())
-                .map_err(|error| error.to_string())?
-                .to_path_buf();
-            paths.insert(relative.to_string_lossy().to_lowercase(), (relative.clone(), relative));
-        }
-        for dict in &self.data.dictionaries {
-            let relative = PathBuf::from("dicts").join(format!("{}.txt", dict.name));
-            let pair = paths
-                .entry(relative.to_string_lossy().to_lowercase())
-                .or_insert((relative.clone(), relative.clone()));
-            pair.1 = relative;
+        if self.has(BackupPart::Dictionaries) {
+            for path in dictionary_paths(&store.dir().join("dicts"))? {
+                let relative = path
+                    .strip_prefix(store.dir())
+                    .map_err(|error| error.to_string())?
+                    .to_path_buf();
+                paths.insert(relative.to_string_lossy().to_lowercase(), (relative.clone(), relative));
+            }
+            for dict in &self.data.dictionaries {
+                let relative = PathBuf::from("dicts").join(format!("{}.txt", dict.name));
+                let pair = paths
+                    .entry(relative.to_string_lossy().to_lowercase())
+                    .or_insert((relative.clone(), relative.clone()));
+                pair.1 = relative;
+            }
         }
         let root = fs::canonicalize(store.dir()).map_err(|error| format!("读取数据目录失败：{error}"))?;
         for (relative, _) in paths.values() {

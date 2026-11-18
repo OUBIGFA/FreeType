@@ -44,12 +44,12 @@ func (s *settings) view(c *ui.Context) {
 
 func (s *settings) body(c *ui.Context, p palette) {
 	ui.Row(c).Grow(1).Children(func() {
-		ui.Column(c).Width(236).FillHeight().Padding(4, 10, 12, 10).Gap(14).Children(func() {
-			ui.Row(c).Gap(10).AlignItems(ui.Center).Padding(0, 8).Children(func() {
-				s.logo(c, 30)
-				ui.Column(c).Children(func() {
-					ui.Text(c, "FreeType").FontSize(15).FontWeight(600)
-					ui.Text(c, "输入法设置").FontSize(12).TextColor(p.muted)
+		ui.Column(c).Width(236).FillHeight().Padding(4, 12, 16, 12).Gap(14).Children(func() {
+			ui.Row(c).Gap(10).AlignItems(ui.Center).Padding(2, 8).Children(func() {
+				s.logo(c, 32)
+				ui.Column(c).Gap(1).Children(func() {
+					ui.Text(c, "FreeType").FontSize(textSize(c, 15)).FontWeight(600)
+					ui.Text(c, "输入法设置").FontSize(textSize(c, 12)).TextColor(p.muted)
 				})
 			})
 			ui.Scroll(c).Grow(1).FillWidth().Children(func() {
@@ -74,7 +74,7 @@ func (s *settings) body(c *ui.Context, p palette) {
 		if strings.TrimSpace(s.settingQuery) != "" {
 			contentKey, scroll = "search", &s.searchScroll
 		}
-		ui.Scroll(c).Key(contentKey).TrackScroll(scroll).Grow(1).FillHeight().Padding(6, 32, 40, 32).Children(func() {
+		ui.Scroll(c).Key(contentKey).TrackScroll(scroll).Grow(1).FillHeight().Padding(8, 28, 36, 28).Children(func() {
 			// 宽度不变，窗口宽了左右留出一样的空
 			ui.Column(c).MaxWidth(860).FillWidth().Margin(0, ui.Auto).Gap(6).Children(func() {
 				if strings.TrimSpace(s.settingQuery) != "" {
@@ -110,28 +110,46 @@ func (s *settings) body(c *ui.Context, p palette) {
 	})
 }
 
-// logo 画安装目录里的图标（测试里没有，就画一个字母）。
+// 安装资源不在绘制期间变化；每个位置只读、解码一次，避免每帧重复磁盘 I/O。
+// 测试没有资源目录时保留原来的字母占位。
 func (s *settings) logo(c *ui.Context, size float32) {
-	if s.resources != "" {
-		if data, err := os.ReadFile(filepath.Join(s.resources, "icons", "logo.png")); err == nil {
-			if img, err := ui.DecodeImage(data); err == nil {
-				ui.Image(c, img).Size(size, size)
-				return
+	box := ui.Column(c).Size(size, size).Shrink(0)
+	image := ui.Local[ui.ImageSource](box, s.resources, func() ui.ImageSource {
+		if s.resources != "" {
+			if data, err := os.ReadFile(filepath.Join(s.resources, "icons", "logo.png")); err == nil {
+				if decoded, err := ui.DecodeImage(data); err == nil {
+					return decoded
+				}
 			}
 		}
-	}
-	ui.Text(c, "F").FontSize(size*0.6).FontWeight(700).TextColor(c.Theme().AccentText).
-		Size(size, size).Radius(size / 4).Background(c.Theme().Accent).Center()
+		return nil
+	})
+	box.Children(func() {
+		if *image != nil {
+			ui.Image(c, *image).Size(size, size)
+			return
+		}
+		ui.Text(c, "F").FontSize(size*0.56).FontWeight(600).TextColor(ui.Hex("#18181b")).TextAlign(ui.Center).
+			Size(size, size).Radius(controlRadius).Background(brandPink).Center()
+	})
 }
 
 // statusCard 是常规页顶上的服务状态。
 func (s *settings) statusCard(c *ui.Context) {
 	p := colors(c)
 	t := c.Theme()
-	ui.Row(c).Gap(16).Padding(18, 20).Radius(8).Background(p.card).Border(1, p.border).AlignItems(ui.Center).Children(func() {
+	card := ui.Row(c).Gap(16).Padding(18, rowInset).Radius(panelRadius).Background(p.card).Border(1, p.border).AlignItems(ui.Center)
+	if !c.Preferences().HighContrast {
+		alpha := float32(0.03)
+		if t.Dark {
+			alpha = 0.18
+		}
+		card.Shadow(0, 1, 3, 0, ui.RGBA(0, 0, 0, alpha))
+	}
+	card.Children(func() {
 		s.logo(c, 44)
-		ui.Column(c).Grow(1).Gap(4).Children(func() {
-			ui.Text(c, "FreeType 输入法").FontSize(17).FontWeight(600)
+		ui.Column(c).Grow(1).Basis(0).MinWidth(0).Gap(4).Children(func() {
+			ui.Text(c, "FreeType 输入法").FontSize(textSize(c, 16)).FontWeight(600).Wrap()
 			switch {
 			case s.statusErr != "":
 				ui.Text(c, "无法连接输入法服务："+s.statusErr).TextColor(t.Danger).Wrap()
@@ -141,8 +159,8 @@ func (s *settings) statusCard(c *ui.Context) {
 				ui.Text(c, "输入法服务正在载入词库…").TextColor(p.muted)
 			default:
 				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, "●").FontSize(10).TextColor(t.Success)
-					ui.Text(c, "正在运行 · 版本 "+s.version).TextColor(p.muted)
+					ui.Icon(c, statusCheck).FontSize(textSize(c, 15)).TextColor(t.Success)
+					ui.Text(c, "正在运行 · 版本 "+s.version).FontSize(textSize(c, 13)).TextColor(p.muted).Wrap()
 				})
 			}
 		})
@@ -229,7 +247,7 @@ func (s *settings) candidatesPage(c *ui.Context) {
 		s.settingRow(c, "candidates/字体", func() {
 			family := s.config.FontFamily
 			ui.Column(c).Children(func() {
-				if ui.Combobox(c, &family, s.fontList(fontNames)).Label("字体").Width(240).Changed() && family != "" {
+				if ui.Combobox(c, &family, s.fontList(fontNames)).Label("字体").Width(240).MaxWidthPercent(100).Shrink(1).Changed() && family != "" {
 					s.config.FontFamily = family
 					changed = true
 				}
@@ -286,16 +304,16 @@ func candidateStyle(id string, dark bool) selectedLook {
 	switch id {
 	case "blue":
 		if dark {
-			return selectedLook{true, ui.Hex("#3d7ff0"), ui.Hex("#ffffff")}
+			return selectedLook{true, ui.Hex("#3d7ff0"), ui.Hex("#18181b")}
 		}
 		return selectedLook{true, ui.Hex("#2b6ce6"), ui.Hex("#ffffff")}
 	case "green":
-		return selectedLook{true, ui.Hex("#07c160"), ui.Hex("#ffffff")}
+		return selectedLook{true, ui.Hex("#07c160"), ui.Hex("#18181b")}
 	case "sogou":
 		if dark {
 			return selectedLook{false, ui.Color{}, ui.Hex("#6c9eff")}
 		}
-		return selectedLook{false, ui.Color{}, ui.Hex("#1e6fff")}
+		return selectedLook{false, ui.Color{}, ui.Hex("#1d66df")}
 	default:
 		return selectedLook{true, brandPink, ui.Hex("#18181b")}
 	}
@@ -305,42 +323,55 @@ func candidateStyle(id string, dark bool) selectedLook {
 func (s *settings) candidatePreview(c *ui.Context) {
 	p := colors(c)
 	t := c.Theme()
-	family, size := s.config.FontFamily, float32(s.config.FontSize)
+	family, size := s.config.FontFamily, textSize(c, float32(s.config.FontSize))
 	all := []string{"你好", "拟好", "你", "泥", "妮", "逆", "呢", "倪", "腻", "溺"}
 	words := all[:min(max(s.config.PageSize, 1), len(all))]
-	ui.Column(c).Padding(24, 28).Radius(8).Background(p.card).Border(1, p.border).AlignItems(ui.Center).Gap(10).Children(func() {
-		ui.Text(c, "预览").FontSize(12).TextColor(p.muted)
-		box := ui.Column(c).Padding(8).Radius(8).Background(t.Background).Border(1, p.border).
-			Shadow(0, 4, 14, 0, ui.RGBA(0, 0, 0, 0.12)).Gap(4)
-		box.Children(func() {
-			ui.Text(c, "ni hao").Font(family).FontSize(size*0.78).TextColor(p.muted).Padding(0, 4)
-			list := ui.Row(c).Gap(2)
-			if !s.config.Horizontal {
-				list = ui.Column(c).Gap(2)
-			}
-			list.Children(func() {
-				defer func() {
-					// 和真的候选窗一样，最后是翻页箭头
-					ui.Row(c).Gap(6).Padding(3, 8).Children(func() {
-						ui.Text(c, "‹").Font(family).FontSize(size).TextColor(p.border)
-						ui.Text(c, "›").Font(family).FontSize(size).TextColor(t.Text)
-					})
-				}()
-				style := candidateStyle(s.config.CandidateStyle, t.Dark)
-				for i, w := range words {
-					item := ui.Row(c).Gap(4).Padding(3, 6).Radius(6).AlignItems(ui.Center)
-					label, text := p.muted, t.Text
-					if i == 0 {
-						if style.block {
-							item.Background(style.fill)
-						}
-						label, text = style.text, style.text
+	ui.Column(c).FillWidth().Gap(8).Margin(4, 0, 0, 0).Children(func() {
+		ui.Text(c, "预览").FontSize(textSize(c, 13)).FontWeight(600).TextColor(p.muted).Padding(0, 4)
+		// 外层画安静的预览舞台，横排按真实字号绘制；超出可用宽度时在预览内滚动，不压缩候选词。
+		ui.Column(c).FillWidth().Padding(16, rowInset, 12, rowInset).Radius(panelRadius).
+			Background(p.subtle).Border(1, p.border).Children(func() {
+			ui.ScrollHorizontal(c).FillWidth().MinWidth(0).Padding(2, 2, 10, 2).Children(func() {
+				popup := ui.Column(c).Padding(8, 10).Radius(panelRadius).Background(p.card).Border(1, p.border).
+					AlignSelf(ui.Start).Shrink(0).Gap(4)
+				if !c.Preferences().HighContrast {
+					alpha := float32(0.06)
+					if t.Dark {
+						alpha = 0.28
 					}
-					item.Children(func() {
-						ui.Text(c, fmt.Sprint((i+1)%10)).Font(family).FontSize(size * 0.78).TextColor(label)
-						ui.Text(c, w).Font(family).FontSize(size).TextColor(text)
-					})
+					popup.Shadow(0, 2, 8, 0, ui.RGBA(0, 0, 0, alpha))
 				}
+				popup.Children(func() {
+					ui.Text(c, "ni hao").Font(family).FontSize(size*0.78).TextColor(p.muted).Padding(0, 4)
+					list := ui.Row(c).Gap(2)
+					if !s.config.Horizontal {
+						list = ui.Column(c).Gap(2)
+					}
+					list.Children(func() {
+						defer func() {
+							// 和真的候选窗一样，最后是翻页箭头
+							ui.Row(c).Gap(6).Padding(3, 8).Children(func() {
+								ui.Text(c, "‹").Font(family).FontSize(size).TextColor(p.muted)
+								ui.Text(c, "›").Font(family).FontSize(size).TextColor(t.Text)
+							})
+						}()
+						style := candidateStyle(s.config.CandidateStyle, t.Dark)
+						for i, w := range words {
+							item := ui.Row(c).Gap(4).Padding(4, 8).Radius(controlRadius).AlignItems(ui.Center).Shrink(0)
+							label, text := p.muted, t.Text
+							if i == 0 {
+								if style.block {
+									item.Background(style.fill)
+								}
+								label, text = style.text, style.text
+							}
+							item.Children(func() {
+								ui.Text(c, fmt.Sprint((i+1)%10)).Font(family).FontSize(size * 0.78).TextColor(label)
+								ui.Text(c, w).Font(family).FontSize(size).TextColor(text)
+							})
+						}
+					})
+				})
 			})
 		})
 	})
@@ -363,18 +394,20 @@ func (s *settings) typingPage(c *ui.Context) {
 		changed = s.settingSwitch(c, "typing/模糊音", false, &s.config.Fuzzy) || changed
 		if s.config.Fuzzy || s.showSetting("typing/模糊音分组") {
 			s.settingBlock(c, "typing/模糊音分组", func() {
-				ui.Row(c).Wrap().GapX(18).GapY(8).Padding(12, 18, 14, 46).Background(colors(c).subtle).Children(func() {
-					for _, rule := range fuzzyRules {
-						on := s.config.FuzzyGroups&rule.Bit != 0
-						if checkbox(c, &on, rule.Label).Width(120).Changed() {
-							if on {
-								s.config.FuzzyGroups |= rule.Bit
-							} else {
-								s.config.FuzzyGroups &^= rule.Bit
+				ui.Column(c).FillWidth().Padding(2, 12, 6, 12).Children(func() {
+					ui.Row(c).FillWidth().Wrap().GapX(16).GapY(12).Padding(12, rowInset-12, 12, subInset-12).Radius(controlRadius).Background(colors(c).subtle).Children(func() {
+						for _, rule := range fuzzyRules {
+							on := s.config.FuzzyGroups&rule.Bit != 0
+							if checkbox(c, &on, rule.Label).Width(120).Changed() {
+								if on {
+									s.config.FuzzyGroups |= rule.Bit
+								} else {
+									s.config.FuzzyGroups &^= rule.Bit
+								}
+								changed = true
 							}
-							changed = true
 						}
-					}
+					})
 				})
 			})
 		}
@@ -497,13 +530,13 @@ func (s *settings) shortcutsPage(c *ui.Context) {
 				{"v + 空格", "启用工具栏后，在全拼状态下打开剪贴板、常用语、符号和表情"},
 				{"Esc", "清空当前输入，或关闭工具栏、表情面板和上屏联想"},
 			} {
-				ui.Row(c).Padding(11, 18).Gap(16).AlignItems(ui.Center).Children(func() {
-					ui.Row(c).Width(180).Gap(4).Children(func() {
+				ui.Row(c).Padding(10, rowInset).Gap(16).Wrap().AlignItems(ui.Center).Children(func() {
+					ui.Row(c).Width(172).MaxWidthPercent(100).Wrap().Gap(6).Children(func() {
 						for _, part := range strings.Split(k[0], "  ") {
 							keyCap(c, part)
 						}
 					})
-					ui.Text(c, k[1]).Grow(1).Wrap()
+					ui.Text(c, k[1]).FontSize(textSize(c, 13)).TextColor(colors(c).muted).Grow(1).Basis(200).MinWidth(160).LineHeight(1.45).Wrap()
 				})
 			}
 		})
@@ -520,7 +553,7 @@ func (s *settings) reportView(c *ui.Context) {
 	ui.Column(c).Gap(4).Margin(10, 0, 0, 0).Children(func() {
 		ui.Text(c, s.report).FontWeight(600).Wrap()
 		for _, e := range s.reportErrors {
-			ui.Text(c, e).FontSize(12.5).TextColor(c.Theme().Danger).Wrap()
+			ui.Text(c, e).FontSize(textSize(c, 13)).TextColor(c.Theme().Danger).LineHeight(1.4).Wrap()
 		}
 	})
 }
@@ -575,18 +608,17 @@ func (s *settings) dictsPage(c *ui.Context) {
 }
 
 func (s *settings) phrasesPage(c *ui.Context) {
-	pageHeader(c, "快捷短语", "启用「快捷短语候选」后，输入完整编码即可选用短语。编码只使用英文字母。")
+	pageHeader(c, "快捷短语", "在「实用功能」中启用「快捷短语混入候选」后，输入完整编码即可选用短语。编码只使用英文字母。")
 	section(c, "添加", func() {
 		s.settingBlock(c, "phrases/添加快捷短语", func() {
-			ui.Column(c).Padding(16, 18).Gap(12).Children(func() {
-				ui.Column(c).Children(func() {
-					ui.Form(c, func() {
-						ui.Field(c, "编码", func() { ui.TextInput(c, &s.newCode).Placeholder("例如 dz").Width(220) })
-						ui.Field(c, "短语", func() { ui.TextArea(c, &s.newText).Height(72) }).Error(s.formError)
-						ui.Field(c, "权重", func() { ui.TextInput(c, &s.newWeight).Placeholder("10").Width(100) }).
-							Description("同一编码有多条时，权重大的在前。")
-					})
+			ui.Column(c).Padding(12, rowInset, 14, rowInset).Gap(14).Children(func() {
+				ui.Row(c).Gap(12).Wrap().AlignItems(ui.Start).Children(func() {
+					ui.Field(c, "编码", func() { ui.TextInput(c, &s.newCode).Placeholder("例如 dz").FillWidth() }).
+						Grow(1).Basis(220).MinWidth(160)
+					ui.Field(c, "权重", func() { ui.TextInput(c, &s.newWeight).Placeholder("10").FillWidth() }).
+						Description("同一编码有多条时，权重大的在前。").Grow(1).Basis(220).MinWidth(160)
 				})
+				ui.Field(c, "短语", func() { ui.TextArea(c, &s.newText).Height(72) }).Error(s.formError)
 				ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
 					if ui.PrimaryButton(c, "添加").Clicked() {
 						s.addPhrase()
@@ -607,9 +639,9 @@ func (s *settings) phrasesPage(c *ui.Context) {
 		})
 	})
 	s.reportView(c)
-	ui.Row(c).Margin(16, 0, 0, 0).Gap(12).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, fmt.Sprintf("全部快捷短语（%d）", len(s.phrases))).FontSize(14).FontWeight(600).Grow(1)
-		ui.SearchField(c, &s.phraseQuery).Placeholder("搜索编码或短语").Width(240)
+	ui.Row(c).Margin(18, 0, 0, 0).Padding(0, 4).Gap(12).Wrap().AlignItems(ui.Center).Children(func() {
+		ui.Text(c, fmt.Sprintf("全部快捷短语（%d）", len(s.phrases))).FontSize(textSize(c, 13)).FontWeight(600).TextColor(colors(c).muted).Grow(1).Basis(180).Wrap()
+		ui.SearchField(c, &s.phraseQuery).Label("搜索编码或短语").Placeholder("搜索编码或短语").Width(240).MaxWidthPercent(100).Shrink(1)
 	})
 	section(c, "", func() {
 		s.settingBlock(c, "phrases/全部快捷短语", func() {
@@ -619,7 +651,7 @@ func (s *settings) phrasesPage(c *ui.Context) {
 				if strings.TrimSpace(s.phraseQuery) != "" {
 					title = "没有匹配的快捷短语"
 				}
-				row(c, title, "", nil)
+				row(c, title, "在上方添加短语，或导入已有文件。", nil)
 				return
 			}
 			remove := -1
@@ -627,10 +659,14 @@ func (s *settings) phrasesPage(c *ui.Context) {
 			ui.List(c, nil, len(shown), func(k int) {
 				i := shown[k]
 				ph := s.phrases[i]
-				ui.Row(c).Height(phraseRow).Padding(0, 18).Gap(14).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(colors(c).border).Children(func() {
-					keyCap(c, ph.Code)
-					ui.Text(c, preview(ph.Text)).Grow(1).Shrink(1).SingleLine()
-					ui.Textf(c, "%d", ph.Weight).TextColor(colors(c).muted).FontSize(12.5)
+				item := ui.Row(c).Height(phraseRow).Padding(0, rowInset).Gap(12).AlignItems(ui.Center)
+				if item.Hovered() {
+					item.Background(colors(c).cardHover)
+				}
+				item.Children(func() {
+					ui.Row(c).Width(96).Shrink(0).Children(func() { keyCap(c, ph.Code).Tooltip(ph.Code) })
+					ui.Text(c, preview(ph.Text)).Grow(1).Basis(0).MinWidth(0).Shrink(1).SingleLine().Tooltip(ph.Text)
+					ui.Textf(c, "%d", ph.Weight).Width(56).TextAlign(ui.End).FontFeatures("tnum").TextColor(colors(c).muted).FontSize(textSize(c, 13))
 					if ui.Button(c, "删除").Label(fmt.Sprintf("删除 %s %d", ph.Code, i+1)).Clicked() {
 						remove = i
 					}
@@ -662,21 +698,21 @@ func (s *settings) learnedPage(c *ui.Context) {
 	})
 	section(c, "添加词", func() {
 		s.settingBlock(c, "learned/添加词", func() {
-			ui.Column(c).Padding(16, 18).Gap(10).Children(func() {
-				ui.Text(c, "中文词的拼音可留空，FreeType 会自动注音；多音字请填写拼音。英文词默认使用原词的小写作为输入码。中英混输词请填写实际输入码，如 datag → 打 tag。").FontSize(12.5).TextColor(colors(c).muted).Wrap()
-				ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-					ui.Column(c).Children(func() {
-						ui.TextInput(c, &s.newWord).Placeholder("词语，例如 霜频阁").Label("词语").Width(200)
-					})
-					ui.Column(c).Grow(1).Children(func() {
+			ui.Column(c).Padding(12, rowInset, 14, rowInset).Gap(14).Children(func() {
+				ui.Text(c, "中文词的拼音可留空，FreeType 会自动注音；多音字请填写拼音。英文词默认使用原词的小写作为输入码。中英混输词请填写实际输入码，如 datag → 打 tag。").FontSize(textSize(c, 13)).TextColor(colors(c).muted).LineHeight(1.45).Wrap()
+				ui.Row(c).Gap(12).Wrap().AlignItems(ui.End).Children(func() {
+					ui.Field(c, "词语", func() {
+						ui.TextInput(c, &s.newWord).Placeholder("词语，例如 霜频阁").Label("词语").FillWidth()
+					}).Width(200).MaxWidthPercent(100)
+					ui.Field(c, "拼音或输入码", func() {
 						ui.TextInput(c, &s.newPinyin).Placeholder("如 shuang pin ge 或 datag").Label("拼音或输入码").FillWidth()
-					})
+					}).Grow(1).Basis(200).MinWidth(180)
 					if ui.PrimaryButton(c, "添加").Label("添加词").Clicked() {
 						s.addWord()
 					}
 				})
 				if s.wordError != "" {
-					ui.Text(c, s.wordError).FontSize(12.5).TextColor(c.Theme().Danger).Wrap()
+					ui.Text(c, s.wordError).FontSize(textSize(c, 13)).TextColor(c.Theme().Danger).LineHeight(1.4).Wrap()
 				}
 			})
 		})
@@ -686,15 +722,15 @@ func (s *settings) learnedPage(c *ui.Context) {
 		s.clearLearned()
 	}
 	words := s.filteredWords()
-	ui.Row(c).Margin(16, 0, 0, 0).Gap(12).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, fmt.Sprintf("学到的词（%d）", len(s.words))).FontSize(14).FontWeight(600).Grow(1)
+	ui.Row(c).Margin(18, 0, 0, 0).Padding(0, 4).Gap(12).Wrap().AlignItems(ui.Center).Children(func() {
+		ui.Text(c, fmt.Sprintf("学到的词（%d）", len(s.words))).FontSize(textSize(c, 13)).FontWeight(600).TextColor(colors(c).muted).Grow(1).Basis(180).Wrap()
 		if ui.Button(c, "刷新").Clicked() {
 			s.loadWords()
 		}
-		ui.SearchField(c, &s.wordQuery).Placeholder("搜索词、拼音或输入码").Width(240)
+		ui.SearchField(c, &s.wordQuery).Label("搜索词、拼音或输入码").Placeholder("搜索词、拼音或输入码").Width(240).MaxWidthPercent(100).Shrink(1)
 	})
 	p := colors(c)
-	ui.Column(c).Margin(8, 0, 0, 0).Radius(8).Background(p.card).Border(1, p.border).Clip().Children(func() {
+	section(c, "", func() {
 		s.settingBlock(c, "learned/词条列表", func() {
 			if !s.wordsLoaded {
 				row(c, "正在读取…", "", nil)
@@ -710,10 +746,14 @@ func (s *settings) learnedPage(c *ui.Context) {
 			}
 			ui.List(c, nil, len(words), func(i int) {
 				w := words[i]
-				ui.Row(c).Padding(9, 18).Gap(14).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(p.border).Children(func() {
-					ui.Text(c, w.text()).Width(160).SingleLine()
-					ui.Text(c, w.Pinyin).Grow(1).SingleLine().TextColor(p.muted)
-					ui.Textf(c, "%.0f", w.Freq).FontSize(12.5).TextColor(p.muted).Width(70)
+				item := ui.Row(c).Padding(10, rowInset).MinHeight(54).Gap(12).AlignItems(ui.Center)
+				if item.Hovered() {
+					item.Background(p.cardHover)
+				}
+				item.Children(func() {
+					ui.Text(c, w.text()).FontWeight(500).Width(140).SingleLine().Tooltip(w.text())
+					ui.Text(c, w.Pinyin).Grow(1).Basis(0).MinWidth(0).SingleLine().TextColor(p.muted).Tooltip(w.Pinyin)
+					ui.Textf(c, "%.0f", w.Freq).FontSize(textSize(c, 13)).TextColor(p.muted).Width(64).TextAlign(ui.End).FontFeatures("tnum")
 					if ui.Button(c, "删除").Label("删除 " + w.text()).Clicked() {
 						s.forgetWords([]string{w.Word})
 					}
@@ -725,7 +765,7 @@ func (s *settings) learnedPage(c *ui.Context) {
 
 // 快捷短语列表一行多高、最多显示几行（多出来的在列表里滚动）。
 const (
-	phraseRow     = 46
+	phraseRow     = 56
 	maxPhraseRows = 12
 )
 

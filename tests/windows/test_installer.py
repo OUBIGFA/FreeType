@@ -67,6 +67,11 @@ class InstallerPreparationTests(unittest.TestCase):
         # Each disposable NSIS installer must use a private name, never the user's.
         self.guard_define = f'!define FREETYPE_SERVER_MUTEX "Local\\FreeType.Test-{self.directory.name}"\n'
         self.guard_define += f'!define FREETYPE_UPDATE_PENDING "{self.directory / "pending.json"}"\n'
+        # Uninstall deletes the user's data directories; disposable installers get private ones.
+        self.user_data = self.directory / "roaming" / "FreeType"
+        self.local_data = self.directory / "local" / "FreeType"
+        self.guard_define += f'!define FREETYPE_USER_DATA "{self.user_data}"\n'
+        self.guard_define += f'!define FREETYPE_LOCAL_DATA "{self.local_data}"\n'
 
     def tearDown(self):
         for process in self.processes:
@@ -203,8 +208,17 @@ class InstallerPreparationTests(unittest.TestCase):
         server = self.target / "bin" / "FreeTypeServer.exe"
         server.parent.mkdir()
         shutil.copyfile(self.fixture, server)
-        user_data = self.target / "user-data.txt"
-        user_data.write_text("retained", encoding="utf-8")
+        # Settings, learned words, an imported dictionary, a downloaded update, logs and caches.
+        user_files = [self.user_data / "config.json", self.user_data / "user.tsv",
+                      self.user_data / "dicts" / "词库.txt", self.user_data / "updates" / "FreeType-Update-Setup.exe",
+                      self.local_data / "logs" / "tsf.log", self.local_data / "cache" / "lexicon.bin"]
+        for file in user_files:
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_text("retained", encoding="utf-8")
+        # A neighbour in the same parent folder belongs to another application.
+        neighbour = self.user_data.parent / "Other" / "settings.json"
+        neighbour.parent.mkdir()
+        neighbour.write_text("other", encoding="utf-8")
         registry = "Software\\FreeTypeInstallerTests-" + self.directory.name
         include = self.directory / "installer.nsh"
         content = INCLUDE.read_text(encoding="utf-8").replace(
@@ -254,7 +268,14 @@ class InstallerPreparationTests(unittest.TestCase):
             self.assertEqual((server.parent / "setup-calls.txt").read_text().splitlines(), expected_calls)
             self.assertEqual(server.exists(), expected_code != 0, "Failure must keep the program for repair")
             self.assertEqual((self.target / "uninstalled.txt").exists(), expected_code == 0)
-            self.assertEqual(user_data.read_text(encoding="utf-8"), "retained")
+            if expected_code == 0:
+                self.assertFalse(self.user_data.exists(), "Uninstall must remove settings and learned data")
+                self.assertFalse(self.local_data.exists(), "Uninstall must remove logs and caches")
+            else:
+                for file in user_files:
+                    self.assertEqual(file.read_text(encoding="utf-8"), "retained",
+                                     "A failed uninstall must keep user data for repair")
+            self.assertEqual(neighbour.read_text(encoding="utf-8"), "other")
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, registry, 0,
                                 winreg.KEY_READ | winreg.KEY_WOW64_32KEY) as key:
                 if expected_code == 0:

@@ -49,11 +49,29 @@ LangString FT_RESTORE_FAILED ${LANG_ENGLISH} "Input method removal was not confi
 ; 与已发布服务的 pipe::single_instance 使用同一个名字。保留一个句柄即可让
 ; 新旧服务的 CreateMutex 都看到 ERROR_ALREADY_EXISTS；不等待/占有互斥体，
 ; 避免等待仍在运行的服务退出。测试编译时覆盖名字，绝不占用用户的真实实例。
+; 卸载会整个删掉下面两个用户目录。测试编译覆盖了服务锁的名字，就必须同时把这两个目录
+; 换成测试目录，否则不让编译：测试卸载器绝不能碰到用户真实的设置和学习记录。
+!ifdef FREETYPE_SERVER_MUTEX
+  !ifndef FREETYPE_USER_DATA
+    !error "Test builds must override FREETYPE_USER_DATA and FREETYPE_LOCAL_DATA"
+  !endif
+  !ifndef FREETYPE_LOCAL_DATA
+    !error "Test builds must override FREETYPE_USER_DATA and FREETYPE_LOCAL_DATA"
+  !endif
+!endif
 !ifndef FREETYPE_SERVER_MUTEX
   !define FREETYPE_SERVER_MUTEX "Local\FreeType.Server"
 !endif
+; 设置、词库、学习记录、同步账号、下载的更新包（服务进程的 data_dir）
+!ifndef FREETYPE_USER_DATA
+  !define FREETYPE_USER_DATA "$APPDATA\FreeType"
+!endif
+; 日志和词库快照（服务进程的 local_dir、输入法 DLL 的日志）
+!ifndef FREETYPE_LOCAL_DATA
+  !define FREETYPE_LOCAL_DATA "$LOCALAPPDATA\FreeType"
+!endif
 !ifndef FREETYPE_UPDATE_PENDING
-  !define FREETYPE_UPDATE_PENDING "$APPDATA\FreeType\updates\pending.json"
+  !define FREETYPE_UPDATE_PENDING "${FREETYPE_USER_DATA}\updates\pending.json"
 !endif
 Var FreeTypeServerGuard
 
@@ -177,4 +195,12 @@ FunctionEnd
   unregistered:
   Delete "$PLUGINSDIR\freetype-unregister.ok"
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "FreeType"
+  ; 卸载不留用户数据（和水杉输入法一样）：设置、导入的词库、学习记录、同步账号、日志和缓存。
+  ; 只在输入法已经停用并注销以后删；前面任何一步失败都会退出，数据原样保留。
+  ; 覆盖安装和自动更新不经过卸载器，数据不受影响。
+  ; 系统给不出用户目录时路径会变成盘符根下的 \FreeType，那种情况不删。
+  StrCmp "$APPDATA" "" +2 0
+    RMDir /r "${FREETYPE_USER_DATA}"
+  StrCmp "$LOCALAPPDATA" "" +2 0
+    RMDir /r "${FREETYPE_LOCAL_DATA}"
 !macroend

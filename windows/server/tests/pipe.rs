@@ -204,7 +204,7 @@ fn common_phrases_and_all_settings_backup_round_trip_through_real_pipe() {
     assert_eq!(conn.key('1').commit.as_deref(), Some("打 tag\n下一行"));
     conn.call(&Request::AddUserWord { word: "阿特".into(), pinyin: "a te".into() });
     let path = server.root.join("all.json").display().to_string();
-    assert!(conn.call(&Request::ExportSettings { path: path.clone() }).ok);
+    assert!(conn.call(&Request::ExportSettings { path: path.clone(), parts: None }).ok);
     assert!(conn.call(&Request::SetCommonPhrases { phrases: Vec::new() }).ok);
     assert!(conn.call(&Request::ClearLearned).ok);
     assert!(conn.call(&Request::InspectSettingsBackup { path: path.clone() }).ok);
@@ -277,13 +277,13 @@ fn low_integrity_clients_can_type_but_cannot_manage_or_export_user_data() {
         assert!(restricted.call(&Request::Hello { session: true, app: "sandbox.exe".into() }).ok);
         for letter in "nihao".chars() { assert!(restricted.key(letter).handled); }
         assert_eq!(restricted.key(' ').commit.as_deref(), Some("你好"));
-        let export = restricted.call(&Request::ExportSettings { path: target.display().to_string() });
+        let export = restricted.call(&Request::ExportSettings { path: target.display().to_string(), parts: None });
         assert!(!export.ok, "低完整性进程不应借服务进程写入用户文件");
         for request in [Request::GetConfig, Request::ListUserWords, Request::ClearLearned, Request::Shutdown] {
             assert!(!restricted.call(&request).ok, "低完整性客户端不应执行 {request:?}");
         }
     }
     assert!(!target.exists());
-    assert!(normal.call(&Request::ExportSettings { path: target.display().to_string() }).ok);
+    assert!(normal.call(&Request::ExportSettings { path: target.display().to_string(), parts: None }).ok);
     assert!(target.is_file(), "正常设置客户端仍可导出备份");
 }

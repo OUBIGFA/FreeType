@@ -96,6 +96,11 @@ fn server_path() -> Option<String> {
     }
 }
 
+/// FreeType 还装着没有（卸载时注册表里服务进程的位置会删掉）。
+pub(crate) fn installed() -> bool {
+    server_path().is_some()
+}
+
 /// 一次请求为什么没成。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Fail {

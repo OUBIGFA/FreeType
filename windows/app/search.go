@@ -74,9 +74,11 @@ var settingsItems = []settingItem{
 	{"about/开源信息", "开源信息", "查看项目的第三方来源、许可和使用范围", "来源与许可", "来源 授权"},
 	{"about/词库", "词库许可", "词库和语言模型的来源与许可保存在安装目录的 data 文件夹中", "来源与许可", "LICENSE SOURCE.txt 白霜 万象"},
 	{"common/导入或导出", "导入或导出", "导出为 JSON，保留多行内容；也能导入 UTF-8 文本，一行一条。重复内容只保留一条", "批量导入、导出", ""},
-	{"sync/全部设置和数据", "全部设置", "保存或恢复输入设置、词库和学习记录", "一键导入导出", "数据 输入习惯 备份 账号 密码"},
+	{"sync/全部设置和数据", "全部设置", "保存或恢复输入设置、词库和学习记录；导出时可以选择包含哪些数据，包含同步账号和计划，不含密码或密钥，导入后需重新填写密码", "一键导入导出", "数据 输入习惯 备份 账号 密码 选择 部分 导出内容"},
 	{"sync/启用同步", "启用同步", "默认关闭。开启后可以把全部设置和数据上传到你自己的 WebDAV 或 S3 兼容存储，再在别的电脑上合并恢复", "云端同步", "WebDAV S3 坚果云 MinIO R2 OSS 网盘 云 备份 多台电脑"},
 	{"sync/同步服务", "同步服务", "填写 WebDAV 或 S3 兼容存储的地址和凭据，并测试连接", "云端同步", "WebDAV S3 地址 账号 密码 存储桶 Access Key Secret Key 测试连接"},
+	{"sync/备份加密", "备份加密", "默认关闭。开启后，上传到网盘的备份用备份密码加密；备份里的电脑名和上传时间不加密", "云端同步", "安全 密码 加密 云端备份 明文 隐私 口令 AES"},
+	{"sync/备份密码", "备份密码", "只保存在这台电脑上。每台电脑要填同一个密码；忘记后无法打开已加密的备份", "云端同步", "密码 加密 口令 解密"},
 	{"sync/上传与恢复", "上传与恢复", "上传当前数据的快照；查看各台电脑的快照并合并到本机", "云端同步", "立即上传 刷新设备 恢复 合并 快照"},
 	{"sync/自动同步", "自动同步", "按数据修改时间同步，较新的完整备份替换较旧数据", "云端同步", "定时 间隔 每天 次数 重试 自动上传 自动下载"},
 	{"sync/同步计划", "同步计划", "设置时间、次数、失败重试和备份保留数", "云端同步", "分钟 每日 上限 备份 历史"},
@@ -168,21 +170,42 @@ func (s *settings) searchPage(c *ui.Context) {
 	pageHeader(c, "搜索设置", "选择结果后跳转并定位对应设置")
 	found := findSettings(s.settingQuery)
 	if len(found) == 0 {
-		ui.Text(c, "没有找到相关设置").Margin(20, 0)
+		ui.Text(c, "没有找到相关设置").Margin(16, 0, 0, 0)
+		hint(c, "试试更短的关键词，或从侧边栏选择设置页面。")
 		return
 	}
 	ui.Textf(c, "找到 %d 项", len(found)).TextColor(colors(c).muted).Margin(8, 0)
 	for _, item := range found {
 		page, _, _ := strings.Cut(item.ID, "/")
-		result := ui.Column(c).Key(item.ID).Padding(14, 18).Gap(5).Margin(4, 0).Radius(6).
-			Background(colors(c).card).Border(1, colors(c).border).Cursor(ui.CursorPointer).
+		// 使用原生按钮的 Tab、Enter、Space 和焦点环，而不是仅响应鼠标的容器。
+		result := ui.ButtonBase(c).Key(item.ID).Padding(14, rowInset).Margin(4, 0).Radius(panelRadius).
+			FillWidth().AlignItems(ui.Start).Background(colors(c).card).Border(1, colors(c).border).Cursor(ui.CursorPointer).
 			Label("定位 " + pageName(page) + " / " + item.Title)
-		result.Children(func() {
-			ui.Text(c, item.Title).FontSize(15).FontWeight(500)
-			ui.Text(c, pageName(page)+" · "+item.Section).FontSize(13).TextColor(colors(c).muted)
-			if item.Description != "" {
-				ui.Text(c, item.Description).FontSize(13).TextColor(colors(c).muted).Wrap()
+		if !c.Preferences().HighContrast {
+			alpha := float32(0.03)
+			if c.Theme().Dark {
+				alpha = 0.18
 			}
+			result.Shadow(0, 1, 3, 0, ui.RGBA(0, 0, 0, alpha))
+		}
+		if result.Hovered() {
+			result.Background(colors(c).cardHover)
+		}
+		result.Children(func() {
+			ui.Column(c).FillWidth().Gap(4).Children(func() {
+				ui.Row(c).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
+					ui.Text(c, item.Title).FontWeight(600).Wrap()
+					breadcrumb := pageName(page)
+					if item.Section != "" {
+						breadcrumb += " · " + item.Section
+					}
+					ui.Text(c, breadcrumb).FontSize(textSize(c, 12)).TextColor(colors(c).muted).
+						Padding(2, 8).Radius(controlRadius).Background(colors(c).subtle).SingleLine()
+				})
+				if item.Description != "" {
+					ui.Text(c, item.Description).FontSize(textSize(c, 13)).TextColor(colors(c).muted).LineHeight(1.45).Wrap()
+				}
+			})
 		})
 		if result.Clicked() {
 			s.locateSetting(item)
@@ -235,9 +258,9 @@ func (s *settings) unavailableReason(id string) string {
 		if !s.config.ClipboardHistory {
 			return "请先开启记录剪贴板历史。"
 		}
-	case "sync/上传与恢复", "sync/自动同步", "sync/同步计划":
+	case "sync/上传与恢复", "sync/自动同步", "sync/同步计划", "sync/备份加密", "sync/备份密码":
 		if !s.sync.Enabled {
-			return "请先开启启用同步。"
+			return "请先启用云端同步。"
 		}
 	case "features/数字键选联想词", "features/空格选第一个联想词":
 		if !s.config.PredictNext {
@@ -262,7 +285,7 @@ func (s *settings) settingBlock(c *ui.Context, id string, content func()) {
 			ui.Column(c).FillWidth().Disabled(true).Children(content)
 		}
 		if chosen && reason != "" {
-			ui.Text(c, reason).FontSize(13).TextColor(colors(c).muted).Wrap().Padding(0, 18, 12, 18)
+			ui.Text(c, reason).FontSize(textSize(c, 13)).TextColor(colors(c).muted).LineHeight(1.4).Wrap().Padding(0, rowInset, 14, rowInset)
 		}
 	})
 	if chosen && s.revealSetting {

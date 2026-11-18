@@ -82,51 +82,54 @@ func (s *settings) appPresetSection(c *ui.Context) {
 		}
 		s.settingBlock(c, "features/指定软件规则", func() {
 			p := colors(c)
-			ui.Column(c).Padding(14, 18).Gap(10).Children(func() {
-				ui.Text(c, "从其他程序切入时应用一次；在程序内部可手动切换。离开后恢复原来的模式，不影响其他程序和全局记忆。\n规则保存在 FreeType 用户设置中，重启后仍然有效。").TextColor(p.muted).Wrap()
-				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-					if len(s.apps) > 0 {
-						options := []string{"手动输入"}
-						selected := "手动输入"
-						for i, app := range s.apps {
-							options = append(options, app.App+" — "+app.Title)
-							if normalized, valid := normalizePresetApp(s.newPresetApp); valid && normalized == app.App {
-								selected = options[i+1]
-							}
-						}
-						if ui.Select(c, &selected, options).Label("打开的窗口").Width(280).Changed() && selected != "手动输入" {
+			ui.Column(c).FillWidth().Padding(2, 12, 6, 12).Children(func() {
+				ui.Column(c).FillWidth().Padding(14, rowInset-12).Radius(controlRadius).Background(p.subtle).Gap(14).Children(func() {
+					ui.Text(c, "从其他程序切入时应用一次；在程序内部可手动切换。离开后恢复原来的模式，不影响其他程序和全局记忆。\n规则保存在 FreeType 用户设置中，重启后仍然有效。").
+						FontSize(textSize(c, 13)).LineHeight(1.45).TextColor(p.muted).Wrap()
+					ui.Row(c).Gap(12).Wrap().AlignItems(ui.Center).Children(func() {
+						if len(s.apps) > 0 {
+							options := []string{"手动输入"}
+							selected := "手动输入"
 							for i, app := range s.apps {
-								if options[i+1] == selected {
-									s.newPresetApp = app.App
-									break
+								options = append(options, app.App+" — "+app.Title)
+								if normalized, valid := normalizePresetApp(s.newPresetApp); valid && normalized == app.App {
+									selected = options[i+1]
+								}
+							}
+							if ui.Select(c, &selected, options).Label("打开的窗口").Width(280).MaxWidthPercent(100).Shrink(1).Changed() && selected != "手动输入" {
+								for i, app := range s.apps {
+									if options[i+1] == selected {
+										s.newPresetApp = app.App
+										break
+									}
 								}
 							}
 						}
-					}
-					if ui.Button(c, "刷新打开的窗口").Clicked() {
-						s.refreshApps()
-					}
-				})
-				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-					ui.TextInput(c, &s.newPresetApp).Placeholder("程序名或完整路径，例如 code.exe").Width(280)
-					mode := 0
-					if s.newPresetMode == "chinese" {
-						mode = 1
-					}
-					if ui.Segmented(c, &mode, "切换为英文", "切换为中文").Label("切入时").Changed() {
-						if mode == 0 {
-							s.newPresetMode = "english"
-						} else {
-							s.newPresetMode = "chinese"
+						if ui.Button(c, "刷新打开的窗口").Clicked() {
+							s.refreshApps()
 						}
-					}
-					if ui.PrimaryButton(c, "添加 / 更新").Clicked() {
-						s.addPreset()
+					})
+					ui.Row(c).Gap(12).Wrap().AlignItems(ui.Center).Children(func() {
+						ui.TextInput(c, &s.newPresetApp).Label("指定程序").Placeholder("程序名或完整路径，例如 code.exe").Grow(1).Basis(240).MinWidth(180).MaxWidthPercent(100).Shrink(1)
+						mode := 0
+						if s.newPresetMode == "chinese" {
+							mode = 1
+						}
+						if ui.Segmented(c, &mode, "切换为英文", "切换为中文").Label("切入时").Changed() {
+							if mode == 0 {
+								s.newPresetMode = "english"
+							} else {
+								s.newPresetMode = "chinese"
+							}
+						}
+						if ui.PrimaryButton(c, "添加 / 更新").Clicked() {
+							s.addPreset()
+						}
+					})
+					if s.presetError != "" {
+						ui.Text(c, s.presetError).FontSize(textSize(c, 13)).TextColor(c.Theme().Danger).Wrap()
 					}
 				})
-				if s.presetError != "" {
-					ui.Text(c, s.presetError).TextColor(c.Theme().Danger).Wrap()
-				}
 			})
 		})
 		s.settingBlock(c, "features/指定软件规则列表", func() {
@@ -134,15 +137,19 @@ func (s *settings) appPresetSection(c *ui.Context) {
 			change := -1
 			changeMode := ""
 			if len(s.config.AppPresetRules) == 0 {
-				ui.Text(c, "还没有指定软件规则").TextColor(colors(c).muted).Padding(14, 18)
+				ui.Text(c, "还没有指定软件规则").FontSize(textSize(c, 13)).TextColor(colors(c).muted).Padding(10, rowInset, 12, rowInset)
 			}
 			ui.List(c, nil, len(s.config.AppPresetRules), func(i int) {
 				rule := s.config.AppPresetRules[i]
 				mode := rule.Mode
-				ui.Row(c).Padding(11, 18).Gap(12).AlignItems(ui.Center).Children(func() {
-					ui.Column(c).Grow(1).Shrink(1).Children(func() {
-						ui.Text(c, rule.App).SingleLine()
-						ui.Text(c, "切入时："+nameOf(presetModes, mode)).FontSize(12.5).TextColor(colors(c).muted)
+				item := ui.Row(c).Padding(10, rowInset).MinHeight(58).Gap(12).AlignItems(ui.Center)
+				if item.Hovered() {
+					item.Background(colors(c).cardHover)
+				}
+				item.Children(func() {
+					ui.Column(c).Grow(1).Basis(0).MinWidth(0).Shrink(1).Gap(3).Children(func() {
+						ui.Text(c, rule.App).FontWeight(500).SingleLine()
+						ui.Text(c, "切入时："+nameOf(presetModes, mode)).FontSize(textSize(c, 13)).TextColor(colors(c).muted).Wrap()
 					})
 					if choose(c, "模式", presetModes, &mode, 130) {
 						change, changeMode = i, mode

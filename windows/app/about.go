@@ -35,9 +35,8 @@ func (s *settings) aboutPage(c *ui.Context) {
 	section(c, "", func() {
 		row(c, "FreeType "+s.version, "适用于 Windows 的中文输入法。支持全拼、双拼和中英混输，并根据你的选词习惯调整候选顺序。", nil)
 		s.settingBlock(c, "about/GitHub", func() {
-			ui.Row(c).Padding(13, 18).Gap(16).MinHeight(60).AlignItems(ui.Center).Children(func() {
-				ui.Icon(c, githubIcon).FontSize(20)
-				texts(c, "GitHub", repositoryURL)
+			row(c, "GitHub", repositoryURL, func() {
+				ui.Icon(c, githubIcon).FontSize(textSize(c, 20))
 				if ui.Button(c, "打开仓库").Clicked() {
 					s.openLink(repositoryURL)
 				}

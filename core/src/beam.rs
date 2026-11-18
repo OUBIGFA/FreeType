@@ -488,6 +488,12 @@ fn collect_dfs(
             continue;
         }
         let before = keys.len();
+        // 已经打全的音节不接长成别的音节的单字（yin 不出「影」、xian 不出「想」）：没开模糊音时
+        // 这是读音不符的候选，librime 也只补全切不成完整音节的尾巴。多音节词照常按前缀补全
+        //（niha -> 你好、zhonggu -> 中国），那是用户没打完的词。
+        if before == 0 && graph.completes_whole_syllable(edge) {
+            continue;
+        }
         edge.push_queries(keys);
         if keys.len() > max_syllables {
             keys.truncate(before);

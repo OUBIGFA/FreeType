@@ -77,6 +77,9 @@ type settings struct {
 	confirmWipe                 bool
 	confirmRestore              bool
 	restorePath, restoreSummary string
+	// 一键导出：正在选要导出的数据；exportParts 和 backupParts 一一对应（空：全选）。
+	exportChoosing bool
+	exportParts    []bool
 
 	// 数据同步（见 sync.go）。sync 是 sync.json 的内容，第一次打开那一页时读。
 	sync           syncSettings
@@ -235,13 +238,22 @@ func describe(r *ImportReport, what string) (string, []string) {
 	return msg, r.Errors
 }
 
+// dictionaryName 是导入后显示的词库名：文件名去掉扩展名；Rime 词典 rime_ice.dict.yaml 叫 rime_ice。
+func dictionaryName(path string) string {
+	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	if ext := strings.ToLower(filepath.Ext(path)); ext == ".yaml" || ext == ".yml" {
+		name = strings.TrimSuffix(name, ".dict")
+	}
+	return name
+}
+
 func (s *settings) importDictionary() {
 	s.background(func() func() {
 		path := s.openFile("导入词库")
 		if path == "" {
 			return nil
 		}
-		name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+		name := dictionaryName(path)
 		resp, err := s.backend.Call(op("import_dictionary", "path", path, "name", name))
 		list, _ := s.backend.Call(op("list_dictionaries"))
 		return func() {
@@ -286,6 +298,8 @@ func (s *settings) removeDictionary(name string) {
 }
 
 func (s *settings) export(request, title, name string) {
+	// 选了哪些数据在界面线程里取好，后台只用这份副本
+	parts := s.chosenExportParts()
 	s.background(func() func() {
 		path := s.saveFile(title, name)
 		if path == "" {
@@ -294,7 +308,7 @@ func (s *settings) export(request, title, name string) {
 		var resp Response
 		var err error
 		if request == "export_settings" {
-			resp, err = s.exportSettingsBackup(path)
+			resp, err = s.exportSettingsBackup(path, parts)
 		} else {
 			resp, err = s.backend.Call(op(request, "path", path))
 		}
@@ -307,13 +321,15 @@ func (s *settings) export(request, title, name string) {
 			if resp.Report != nil {
 				count = resp.Report.Added
 			}
-			if request == "export_settings" {
+			if request != "export_settings" {
+				s.notice = fmt.Sprintf("已导出 %d 条", count)
+				if resp.Report != nil && resp.Report.Note != "" {
+					s.notice += "（" + resp.Report.Note + "）"
+				}
+			} else if len(parts) == len(backupParts) {
 				s.notice = "已导出全部设置和数据"
 			} else {
-				s.notice = fmt.Sprintf("已导出 %d 条", count)
-			}
-			if request != "export_settings" && resp.Report != nil && resp.Report.Note != "" {
-				s.notice += "（" + resp.Report.Note + "）"
+				s.notice = "已导出选中的数据：" + exportedSummary(resp, parts)
 			}
 		}
 	})

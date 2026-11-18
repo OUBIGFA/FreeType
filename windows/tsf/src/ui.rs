@@ -144,18 +144,22 @@ fn light_mode() -> bool {
 /// 按设置里的候选强调色（`Config::candidate_style`）和系统浅色 / 深色配色。
 /// 设置页的预览（windows/app/pages.go 的 candidateStyles）用同样的颜色，改一边要改另一边。
 fn theme(style: &str) -> Theme {
-    let light = light_mode();
+    theme_for_appearance(style, light_mode())
+}
+
+// 显式接收外观，便于在不修改用户系统主题的情况下验证两套候选文字颜色。
+fn theme_for_appearance(style: &str, light: bool) -> Theme {
     let white = rgb(0xff, 0xff, 0xff);
     // (底色块, 块上的字, 提示字色)
     let (accent, accent_text, emphasis) = match (style, light) {
         // 以前的蓝色
         ("blue", true) => (Some(rgb(0x2b, 0x6c, 0xe6)), white, rgb(0x2b, 0x6c, 0xe6)),
-        ("blue", false) => (Some(rgb(0x3d, 0x7f, 0xf0)), white, rgb(0x6c, 0x9e, 0xff)),
+        ("blue", false) => (Some(rgb(0x3d, 0x7f, 0xf0)), rgb(0x18, 0x18, 0x1b), rgb(0x6c, 0x9e, 0xff)),
         // 微信输入法的绿；浅色背景上的提示字用深一档的绿，不然看不清
-        ("green", true) => (Some(rgb(0x07, 0xc1, 0x60)), white, rgb(0x06, 0xa0, 0x50)),
-        ("green", false) => (Some(rgb(0x07, 0xc1, 0x60)), white, rgb(0x07, 0xc1, 0x60)),
+        ("green", true) => (Some(rgb(0x07, 0xc1, 0x60)), rgb(0x18, 0x18, 0x1b), rgb(0x06, 0xa0, 0x50)),
+        ("green", false) => (Some(rgb(0x07, 0xc1, 0x60)), rgb(0x18, 0x18, 0x1b), rgb(0x07, 0xc1, 0x60)),
         // 搜狗那样：没有底色块，选中的字是蓝色
-        ("sogou", true) => (None, rgb(0x1e, 0x6f, 0xff), rgb(0x1e, 0x6f, 0xff)),
+        ("sogou", true) => (None, rgb(0x1d, 0x66, 0xdf), rgb(0x1d, 0x66, 0xdf)),
         ("sogou", false) => (None, rgb(0x6c, 0x9e, 0xff), rgb(0x6c, 0x9e, 0xff)),
         // 默认：品牌粉色。粉色很浅，块上用深色字（和设置窗口一样）；提示字用深一档的粉
         (_, true) => (Some(rgb(0xff, 0xb3, 0xfa)), rgb(0x18, 0x18, 0x1b), rgb(0xc0, 0x3c, 0xb4)),
@@ -167,7 +171,7 @@ fn theme(style: &str) -> Theme {
             background: white,
             border: rgb(0xd6, 0xd6, 0xd6),
             text: rgb(0x1f, 0x1f, 0x1f),
-            muted: rgb(0x80, 0x80, 0x80),
+            muted: rgb(0x61, 0x61, 0x61),
             hover: rgb(0xf0, 0xf0, 0xf0),
             accent,
             accent_text,
@@ -234,13 +238,33 @@ enum Hover {
     Arrow(bool),
 }
 
+/// 一段摆好位置的文字。
+struct Piece {
+    /// 墨迹占的地方（窗口坐标）。
+    ink: RECT,
+    part: Part,
+    text: Text,
+    /// 文字的框画在哪（[`Painter::text`]）。
+    at: (f32, f32),
+}
+
+impl Piece {
+    fn new(part: Part, text: Text, x: f32, y: f32) -> Self {
+        Self {
+            ink: text.ink_at(x, y),
+            part,
+            text,
+            at: (x, y),
+        }
+    }
+}
+
 /// 排好的版：每一块的位置。
 #[derive(Default)]
 struct Layout {
     width: i32,
     height: i32,
-    /// (画的位置, 是什么)
-    parts: Vec<(RECT, Part, Text)>,
+    parts: Vec<Piece>,
     /// 候选的底（点击区域）。
     items: Vec<RECT>,
     /// 翻页箭头（点击区域）。
@@ -276,9 +300,11 @@ fn layout(view: &View, fonts: &Fonts, scale: f32) -> Result<Layout> {
             let text = fonts.hint.text(hint)?;
             let size = text.size;
             let side = size.cx.max(size.cy);
-            out.parts.push((rect(pad + (side - size.cx) / 2, pad, size.cx, size.cy), Part::Hint, text));
             out.width = side + 2 * pad;
             out.height = size.cy + 2 * pad;
+            // 提示只有一两个字：墨迹放在窗口正中
+            let (x, y) = text.centered_in(&rect(0, 0, out.width, out.height));
+            out.parts.push(Piece::new(Part::Hint, text, x, y));
             return Ok(out);
         }
         let mut y = pad;
@@ -292,7 +318,7 @@ fn layout(view: &View, fonts: &Fonts, scale: f32) -> Result<Layout> {
             }
             let text = fonts.small.text(&text)?;
             let size = text.size;
-            out.parts.push((rect(pad + s(4.0), y, size.cx, size.cy), part, text));
+            out.parts.push(Piece::new(part, text, (pad + s(4.0)) as f32, y as f32));
             width = width.max(size.cx + s(8.0));
             y += size.cy + s(4.0);
         }
@@ -309,22 +335,47 @@ fn layout(view: &View, fonts: &Fonts, scale: f32) -> Result<Layout> {
                 Ok((label, fonts.main.text(text)?))
             })
             .collect::<Result<_>>()?;
-        let h = texts.iter().fold(line, |h, (label, body)| h.max(body.size.cy).max(label.as_ref().map_or(0, |l| l.size.cy))) + s(6.0);
-        let item_width = |(label, body): &(Option<Text>, Text)| {
-            let label_w = label.as_ref().map_or(0, |l| l.size.cx + s(4.0));
-            item_pad + label_w + body.size.cx + item_pad
+        // 文字不按字体给的行框居中（行框上下留的空各个字体不一样，字会偏上或偏下），按墨迹：
+        // 正文的基线放在「汉字的墨迹中线正好落在色块中线」的地方，标号按数字的墨迹中线同样对齐。
+        // 同一行的候选共用一条基线，英文、表情照排版的规矩落在这条基线上。
+        // 文字的墨迹离色块中线最远有多远：
+        let reach = |text: &Text, rise: f32| {
+            let up = text.baseline - text.ink.top as f32 - rise;
+            let down = text.ink.bottom as f32 - text.baseline + rise;
+            up.max(down).ceil() as i32
         };
+        let tallest = texts.iter().fold(0, |m, (label, body)| {
+            m.max(reach(body, fonts.main_rise))
+                .max(label.as_ref().map_or(0, |l| reach(l, fonts.small_rise)))
+        });
+        // 色块的高度照字体的行高定（翻页时不跟着字变）；表情这类更高的字再撑开
+        let h = (line + s(6.0)).max(2 * tallest + s(2.0));
+        // 一个候选的内容从标号的墨迹左边到正文的墨迹右边，两头留一样的空；
+        // 标号和正文之间照字体自己的字距再加一点
+        let content = |(label, body): &(Option<Text>, Text)| match label {
+            Some(label) => label.size.cx - label.ink.left + s(4.0) + body.ink.right,
+            None => body.ink.right - body.ink.left,
+        };
+        let item_width = |item: &(Option<Text>, Text)| item_pad + content(item) + item_pad;
+        // 格子里（表情面板）色块比内容宽，内容放中间；横排时色块正好包住内容；竖排靠左
+        let centered = view.panel == Panel::Grid;
         let place = |out: &mut Layout, i: usize, x: i32, y: i32, w: i32| {
             let (label, body) = &texts[i];
             out.items.push(rect(x, y, w, h));
-            let label_w = label.as_ref().map_or(0, |l| l.size.cx + s(4.0));
+            let spare = if centered { (w - item_width(&texts[i])).max(0) / 2 } else { 0 };
+            let mut left = (x + item_pad + spare) as f32;
+            let middle = y as f32 + h as f32 / 2.0;
+            // 基线定在整像素上：Direct2D 画字时也会把基线对齐到像素，这里先定下来，
+            // 标号和正文不会各自多偏半个像素
+            let rest = |text: &Text, rise: f32| (middle + rise).round() - text.baseline;
             if let Some(label) = label {
-                out.parts.push((rect(x + item_pad, y + (h - label.size.cy) / 2, label.size.cx, label.size.cy), Part::Label(i), label.clone()));
+                let at = left - label.ink.left as f32;
+                out.parts.push(Piece::new(Part::Label(i), label.clone(), at, rest(label, fonts.small_rise)));
+                left = at + (label.size.cx + s(4.0)) as f32;
+            } else {
+                left -= body.ink.left as f32;
             }
-            out.parts.push((
-                rect(x + item_pad + label_w, y + (h - body.size.cy) / 2, body.size.cx, body.size.cy),
-                Part::Candidate(i), body.clone(),
-            ));
+            out.parts.push(Piece::new(Part::Candidate(i), body.clone(), left, rest(body, fonts.main_rise)));
         };
         let prev = fonts.main.text("‹")?;
         let next = fonts.main.text("›")?;
@@ -399,7 +450,7 @@ fn draw(hdc: HDC, data: &Data) -> Result<()> {
         let t = theme(&data.view.candidate_style);
         let painter = Painter::new(hdc, &rect(0, 0, w, h), t.background)?;
         painter.border(&rect(0, 0, w, h), t.border);
-        let radius = 3.0 * data.scale;
+        let radius = 4.0 * data.scale;
         match data.hovered {
             Some(Hover::Item(i)) if data.view.cursor != Some(i) => {
                 if let Some(r) = data.layout.items.get(i) {
@@ -417,18 +468,20 @@ fn draw(hdc: HDC, data: &Data) -> Result<()> {
             painter.fill_round(r, accent, radius);
         }
         let selected = |i: usize| data.view.cursor == Some(i);
-        for (r, part, text) in &data.layout.parts {
-            let color = match *part {
+        for piece in &data.layout.parts {
+            let color = match piece.part {
                 Part::Hint => t.emphasis,
                 Part::Title | Part::Preedit => t.muted,
                 Part::Label(i) => if selected(i) { t.accent_text } else { t.muted },
                 Part::Candidate(i) => if selected(i) { t.accent_text } else { t.text },
             };
-            painter.text(r, text, color, false);
+            painter.text(piece.at.0, piece.at.1, &piece.text, color);
         }
         for (r, next, text) in &data.layout.arrows {
             let enabled = if *next { data.view.has_next } else { data.view.has_prev };
-            painter.text(r, text, if enabled { t.text } else { t.border }, true);
+            // 箭头是一个符号：墨迹放在它的格子正中
+            let (x, y) = text.centered_in(r);
+            painter.text(x, y, text, if enabled { t.text } else { t.border });
         }
         painter.finish()
 }
@@ -1000,10 +1053,11 @@ mod menu {
                 for (i, text) in d.texts.iter().enumerate() {
                     let mut r = d.rows[i];
                     if d.hovered == Some(i) {
-                        painter.fill_round(&r, t.hover, 2.0 * d.scale);
+                        painter.fill_round(&r, t.hover, 4.0 * d.scale);
                     }
                     r.left += (12.0 * d.scale) as i32;
-                    painter.text(&r, text, t.text, false);
+                    let top = r.top + (r.bottom - r.top - text.size.cy).max(0) / 2;
+                    painter.text(r.left as f32, top as f32, text, t.text);
                 }
                 painter.finish()
             });

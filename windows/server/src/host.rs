@@ -21,8 +21,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use freetype_protocol::{
-    modifier, AppWindow, Command, Config, DefaultMode, Frame, ImportReport, Key, Mode, Request, Response, Status,
-    UserWord, PROTOCOL_VERSION,
+    modifier, AppWindow, BackupPart, Command, Config, DefaultMode, Frame, ImportReport, Key, Mode, Request, Response,
+    Status, UserWord, PROTOCOL_VERSION,
 };
 use wowtype_core::msime;
 use wowtype_core::Engine;
@@ -1082,9 +1082,10 @@ impl Host {
         }
     }
 
-    fn export_settings(&self, path: &Path) -> Response {
+    /// 导出全部设置备份；`parts` 是要导出的类别。
+    fn export_settings(&self, path: &Path, parts: &[BackupPart]) -> Response {
         let Some(engine) = self.engine.as_deref() else { return Response::error("词库还在载入，请稍后再试"); };
-        Self::report(backup::export(&self.store, &self.config, self.mode, &self.recent_emoji, engine, path))
+        Self::report(backup::export(&self.store, &self.config, self.mode, &self.recent_emoji, engine, path, parts))
     }
 
     fn import_settings(&mut self, path: &Path) -> Response {
@@ -1092,18 +1093,27 @@ impl Host {
         // 确认运行中引擎的学习状态可读，再准备文件；失败不能先覆盖其他设置。
         if let Err(error) = engine.export_learning() { return Response::error(format!("读取当前学习记录失败：{error:#}")); }
         let prepared = match backup::read(path) { Ok(data) => data, Err(error) => return Response::error(error) };
-        let cleanup_note = match prepared.restore_files(&self.store) { Ok(note) => note, Err(error) => return Response::error(error) };
-        engine.clear_learned();
-        if let Err(error) = engine.import_learning(&prepared.data.learning.to_string()) {
-            return Response::error(format!("备份文件已恢复，但输入引擎尚未更新：{error:#}。请重新打开 FreeType"));
+        // 只替换备份里有的类别；没有的类别（文件、引擎里的状态）保持不变。
+        let config = prepared.restored_config(&self.store, &self.config);
+        let cleanup_note = match prepared.restore_files(&self.store, &self.config) { Ok(note) => note, Err(error) => return Response::error(error) };
+        if prepared.has(BackupPart::Learning) {
+            engine.clear_learned();
+            if let Err(error) = engine.import_learning(&prepared.data.learning.to_string()) {
+                return Response::error(format!("备份文件已恢复，但输入引擎尚未更新：{error:#}。请重新打开 FreeType"));
+            }
+            self.dirty = false;
+            self.recent_emoji = prepared.data.recent_emoji.clone();
         }
-        self.dirty = false;
-        self.recent_emoji = prepared.data.recent_emoji.clone();
-        self.set_config(prepared.restored_config(&self.store));
+        // 没有设置这一类时也要走一遍：快捷短语、词库从文件重新交给引擎
+        self.set_config(config);
         // 同一路径的主词库内容也可能变了，不能只按路径字符串判断是否重新载入。
-        if prepared.data.main_lexicon.is_some() { self.lexicon_change = Some(self.config.lexicon.clone()); }
-        self.mode = prepared.data.mode;
-        self.app_modes.clear();
+        if prepared.has(BackupPart::Dictionaries) && prepared.data.main_lexicon.is_some() {
+            self.lexicon_change = Some(self.config.lexicon.clone());
+        }
+        if prepared.has(BackupPart::Settings) {
+            self.mode = prepared.data.mode;
+            self.app_modes.clear();
+        }
         for client in self.clients.values_mut() {
             client.pending = None;
             client.state.clear();
@@ -1112,9 +1122,10 @@ impl Host {
         self.notify_bar();
         let mut report = prepared.report();
         if let Some(note) = cleanup_note { report.note = Some(format!("{}；{note}", report.note.unwrap_or_default())); }
+        let common = match self.store.load_common_phrases() { Ok(common) => common, Err(error) => return Response::error(error) };
         Response {
             config: Some(self.config.clone()), status: Some(self.status()),
-            quick_phrases: Some(self.store.list_quick_phrases()), common_phrases: Some(prepared.data.common_phrases),
+            quick_phrases: Some(self.store.list_quick_phrases()), common_phrases: Some(common),
             dictionaries: Some(self.store.list_dictionaries()), user_words: Some(self.user_words()), report: Some(report),
             ..Response::ok()
         }
@@ -1129,12 +1140,16 @@ impl Host {
         // 整份先校验完再动数据
         let prepared = match backup::read(path) { Ok(data) => data, Err(error) => return Response::error(error) };
         let counts = match prepared.merge_files(&self.store) { Ok(counts) => counts, Err(error) => return Response::error(error) };
-        let learned = match engine.import_learning(&prepared.data.learning.to_string()) {
-            Ok(changed) => changed,
-            Err(error) => return Response::error(format!("合并学习记录失败：{error:#}")),
-        };
-        if let Err(error) = self.learned_changed() {
-            return Response::error(format!("学习记录已合并，但尚未保存到磁盘：{error}"));
+        // 备份里没有学习记录（只导出了一部分数据的文件）时不合并
+        let mut learned = 0;
+        if prepared.has(BackupPart::Learning) {
+            learned = match engine.import_learning(&prepared.data.learning.to_string()) {
+                Ok(changed) => changed,
+                Err(error) => return Response::error(format!("合并学习记录失败：{error:#}")),
+            };
+            if let Err(error) = self.learned_changed() {
+                return Response::error(format!("学习记录已合并，但尚未保存到磁盘：{error}"));
+            }
         }
         for emoji in &prepared.data.recent_emoji {
             if !self.recent_emoji.contains(emoji) {
@@ -1170,7 +1185,7 @@ impl Host {
     }
 
     fn export_sync_settings(&self, path: &Path) -> Response {
-        let mut response = self.export_settings(path);
+        let mut response = self.export_settings(path, &BackupPart::ALL);
         if response.ok {
             match backup::modified_unix_ms(&self.store, &self.config) {
                 Ok(stamp) => response.modified_unix_ms = Some(stamp.max(self.sync_modified_ms)),
@@ -1351,7 +1366,9 @@ impl Host {
             }
             Request::ExportLearning { path } => self.export_learning(Path::new(&path)),
             Request::ImportLearning { path } => self.import_learning(Path::new(&path)),
-            Request::ExportSettings { path } => self.export_settings(Path::new(&path)),
+            Request::ExportSettings { path, parts } => {
+                self.export_settings(Path::new(&path), parts.as_deref().unwrap_or(&BackupPart::ALL))
+            }
             Request::ExportSyncSettings { path } => self.export_sync_settings(Path::new(&path)),
             Request::ImportSyncSettings { path, expected_path } => self.import_sync_settings(Path::new(&path), Path::new(&expected_path)),
             Request::InspectSettingsBackup { path } => Self::report(backup::read(Path::new(&path)).map(|data| data.report())),

@@ -1120,6 +1120,203 @@ fn settings_backup_restores_all_data_including_unsaved_learning_and_custom_lexic
     cleanup(&target);
 }
 
+/// 只导出其中几类数据的请求。
+fn export_parts_request(path: &Path, parts: &[&str]) -> Request {
+    settings_request(serde_json::json!({"op": "export_settings", "path": path.to_string_lossy(), "parts": parts}))
+}
+
+/// 每一类数据都有内容的一台「旧电脑」。
+fn full_profile_host(name: &str) -> Host {
+    let mut source = learning_host(name);
+    let main_lexicon = source.data_dir().join("source-lexicon.tsv");
+    std::fs::write(&main_lexicon, "ni hao\t你好\t1000\na te\t阿特\t900\n").unwrap();
+    configure(&mut source, |c| {
+        c.page_size = 9;
+        c.lexicon = main_lexicon.to_string_lossy().into();
+        c.default_mode = DefaultMode::Global;
+    });
+    source.mode = Mode::English;
+    assert!(source.handle(1, Request::SetQuickPhrases {
+        phrases: vec![freetype_protocol::QuickPhrase { code: "dz".into(), text: "远端地址".into(), weight: 20 }],
+    }).ok);
+    assert!(source.handle(1, settings_request(serde_json::json!({"op": "set_common_phrases", "phrases": ["远端常用语"]}))).ok);
+    std::fs::create_dir_all(source.data_dir().join("dicts")).unwrap();
+    std::fs::write(source.data_dir().join("dicts/人名.txt"), "阿特\ta te\t800\n").unwrap();
+    source.recent_emoji = vec!["😊".into()];
+    std::fs::write(source.data_dir().join("statusbar.txt"), "100,200\n").unwrap();
+    for _ in 0..3 { source.engine.as_ref().unwrap().record_selection_with_pinyin("私密词", Some("si mi ci")); }
+    source
+}
+
+/// 每一类数据都和「旧电脑」不一样的一台「本机」。
+fn local_profile_host(name: &str) -> Host {
+    let mut target = learning_host(name);
+    let main_lexicon = target.data_dir().join("local-lexicon.tsv");
+    std::fs::write(&main_lexicon, "ben ji\t本机\t1000\n").unwrap();
+    configure(&mut target, |c| {
+        c.page_size = 8;
+        c.lexicon = main_lexicon.to_string_lossy().into();
+    });
+    assert!(target.handle(1, Request::SetQuickPhrases {
+        phrases: vec![freetype_protocol::QuickPhrase { code: "yx".into(), text: "本机邮箱".into(), weight: 10 }],
+    }).ok);
+    assert!(target.handle(1, settings_request(serde_json::json!({"op": "set_common_phrases", "phrases": ["本机常用语"]}))).ok);
+    std::fs::create_dir_all(target.data_dir().join("dicts")).unwrap();
+    std::fs::write(target.data_dir().join("dicts/旧词库.txt"), "旧词\tjiu ci\t100\n").unwrap();
+    target.recent_emoji = vec!["🎉".into()];
+    std::fs::write(target.data_dir().join("statusbar.txt"), "1,2\n").unwrap();
+    target.engine.as_ref().unwrap().record_selection_with_pinyin("旧词", Some("jiu ci"));
+    target
+}
+
+fn backup_keys(path: &Path) -> Vec<String> {
+    let data: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    data.as_object().unwrap().keys().cloned().collect()
+}
+
+#[test]
+fn settings_backup_exports_only_the_chosen_parts() {
+    let mut source = full_profile_host("parts-export");
+    let path = source.data_dir().join("part.json");
+    // 没选的类别整个不在文件里：字段没有，内容也搜不到
+    let response = source.handle(1, export_parts_request(&path, &["quick_phrases", "dictionaries"]));
+    assert!(response.ok, "{response:?}");
+    assert_eq!(backup_keys(&path), ["dictionaries", "format", "main_lexicon", "quick_phrases", "version"]);
+    let text = std::fs::read_to_string(&path).unwrap();
+    for private in ["私密词", "远端常用语", "😊", "page_size"] {
+        assert!(!text.contains(private), "没选的数据进了备份：{private}");
+    }
+    assert_eq!(response.report.unwrap().note.as_deref(), Some("1 份词库、1 条快捷短语；不含设置、常用语、学习记录"));
+    // 一类一类地导出：每次只有那一类的字段
+    for (part, keys) in [
+        ("settings", vec!["config", "format", "mode", "status_bar_position", "version"]),
+        ("common_phrases", vec!["common_phrases", "format", "version"]),
+        ("learning", vec!["format", "learning", "recent_emoji", "version"]),
+    ] {
+        assert!(source.handle(1, export_parts_request(&path, &[part])).ok);
+        assert_eq!(backup_keys(&path), keys, "{part}");
+    }
+    // 没选的数据读不了也不妨碍导出：快捷短语文件坏了，只导出设置照样成功
+    std::fs::write(source.data_dir().join("quick_phrases.txt"), "这一行不是快捷短语\n").unwrap();
+    assert!(source.handle(1, export_parts_request(&path, &["settings"])).ok);
+    assert!(!source.handle(1, export_parts_request(&path, &["quick_phrases"])).ok);
+    cleanup(&source);
+}
+
+#[test]
+fn settings_backup_with_all_parts_is_the_same_file_as_before() {
+    let mut source = full_profile_host("parts-all");
+    let (plain, chosen) = (source.data_dir().join("plain.json"), source.data_dir().join("chosen.json"));
+    assert!(source.handle(1, learning_request("export_settings", &plain)).ok);
+    let all = ["learning", "common_phrases", "quick_phrases", "dictionaries", "settings"];
+    assert!(source.handle(1, export_parts_request(&chosen, &all)).ok);
+    let text = std::fs::read_to_string(&plain).unwrap();
+    assert_eq!(text, std::fs::read_to_string(&chosen).unwrap(), "全选和不写 parts 是同一份文件");
+    // 字段顺序和内容保持原来的格式：自动同步按整份内容比较，旧版本也要能导入
+    assert!(text.starts_with("{\n  \"format\": \"freetype-settings\",\n  \"version\": 1,\n  \"config\": {"), "{}", &text[..80]);
+    let note = source.handle(1, learning_request("inspect_settings_backup", &plain)).report.unwrap().note.unwrap();
+    assert_eq!(note, "全部设置、1 份词库、1 条快捷短语、1 条常用语、1 条学到的词及使用记录");
+    cleanup(&source);
+}
+
+#[test]
+fn importing_a_partial_backup_replaces_only_its_parts() {
+    let mut source = full_profile_host("parts-source");
+    let path = source.data_dir().join("part.json");
+    assert!(source.handle(1, export_parts_request(&path, &["quick_phrases", "dictionaries"])).ok);
+
+    let mut target = local_profile_host("parts-target");
+    let inspected = target.handle(1, learning_request("inspect_settings_backup", &path));
+    assert_eq!(inspected.report.unwrap().note.as_deref(), Some("1 份词库、1 条快捷短语；不含设置、常用语、学习记录"));
+    let response = target.handle(1, learning_request("import_settings", &path));
+    assert!(response.ok, "{response:?}");
+    // 备份里有的两类：整类换成备份里的
+    let phrases: Vec<String> = target.store.list_quick_phrases().into_iter().map(|p| p.code).collect();
+    assert_eq!(phrases, ["dz"]);
+    let dictionaries: Vec<String> = target.store.list_dictionaries().into_iter().map(|d| d.name).collect();
+    assert_eq!(dictionaries, ["人名"], "词库整类替换，不残留本机原来的");
+    assert_eq!(std::fs::read_to_string(&target.config.lexicon).unwrap(), "ni hao\t你好\t1000\na te\t阿特\t900\n");
+    assert!(Path::new(&target.config.lexicon).starts_with(target.data_dir()));
+    assert_eq!(typing(&mut target, "dz").candidates[0], "远端地址", "换进来的快捷短语马上能用");
+    press(&mut target, keysym::ESCAPE);
+    // 备份里没有的三类：本机的原样留着
+    assert_eq!(target.config.page_size, 8);
+    assert_eq!(target.mode, Mode::Chinese);
+    assert_eq!(std::fs::read_to_string(target.data_dir().join("statusbar.txt")).unwrap(), "1,2\n");
+    assert_eq!(target.store.load_common_phrases().unwrap(), ["本机常用语"]);
+    assert_eq!(response.common_phrases.as_deref(), Some(&["本机常用语".to_string()][..]));
+    assert_eq!(target.recent_emoji, ["🎉"]);
+    let engine = target.engine.as_ref().unwrap();
+    assert_eq!((engine.history_count("旧词"), engine.history_count("私密词")), (1, 0));
+    // 重新启动以后也是这样
+    let restarted = Host::new(Store::new(target.data_dir()));
+    assert_eq!(restarted.config.page_size, 8);
+    assert_eq!(restarted.config.lexicon, target.config.lexicon);
+    cleanup(&source);
+    cleanup(&target);
+}
+
+#[test]
+fn importing_settings_or_learning_alone_keeps_everything_else() {
+    let mut source = full_profile_host("parts-single-source");
+    let (settings, learning) = (source.data_dir().join("settings.json"), source.data_dir().join("learning.json"));
+    assert!(source.handle(1, export_parts_request(&settings, &["settings"])).ok);
+    assert!(source.handle(1, export_parts_request(&learning, &["learning"])).ok);
+
+    // 只有设置：选项、中英文状态、状态栏位置换掉；本机的主词库、短语、词库、学习记录不动
+    let mut target = local_profile_host("parts-single-settings");
+    let local_lexicon = target.config.lexicon.clone();
+    assert!(target.handle(1, learning_request("import_settings", &settings)).ok);
+    assert_eq!((target.config.page_size, target.mode), (9, Mode::English));
+    assert_eq!(std::fs::read_to_string(target.data_dir().join("statusbar.txt")).unwrap(), "100,200\n");
+    assert_eq!(target.config.lexicon, local_lexicon, "主词库属于词库这一类");
+    assert_eq!(std::fs::read_to_string(&local_lexicon).unwrap(), "ben ji\t本机\t1000\n");
+    assert_eq!(target.store.list_quick_phrases()[0].code, "yx");
+    assert_eq!(target.store.list_dictionaries()[0].name, "旧词库");
+    assert_eq!(target.engine.as_ref().unwrap().history_count("旧词"), 1);
+    assert_eq!(target.recent_emoji, ["🎉"]);
+    cleanup(&target);
+
+    // 只有学习记录：学到的词和最近的表情换掉，别的不动
+    let mut target = local_profile_host("parts-single-learning");
+    assert!(target.handle(1, learning_request("import_settings", &learning)).ok);
+    let engine = target.engine.as_ref().unwrap();
+    assert_eq!((engine.history_count("旧词"), engine.history_count("私密词")), (0, 3));
+    assert_eq!(target.recent_emoji, ["😊"]);
+    assert_eq!((target.config.page_size, target.mode), (8, Mode::Chinese));
+    assert_eq!(target.config.lexicon, target.data_dir().join("local-lexicon.tsv").to_string_lossy());
+    assert_eq!(target.store.list_quick_phrases()[0].code, "yx");
+    assert_eq!(target.store.load_common_phrases().unwrap(), ["本机常用语"]);
+    assert_eq!(target.store.list_dictionaries()[0].name, "旧词库");
+    // 合并（云端恢复用的那种）遇到没有学习记录的文件也不出错
+    assert!(target.handle(1, learning_request("merge_settings", &settings)).ok);
+    assert_eq!(target.engine.as_ref().unwrap().history_count("私密词"), 3);
+    cleanup(&source);
+    cleanup(&target);
+}
+
+#[test]
+fn backup_with_no_parts_or_half_a_part_changes_nothing() {
+    let mut host = local_profile_host("parts-empty");
+    let path = host.data_dir().join("none.json");
+    // 一类都没选（设置程序只导出同步账号时）：文件有效，导入不改数据
+    assert!(host.handle(1, export_parts_request(&path, &[])).ok);
+    assert_eq!(backup_keys(&path), ["format", "version"]);
+    let inspected = host.handle(1, learning_request("inspect_settings_backup", &path));
+    assert_eq!(inspected.report.unwrap().note.as_deref(), Some("没有输入法数据"));
+    assert!(host.handle(1, learning_request("import_settings", &path)).ok);
+    assert_eq!((host.config.page_size, host.store.list_quick_phrases().len()), (8, 1));
+    assert_eq!(host.engine.as_ref().unwrap().history_count("旧词"), 1);
+    // 一类数据只有一半字段：拒绝，不当成「没有这一类」
+    std::fs::write(&path, r#"{"format":"freetype-settings","version":1,"recent_emoji":[]}"#).unwrap();
+    let response = host.handle(1, learning_request("import_settings", &path));
+    assert!(!response.ok && response.error.as_deref().is_some_and(|e| e.contains("学习记录")), "{response:?}");
+    std::fs::write(&path, r#"{"format":"freetype-settings","version":1,"mode":"english"}"#).unwrap();
+    assert!(!host.handle(1, learning_request("import_settings", &path)).ok);
+    assert_eq!(host.mode, Mode::Chinese);
+    cleanup(&host);
+}
+
 #[test]
 fn settings_backup_rejects_invalid_records_before_changing_any_data() {
     let mut host = learning_host("settings-invalid");

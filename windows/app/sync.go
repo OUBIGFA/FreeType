@@ -60,6 +60,16 @@ type syncSettings struct {
 
 	// 这台设备在远端的名字：32 位小写十六进制，生成一次后一直用（覆盖安装不变）。
 	DeviceID string `json:"device_id"`
+
+	// 云端备份加密（默认关闭）：上传的备份用这个密码加密，见 backup_crypto.go。
+	// 密码和网盘密码一样只在本机、加密保存。
+	Encrypt         bool   `json:"encrypt"`
+	EncryptPassword string `json:"encrypt_password"`
+}
+
+// secrets 是写盘前要用系统的数据保护加密的字段。
+func (c *syncSettings) secrets() []*string {
+	return []*string{&c.WebDAVPassword, &c.S3SecretKey, &c.EncryptPassword}
 }
 
 var (
@@ -91,7 +101,7 @@ func loadSyncSettings(dir string) (syncSettings, error) {
 			return c, fmt.Errorf("同步设置文件 sync.json 格式不正确：%w", err)
 		}
 	}
-	for _, secret := range []*string{&c.WebDAVPassword, &c.S3SecretKey} {
+	for _, secret := range c.secrets() {
 		if text, ok := strings.CutPrefix(*secret, protectedPrefix); ok {
 			plain, err := unprotect(text)
 			if err != nil {
@@ -115,7 +125,7 @@ func loadSyncSettings(dir string) (syncSettings, error) {
 
 // saveSyncSettings 写 sync.json（先写临时文件再改名）。
 func saveSyncSettings(dir string, c syncSettings) error {
-	for _, secret := range []*string{&c.WebDAVPassword, &c.S3SecretKey} {
+	for _, secret := range c.secrets() {
 		if *secret == "" {
 			continue
 		}
@@ -514,8 +524,11 @@ func (s *settings) syncTask(area, doing string, work func(store remoteStore) (st
 			change  func()
 		)
 		store, err := s.openStore(settings)
+		if err == nil && settings.Encrypt && settings.EncryptPassword == "" {
+			err = errNoPassword
+		}
 		if err == nil {
-			message, change, err = work(store)
+			message, change, err = work(withBackupPassword(store, settings))
 		}
 		return func() {
 			s.syncBusy = ""

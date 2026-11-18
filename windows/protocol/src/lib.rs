@@ -457,6 +457,31 @@ pub enum Command {
     ToggleStatusBar,
 }
 
+/// 全部设置备份里的一类数据。导出时可以只选其中几类；导入时只替换备份里有的类别。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackupPart {
+    /// 设置页里的各个选项、全局的中英文状态、悬浮状态栏的位置。
+    Settings,
+    /// 导入的词库和自定义主词库。
+    Dictionaries,
+    QuickPhrases,
+    CommonPhrases,
+    /// 学到的词、输入习惯、最近用过的表情。
+    Learning,
+}
+
+impl BackupPart {
+    /// 全部类别，按给用户看的顺序。
+    pub const ALL: [BackupPart; 5] = [
+        BackupPart::Settings,
+        BackupPart::Dictionaries,
+        BackupPart::QuickPhrases,
+        BackupPart::CommonPhrases,
+        BackupPart::Learning,
+    ];
+}
+
 /// 请求。`op` 字段区分种类。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
@@ -535,7 +560,12 @@ pub enum Request {
     /// 合并完整学习备份，不清空现有记录，也不重复累加次数。
     ImportLearning { path: String },
     /// 全部设置和用户数据的版本化备份；校验预览不改动当前数据。
-    ExportSettings { path: String },
+    /// `parts` 是要导出的类别，不写就是全部。
+    ExportSettings {
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parts: Option<Vec<BackupPart>>,
+    },
     /// 自动同步的完整快照及数据修改时间；导出本身不算修改。
     ExportSyncSettings { path: String },
     /// 仅当当前数据仍与 expected_path 一致且没有组字时整份恢复。

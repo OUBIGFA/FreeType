@@ -197,6 +197,14 @@ impl SyllableGraph {
         self.has_path(|e| !e.typo)
     }
 
+    /// 这条补全边是不是把一个已经打全的音节接长成了别的音节（yin -> ying、xian -> xiang）。
+    ///
+    /// 没打全的尾巴（zhon、nih 的 h）补全是帮用户少打几个键；打全了的音节再接长，
+    /// 出来的是另一个读音，见 `beam::collect_dfs`。
+    pub fn completes_whole_syllable(&self, edge: &Edge) -> bool {
+        edge.completion > 0 && syllable_of(&self.input.letters[edge.start..edge.end]).is_some()
+    }
+
     /// 不靠纠错边、补全边能否走完。
     pub fn has_exact_path(&self) -> bool {
         self.has_path(|e| !e.typo && e.completion == 0)
@@ -642,6 +650,37 @@ mod tests {
             "hua'r 应产生 hua 的儿化边: {:?}",
             segs
         );
+    }
+
+    #[test]
+    fn completion_marks_whole_syllables_made_longer() {
+        let completions = |text: &str| {
+            let g = SyllableGraph::build(
+                &parse(text).unwrap(),
+                GraphOptions {
+                    completion: true,
+                    ..GraphOptions::default()
+                },
+            );
+            let mut found: Vec<(String, bool)> = (0..g.len())
+                .flat_map(|pos| g.edges_from(pos).to_vec())
+                .filter(|e| e.completion > 0)
+                .map(|e| (e.display(), g.completes_whole_syllable(&e)))
+                .collect();
+            found.sort();
+            found
+        };
+        // yin 已经是完整音节：接成 ying 是换了读音；yi 后面的 n 没打全，照常补全
+        let yin = completions("yin");
+        let whole: Vec<&str> = yin.iter().filter(|(_, whole)| *whole).map(|(text, _)| text.as_str()).collect();
+        assert_eq!(whole, ["ying"], "{yin:?}");
+        assert!(yin.contains(&("ni".to_string(), false)), "{yin:?}");
+        // zhon、nih 的 h 没打全：补全，不算换读音
+        for text in ["zhon", "nih"] {
+            let found = completions(text);
+            assert!(!found.is_empty() && found.iter().all(|(_, whole)| !whole), "{text}: {found:?}");
+        }
+        assert!(completions("zhon").contains(&("zhong".to_string(), false)));
     }
 
     fn typo_graph(text: &str) -> SyllableGraph {

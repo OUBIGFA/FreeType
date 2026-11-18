@@ -376,6 +376,11 @@ func (a *autoSync) cycle(c syncSettings) (string, error) {
 	case *s3Store:
 		s.client.Timeout = 2 * time.Minute
 	}
+	// 超时按具体的存储设好以后，再套上加密层。
+	if c.Encrypt && c.EncryptPassword == "" {
+		return "", errNoPassword
+	}
+	store = withBackupPassword(store, c)
 	devices, err := readDevices(store, true)
 	if err != nil {
 		return "", err

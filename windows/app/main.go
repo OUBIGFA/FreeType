@@ -92,9 +92,13 @@ func (a *app) openSettings() {
 	}
 	s.openFile = func(title string) string {
 		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
-			Parent:  a.win,
-			Title:   title,
-			Filters: []mygo.FileFilter{{Name: "词库、短语或备份文件", Extensions: []string{"txt", "tsv", "scel", "csv", "json"}}},
+			Parent: a.win,
+			Title:  title,
+			// Rime 词典是 *.dict.yaml；别的输入法导出的文件扩展名不固定，留一项「所有文件」
+			Filters: []mygo.FileFilter{
+				{Name: "词库、短语或备份文件", Extensions: []string{"txt", "tsv", "scel", "yaml", "yml", "csv", "json"}},
+				{Name: "所有文件", Extensions: []string{"*"}},
+			},
 		})
 		if err != nil || len(paths) == 0 {
 			return ""

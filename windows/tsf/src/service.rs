@@ -734,8 +734,51 @@ fn button_menu(state: &Rc<RefCell<State>>, x: i32, y: i32) -> Option<Request> {
     }
 }
 
+/// 两个接口指针是不是同一个 COM 对象（按 COM 的规定比 `IUnknown`，不比接口指针本身）。
+fn same_object<A: Interface, B: Interface>(a: &A, b: &B) -> bool {
+    match (a.cast::<windows::core::IUnknown>(), b.cast::<windows::core::IUnknown>()) {
+        (Ok(a), Ok(b)) => a.as_raw() == b.as_raw(),
+        _ => false,
+    }
+}
+
+/// 焦点通知说的就是正在组字的那个文档时，返回组字所在的上下文。
+///
+/// 应用会对同一个输入框再报一次焦点：资源管理器地址栏（XAML）点进去以后，要等第一个键
+/// 打出来才报，这时编辑区和候选窗已经在了。这不是换输入框，见 [`on_focus`]。
+fn composing_context(composition: Option<&ITfComposition>, focus: Option<&ITfDocumentMgr>) -> Option<ITfContext> {
+    let context = unsafe { composition?.GetRange().and_then(|range| range.GetContext()) }.ok()?;
+    let owner = unsafe { context.GetDocumentMgr() }.ok()?;
+    same_object(&owner, focus?).then_some(context)
+}
+
+/// 焦点还在（或回到了）正在组字的输入框：编辑区留着，候选窗接着显示。
+///
+/// 做法照水杉输入法 Windows 版的 `ITfThreadMgrEventSink::OnSetFocus`：候选窗属于哪个文档，
+/// 焦点落在那个文档上就显示，落在别处才收起。不提示中英文状态（用户正在打字），
+/// 也不清掉记着的光标位置（候选窗靠它摆）。
+fn resume_composition(state: &Rc<RefCell<State>>, context: ITfContext) {
+    state.borrow_mut().context = Some(context);
+    // 焦点中途丢过的话服务进程已经当这个输入框不在用了：重新报上，顺便拿回这一页候选
+    let Some(mut frame) = call(state, &Request::Focus { active: true, before: None }) else {
+        return;
+    };
+    frame.hint = None;
+    note_frame(state, &frame);
+    show_window(state, &frame);
+}
+
 /// 换了输入框：设回「键盘打开」，告诉服务进程，按设置提示中英文状态。
+///
+/// 焦点通知不一定是换了输入框：正在组字的文档自己又报一次焦点时，编辑区和候选窗原样保留
+/// （[`resume_composition`]）。以前一律收起候选窗，第一个字母就像直接成了英文。
+/// 焦点暂时落空（`focus` 是 None）时只收起候选窗，编辑区不动，回来以后同样接着显示。
 fn on_focus(state: &Rc<RefCell<State>>, focus: Option<&ITfDocumentMgr>) {
+    let composition = state.borrow().composition.clone();
+    if let Some(context) = composing_context(composition.as_ref(), focus) {
+        resume_composition(state, context);
+        return;
+    }
     {
         let mut s = state.borrow_mut();
         s.shift.cancel();
@@ -1139,3 +1182,7 @@ mod tests {
         assert!(!service.state.borrow().predicting);
     }
 }
+
+#[cfg(test)]
+#[path = "service_focus_tests.rs"]
+mod focus_tests;

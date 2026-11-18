@@ -3462,23 +3462,30 @@ mod tests {
     }
 
     #[test]
-    fn complete_syllable_keeps_its_own_characters_first() {
-        // 「想」字频高得多，但 xian 已经打全了：本音节的字都排在补全出来的「想」前面；
+    fn complete_syllable_is_not_made_longer() {
+        // 「想」字频高得多，但 xian 已经打全了：不把它接长成 xiang 的字（没开模糊音时那是读音不符的候选）；
         // 切成 xi'an 的整词「西安」分数差得不多，抬到第五个
-        let mut tsv = String::from("xiang\t想\t50000000\nxi an\t西安\t400000\nxiao\t笑\t100\n");
+        let mut tsv = String::from(
+            "xiang\t想\t50000000\nxi an\t西安\t400000\nxiao\t笑\t100\nzhong\t中\t900000\n",
+        );
         for (i, c) in "先现显线险仙咸鲜".chars().enumerate() {
             tsv.push_str(&format!("xian\t{c}\t{}\n", 1_000_000 - i * 100_000));
         }
         let lexicon: Arc<dyn Lexicon> = Arc::new(MemoryLexicon::from_tsv_str(&tsv).unwrap());
         let e = Engine::new(lexicon, Arc::new(BigramLm::default()));
-        let texts: Vec<String> = e.input("xian").into_iter().map(|c| c.text).collect();
-        let at = |w: &str| texts.iter().position(|t| t == w);
-        assert_eq!(texts.first().map(String::as_str), Some("先"), "{texts:?}");
-        assert!(at("鲜") < at("想"), "补全的字排到了本音节的字前面：{texts:?}");
-        assert_eq!(at("西安"), Some(4), "{texts:?}");
-        // 没打全时照样出补全
-        let texts: Vec<String> = e.input("xia").into_iter().map(|c| c.text).collect();
-        assert!(texts.iter().any(|t| t == "想"), "{texts:?}");
+        let texts =
+            |input: &str| -> Vec<String> { e.input(input).into_iter().map(|c| c.text).collect() };
+        let xian = texts("xian");
+        let at = |w: &str| xian.iter().position(|t| t == w);
+        assert_eq!(xian.first().map(String::as_str), Some("先"), "{xian:?}");
+        assert_eq!(at("想"), None, "打全的音节被接长成了别的读音：{xian:?}");
+        assert_eq!(at("西安"), Some(4), "{xian:?}");
+        // xia 也是完整音节
+        let xia = texts("xia");
+        assert!(!xia.iter().any(|t| t == "想"), "{xia:?}");
+        // 没打全的音节照样补全
+        let zhon = texts("zhon");
+        assert!(zhon.iter().any(|t| t == "中"), "{zhon:?}");
     }
 
     #[test]

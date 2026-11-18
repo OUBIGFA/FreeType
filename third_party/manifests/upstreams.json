@@ -14,8 +14,8 @@
     {
       "name": "mygo",
       "repository": "https://github.com/egoist/mygo",
-      "version": "v0.9.2",
-      "revision": "25ce62f4d357cd6d29da04300e3fbc352d79daa4",
+      "version": "v0.10.0",
+      "revision": "ebde9399baf2734b3361856a53f4036859973d1d",
       "go": "1.27.3",
       "buildGo": "1.27.4",
       "goWindowsArchive": {

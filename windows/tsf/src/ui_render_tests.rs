@@ -9,6 +9,35 @@ use windows::Win32::System::StationsAndDesktops::{
 };
 use windows::Win32::System::Threading::GetCurrentThreadId;
 
+#[test]
+fn candidate_text_palette_is_readable_in_both_appearances() {
+    fn luminance(color: COLORREF) -> f64 {
+        let linear = |value: u32| {
+            let value = f64::from(value) / 255.0;
+            if value <= 0.04045 { value / 12.92 } else { ((value + 0.055) / 1.055).powf(2.4) }
+        };
+        0.2126 * linear(color.0 & 255) + 0.7152 * linear((color.0 >> 8) & 255)
+            + 0.0722 * linear((color.0 >> 16) & 255)
+    }
+    fn contrast(first: COLORREF, second: COLORREF) -> f64 {
+        let (first, second) = (luminance(first), luminance(second));
+        (first.max(second) + 0.05) / (first.min(second) + 0.05)
+    }
+    for light in [true, false] {
+        for style in ["pink", "blue", "green", "sogou"] {
+            let palette = theme_for_appearance(style, light);
+            for (name, text, background) in [
+                ("selected", palette.accent_text, palette.accent.unwrap_or(palette.background)),
+                ("muted", palette.muted, palette.background),
+                ("text", palette.text, palette.background),
+            ] {
+                let ratio = contrast(text, background);
+                assert!(ratio >= 4.5, "{style} light={light} {name}: {ratio:.2}:1");
+            }
+        }
+    }
+}
+
 struct PrivateDesktop {
     previous: HDESK,
     desktop: HDESK,
@@ -117,9 +146,9 @@ fn keycap_candidate_is_one_colored_glyph_with_clear_neighbors() {
     let body = layout
         .parts
         .iter()
-        .find(|(_, part, _)| *part == Part::Candidate(3))
+        .find(|piece| piece.part == Part::Candidate(3))
         .unwrap()
-        .0;
+        .ink;
     let mut blue = 0;
     for y in body.top..body.bottom {
         for x in body.left..body.right {
@@ -142,9 +171,9 @@ fn keycap_candidate_is_one_colored_glyph_with_clear_neighbors() {
     let label = layout
         .parts
         .iter()
-        .find(|(_, part, _)| *part == Part::Label(3))
+        .find(|piece| piece.part == Part::Label(3))
         .unwrap()
-        .0;
+        .ink;
     assert!(label.right < body.left);
     assert!(body.right < layout.items[4].left);
 }
@@ -215,7 +244,7 @@ fn emoji_and_text_fit_in_all_candidate_layouts_fonts_and_scales() {
                     ..View::default()
                 };
                 let (layout, pixels) = rendered(view, scale);
-                for (r, part, _) in &layout.parts {
+                for Piece { ink: r, part, .. } in &layout.parts {
                     assert!(
                         r.left >= 0
                             && r.top >= 0
@@ -242,6 +271,122 @@ fn emoji_and_text_fit_in_all_candidate_layouts_fonts_and_scales() {
                 }
                 save_render(&format!("{name}-{family}-{scale}"), &layout, &pixels);
             }
+        }
+    }
+}
+
+/// 一块区域里和底色 `ground` 明显不同的像素（文字的墨迹）的外框；没有墨迹返回 None。
+///
+/// 直接数画出来的像素，不用排版时算的墨迹范围：排版算错了这里才看得出来。
+fn ink_bounds(layout: &Layout, pixels: &[u8], area: RECT, ground: [i32; 3]) -> Option<RECT> {
+    let mut ink: Option<RECT> = None;
+    for y in area.top..area.bottom {
+        for x in area.left..area.right {
+            let pixel = pixel_at(layout, pixels, x, y);
+            if (0..3).map(|c| (pixel[c] - ground[c]).abs()).max().unwrap() < 96 {
+                continue;
+            }
+            let b = ink.get_or_insert(rect(x, y, 1, 1));
+            b.left = b.left.min(x);
+            b.top = b.top.min(y);
+            b.right = b.right.max(x + 1);
+            b.bottom = b.bottom.max(y + 1);
+        }
+    }
+    ink
+}
+
+fn pixel_at(layout: &Layout, pixels: &[u8], x: i32, y: i32) -> [i32; 3] {
+    let offset = ((y * layout.width + x) * 4) as usize;
+    [pixels[offset] as i32, pixels[offset + 1] as i32, pixels[offset + 2] as i32]
+}
+
+#[test]
+fn selected_candidate_ink_is_centered_in_its_block_for_any_font() {
+    let _desktop = PrivateDesktop::new();
+    // 行框、基线位置各不相同的字体：中文黑体、宋体、楷体、仿宋，西文无衬线、等宽、衬线，日文、韩文。
+    // 没装的字体系统会换成别的，同样要居中。
+    let families = [
+        "Microsoft YaHei", "SimSun", "KaiTi", "FangSong", "SimHei", "DengXian", "Microsoft JhengHei",
+        "Segoe UI", "Arial", "Consolas", "Times New Roman", "Yu Gothic", "Malgun Gothic", "Cascadia Mono",
+        "Georgia", "Impact", "MingLiU", "Courier New",
+    ];
+    let mut failures = Vec::new();
+    for family in families {
+        for scale in [1.0f32, 1.25, 1.5, 2.0] {
+            let view = View {
+                preedit: "guo".into(),
+                candidates: ["国", "过", "果"].map(str::to_string).to_vec(),
+                cursor: Some(0),
+                font_size: 18,
+                font_family: family.into(),
+                ..View::default()
+            };
+            let (layout, pixels) = rendered(view, scale);
+            save_render(&format!("center-{family}-{scale}"), &layout, &pixels);
+            let item = layout.items[0];
+            let part = |wanted: Part| layout.parts.iter().find(|piece| piece.part == wanted).unwrap().ink;
+            let (label, body) = (part(Part::Label(0)), part(Part::Candidate(0)));
+            // 色块的底色：左边留白的正中（圆角以内、标号以左）
+            let ground = pixel_at(&layout, &pixels, item.left + 2, (item.top + item.bottom) / 2);
+            // 标号和正文各自的墨迹：左右在两者中间切开，上下取整个色块
+            let split = (label.right + body.left) / 2;
+            let whole = |left: i32, right: i32| rect(left, item.top, right - left, item.bottom - item.top);
+            let label_ink = ink_bounds(&layout, &pixels, whole(item.left, split), ground);
+            let body_ink = ink_bounds(&layout, &pixels, whole(split, item.right), ground);
+            let (Some(label_ink), Some(body_ink)) = (label_ink, body_ink) else {
+                panic!("{family} {scale}: 色块里没有画出标号或正文");
+            };
+            let top = body_ink.top - item.top;
+            let bottom = item.bottom - body_ink.bottom;
+            let left = label_ink.left - item.left;
+            let right = item.right - body_ink.right;
+            // 标号和正文的中线差多少（半个像素为单位）
+            let label_off = (label_ink.top + label_ink.bottom) - (body_ink.top + body_ink.bottom);
+            // 取整和抗锯齿各占不到一个像素
+            if (top - bottom).abs() > 2 || (left - right).abs() > 2 || label_off.abs() > 3 {
+                failures.push(format!(
+                    "{family} x{scale}: 上 {top} 下 {bottom} 左 {left} 右 {right} 标号中线偏 {label_off} 个半像素"
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "选中的候选没有在色块里居中：\n{}", failures.join("\n"));
+}
+
+#[test]
+fn centered_grid_cells_and_arrows_keep_ink_in_the_middle() {
+    let _desktop = PrivateDesktop::new();
+    for family in ["Microsoft YaHei", "KaiTi", "Yu Gothic", "Consolas"] {
+        let view = View {
+            preedit: "a".into(),
+            candidates: ["国", "，", "果然"].map(str::to_string).to_vec(),
+            labels: vec![String::new(); 3],
+            cursor: Some(0),
+            font_size: 18,
+            font_family: family.into(),
+            panel: Panel::Grid,
+            columns: 3,
+            has_prev: true,
+            has_next: true,
+            ..View::default()
+        };
+        let (layout, pixels) = rendered(view, 2.0);
+        save_render(&format!("grid-{family}"), &layout, &pixels);
+        // 格子比「国」宽（按「果然」定的）：选中的「国」左右留的空要一样
+        let item = layout.items[0];
+        let ground = pixel_at(&layout, &pixels, item.left + 2, (item.top + item.bottom) / 2);
+        let ink = ink_bounds(&layout, &pixels, item, ground).unwrap();
+        let (left, right) = (ink.left - item.left, item.right - ink.right);
+        let (top, bottom) = (ink.top - item.top, item.bottom - ink.bottom);
+        assert!((left - right).abs() <= 2 && (top - bottom).abs() <= 2, "{family}: 左 {left} 右 {right} 上 {top} 下 {bottom}");
+        // 翻页箭头在自己的格子里上下左右居中
+        for (area, _, _) in &layout.arrows {
+            let ground = pixel_at(&layout, &pixels, area.left + 1, area.top + 1);
+            let ink = ink_bounds(&layout, &pixels, *area, ground).unwrap();
+            let (left, right) = (ink.left - area.left, area.right - ink.right);
+            let (top, bottom) = (ink.top - area.top, area.bottom - ink.bottom);
+            assert!((left - right).abs() <= 2 && (top - bottom).abs() <= 2, "{family} 箭头: 左 {left} 右 {right} 上 {top} 下 {bottom}");
         }
     }
 }
