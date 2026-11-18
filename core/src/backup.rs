@@ -16,7 +16,8 @@ fn newer(incoming: HistoryEntry, current: Option<HistoryEntry>) -> bool {
 }
 
 impl Engine {
-    /// 导出 UTF-8 JSON v1：用户词、选词次数/时间和词搭配；不含词库、设置和剪贴板。
+    /// 导出紧凑单行 UTF-8 JSON v1：用户词、选词次数/时间和词搭配；不含词库、设置和剪贴板。
+    /// 导出前自动裁剪已衰减过期的冷门记录并限制最大条目数，避免文件膨胀和分行铺排。
     pub fn export_learning(&self) -> Result<String> {
         let mut words = self.lexicon.words();
         words.sort_by(|left, right| left.1.cmp(&right.1));
@@ -28,17 +29,17 @@ impl Engine {
             .pairs
             .read()
             .map_err(|_| anyhow::anyhow!("pairs lock poisoned"))?;
-        let mut history: Vec<_> = history
-            .iter()
+        let (pruned_history, pruned_pairs) =
+            crate::learn::pruned_history_and_pairs(&history, &pairs);
+        let history: Vec<_> = pruned_history
+            .into_iter()
             .map(|(word, entry)| (word, entry.count, entry.last_used_ms))
             .collect();
-        history.sort();
-        let mut pairs: Vec<_> = pairs
-            .iter()
+        let pairs: Vec<_> = pruned_pairs
+            .into_iter()
             .map(|(previous, word, entry)| (previous, word, entry.count, entry.last_used_ms))
             .collect();
-        pairs.sort();
-        Ok(serde_json::to_string_pretty(&json!({
+        Ok(serde_json::to_string(&json!({
             "format": "freetype-learning",
             "version": 1,
             "words": words,
@@ -95,6 +96,7 @@ impl Engine {
                 changed += 1;
             }
         }
+        crate::learn::prune_learning(&mut history, &mut current_pairs);
         Ok(changed)
     }
 }

@@ -165,8 +165,15 @@ impl Engine {
             return;
         }
         let start = self.start_word();
+        let mut need_prune = false;
         if let (Some(prev), Ok(mut pairs)) = (start, self.pairs.write()) {
             pairs.learn(&prev, word, at_ms);
+            need_prune = pairs.len() > crate::learn::MAX_USER_PAIRS;
+        }
+        if need_prune {
+            if let (Ok(mut history), Ok(mut pairs)) = (self.history.write(), self.pairs.write()) {
+                crate::learn::prune_learning(&mut history, &mut pairs);
+            }
         }
         if let Ok(mut last) = self.last_word.write() {
             last.clear();

@@ -1271,8 +1271,11 @@ fn settings_backup_with_all_parts_is_the_same_file_as_before() {
     assert!(source.handle(1, export_parts_request(&chosen, &all)).ok);
     let text = std::fs::read_to_string(&plain).unwrap();
     assert_eq!(text, std::fs::read_to_string(&chosen).unwrap(), "全选和不写 parts 是同一份文件");
-    // 字段顺序和内容保持原来的格式：自动同步按整份内容比较，旧版本也要能导入
+    // 字段顺序和内容保持原来的格式：自动同步按整份内容比较，旧版本也要能导入；学习记录压为单行紧凑 JSON
     assert!(text.starts_with("{\n  \"format\": \"freetype-settings\",\n  \"version\": 1,\n  \"config\": {"), "{}", &text[..80]);
+    let learning_lines: Vec<_> = text.lines().filter(|line| line.starts_with("  \"learning\": ")).collect();
+    assert_eq!(learning_lines.len(), 1);
+    assert!(learning_lines[0].contains("\"freetype-learning\"") && learning_lines[0].ends_with("},"), "学习记录应保持在单行内：{}", learning_lines[0]);
     let note = source.handle(1, learning_request("inspect_settings_backup", &plain)).report.unwrap().note.unwrap();
     assert_eq!(note, "全部设置、1 份词库、1 条快捷短语、1 条常用语、1 条学到的词及使用记录");
     cleanup(&source);
@@ -2105,8 +2108,8 @@ fn prediction_steps_aside_for_other_keys() {
     let frame = press(&mut host, '9' as u32);
     assert_eq!(frame.commit.as_deref(), Some(" 9"));
     assert!(frame.candidates.is_empty());
-    // 退格、方向键、回车：交给应用，联想收起
-    for sym in [keysym::BACKSPACE, keysym::LEFT, keysym::RETURN] {
+    // 退格、上下方向键、回车：交给应用，联想收起
+    for sym in [keysym::BACKSPACE, keysym::UP, keysym::DOWN, keysym::RETURN] {
         assert!(commit_today(&mut host).predict);
         let frame = press(&mut host, sym);
         assert!(!frame.handled && frame.candidates.is_empty() && frame.commit.is_none(), "{sym:#x}");
@@ -2127,6 +2130,7 @@ fn prediction_keys_can_be_switched_off_separately() {
         c.predict_next = true;
         c.predict_digits = false;
         c.predict_space = false;
+        c.predict_arrows = false;
     });
     let frame = commit_today(&mut host);
     assert_eq!(frame.labels, ["", ""], "数字键不选词时不标序号");
@@ -2134,6 +2138,100 @@ fn prediction_keys_can_be_switched_off_separately() {
     assert_eq!(press(&mut host, '1' as u32).commit.as_deref(), Some(" 1"), "数字照常打出来");
     assert!(commit_today(&mut host).predict);
     assert!(!press(&mut host, 0x20).handled, "空格照常打出来");
+    cleanup(&host);
+}
+
+#[test]
+fn prediction_arrows_move_highlight_and_space_commits_the_selection() {
+    for horizontal in [true, false] {
+        let mut host = predict_host(&format!("predict-arrows-{horizontal}"));
+        configure(&mut host, |c| {
+            c.predict_next = true;
+            c.horizontal = horizontal;
+            c.arrow_keys = "caret".into();
+        });
+        assert!(host.config().predict_arrows, "开启联想后默认支持左右选词，与组字光标设置无关");
+        let shown = commit_today(&mut host).candidates;
+        let learned = host.engine.as_ref().unwrap().export_learning().unwrap();
+        for (sym, cursor) in [(keysym::LEFT, 0), (keysym::RIGHT, 1), (keysym::RIGHT, 1), (keysym::LEFT, 0), (keysym::RIGHT, 1)] {
+            let frame = press(&mut host, sym);
+            assert!(frame.handled && frame.predict && frame.preedit.is_empty());
+            assert!(frame.commit.is_none(), "移动高亮不能上屏");
+            assert_eq!(frame.candidates, shown);
+            assert_eq!(frame.cursor, Some(cursor), "两端停住，不循环");
+        }
+        assert_eq!(host.engine.as_ref().unwrap().export_learning().unwrap(), learned, "移动高亮不能学习");
+        let frame = press(&mut host, 0x20);
+        assert_eq!(frame.commit.as_deref(), Some("天气"));
+        assert_eq!(frame.candidates, ["不错"]);
+        assert_eq!(frame.cursor, Some(0), "下一轮联想重新从第一个词开始");
+        assert_eq!(press(&mut host, keysym::RIGHT).cursor, Some(0), "只有一个候选时仍吃掉方向键");
+        assert_eq!(press(&mut host, 0x20).commit.as_deref(), Some("不错"));
+        cleanup(&host);
+    }
+}
+
+#[test]
+fn prediction_arrows_switch_and_modified_keys_preserve_application_navigation() {
+    let mut host = predict_host("predict-arrows-pass");
+    configure(&mut host, |c| {
+        c.predict_next = true;
+        c.predict_arrows = false;
+    });
+    for sym in [keysym::LEFT, keysym::RIGHT] {
+        assert!(commit_today(&mut host).predict);
+        let frame = press(&mut host, sym);
+        assert!(!frame.handled && !frame.predict && frame.commit.is_none() && frame.candidates.is_empty());
+    }
+    configure(&mut host, |c| c.predict_arrows = true);
+    for modifiers in [modifier::SHIFT, modifier::CTRL, modifier::ALT, modifier::SUPER] {
+        for sym in [keysym::LEFT, keysym::RIGHT] {
+            assert!(commit_today(&mut host).predict);
+            let key = Key { keysym: sym, modifiers, ..Key::default() };
+            let frame = host.handle(1, Request::Key { key, before: None }).frame.unwrap();
+            assert!(!frame.handled && !frame.predict && frame.commit.is_none() && frame.candidates.is_empty());
+        }
+    }
+    cleanup(&host);
+}
+
+#[test]
+fn prediction_arrows_work_independently_of_digit_and_space_switches() {
+    let mut host = predict_host("predict-arrows-only");
+    configure(&mut host, |c| {
+        c.predict_next = true;
+        c.predict_digits = false;
+        c.predict_space = false;
+    });
+    assert_eq!(commit_today(&mut host).cursor, Some(0));
+    let frame = press(&mut host, keysym::RIGHT);
+    assert_eq!(frame.cursor, Some(1));
+    assert_eq!(frame.labels, ["", ""]);
+    assert!(!press(&mut host, 0x20).handled, "左右选词不能悄悄开启空格上屏");
+    commit_today(&mut host);
+    press(&mut host, keysym::RIGHT);
+    let frame = host.handle(1, Request::Select { index: 0 }).frame.unwrap();
+    assert_eq!(frame.commit.as_deref(), Some("下雨"), "鼠标仍按点中的词上屏");
+    cleanup(&host);
+}
+
+#[test]
+fn prediction_arrow_previews_do_not_move_the_live_selection() {
+    let mut host = predict_host("predict-arrows-preview");
+    configure(&mut host, |c| c.predict_next = true);
+    commit_today(&mut host);
+    let preview = Key { keysym: keysym::RIGHT, test: true, ..Key::default() };
+    for _ in 0..2 {
+        let frame = host.handle(1, Request::Key { key: preview.clone(), before: None }).frame.unwrap();
+        assert!(frame.handled && frame.commit.is_none());
+        assert_eq!(frame.cursor, Some(1), "重复预判从真实位置计算");
+    }
+    assert_eq!(press(&mut host, 0x20).commit.as_deref(), Some("下雨"), "没有真按右键就仍选第一个");
+    press(&mut host, keysym::ESCAPE);
+    commit_today(&mut host);
+    host.handle(1, Request::Key { key: preview, before: None });
+    assert_eq!(press(&mut host, keysym::RIGHT).cursor, Some(1));
+    assert_eq!(press(&mut host, 0x20).commit.as_deref(), Some("天气"));
     cleanup(&host);
 }
 

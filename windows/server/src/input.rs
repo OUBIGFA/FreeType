@@ -103,10 +103,12 @@ pub struct ClientState {
     pub raw: Option<Raw>,
     /// 上屏联想：刚上屏的词后面常接的词，候选窗正显示着。
     ///
-    /// 这时没有在组字。数字键、空格（各有开关）或鼠标选一个：上屏、记下搭配、接着联想；
-    /// Esc 收起；别的键先收起再照常处理（字母开始打拼音，退格、方向键、回车交给应用）。
+    /// 这时没有在组字。数字键、空格或左右方向键（各有开关）选词，鼠标也能选；
+    /// 确认后上屏、记下搭配、接着联想。Esc 收起；别的键先收起再照常处理。
     /// 光标前的字一变（[`ClientState::remember`]、[`ClientState::set_before`]）就作废。
     predict: Option<Vec<Prediction>>,
+    /// 联想词当前的高亮位置；只在新一轮联想开始时归零，移动高亮不学习也不上屏。
+    predict_cursor: usize,
     /// 应用的程序名（按应用记中英文时用）。
     pub app: String,
 }
@@ -172,6 +174,7 @@ impl ClientState {
             tool: None,
             raw: None,
             predict: None,
+            predict_cursor: 0,
             app,
         }
     }
@@ -230,6 +233,7 @@ impl ClientState {
     /// 刚上屏了字：按新的上文准备联想词（没开、没有可联想的就没有）。
     fn start_prediction(&mut self, env: &Env) {
         self.predict = None;
+        self.predict_cursor = 0;
         if !env.config.predict_next || env.mode != Mode::Chinese || self.busy() {
             return;
         }
@@ -246,9 +250,9 @@ impl ClientState {
             return;
         };
         frame.candidates = items.iter().map(|item| shown_text(&item.text)).collect();
-        // 数字键不选词时不标序号；空格选第一个时把它高亮出来
+        // 数字键不选词时不标序号；空格或方向键选词时显示当前高亮
         frame.labels = if env.config.predict_digits { Vec::new() } else { vec![String::new(); items.len()] };
-        frame.cursor = env.config.predict_space.then_some(0);
+        frame.cursor = (env.config.predict_space || env.config.predict_arrows).then_some(self.predict_cursor);
         frame.has_prev = false;
         frame.has_next = false;
         frame.forgettable = false;
@@ -277,11 +281,20 @@ impl ClientState {
             self.predict = None;
             return Some(self.current(true, env));
         }
+        if plain && env.config.predict_arrows && matches!(key.keysym, keysym::LEFT | keysym::RIGHT) {
+            // 和组字候选一致：走到两头就停住，不绕回另一端，也不让光标挪进应用的正文。
+            self.predict_cursor = if key.keysym == keysym::LEFT {
+                self.predict_cursor.saturating_sub(1)
+            } else {
+                (self.predict_cursor + 1).min(count - 1)
+            };
+            return Some(self.current(true, env));
+        }
         let digit = printable(key).filter(char::is_ascii_digit).or_else(|| keypad_digit(key));
         let index = if !plain {
             None
         } else if key.keysym == 0x20 && env.config.predict_space {
-            Some(0)
+            Some(self.predict_cursor)
         } else if env.config.predict_digits {
             // 和候选的标号一样：1–9，0 是第 10 个
             digit.and_then(|c| c.to_digit(10)).map(|d| (d as usize + 9) % 10).filter(|i| *i < count)

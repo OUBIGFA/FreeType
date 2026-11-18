@@ -78,8 +78,13 @@ type settings struct {
 	confirmRestore              bool
 	restorePath, restoreSummary string
 	// 一键导出：正在选要导出的数据；exportParts 和 backupParts 一一对应（空：全选）。
-	exportChoosing bool
-	exportParts    []bool
+	exportChoosing                    bool
+	exportParts                       []bool
+	exportPassword                    string
+	unlockingRestore                  bool
+	lockedBackupPath, restorePassword string
+	unlockError                       string
+	unlockLearning                    bool
 
 	// 数据同步（见 sync.go）。sync 是 sync.json 的内容，第一次打开那一页时读。
 	sync           syncSettings
@@ -300,6 +305,8 @@ func (s *settings) removeDictionary(name string) {
 func (s *settings) export(request, title, name string) {
 	// 选了哪些数据在界面线程里取好，后台只用这份副本
 	parts := s.chosenExportParts()
+	password := s.exportPassword
+	s.exportPassword = ""
 	s.background(func() func() {
 		path := s.saveFile(title, name)
 		if path == "" {
@@ -308,7 +315,7 @@ func (s *settings) export(request, title, name string) {
 		var resp Response
 		var err error
 		if request == "export_settings" {
-			resp, err = s.exportSettingsBackup(path, parts)
+			resp, err = s.exportSettingsBackup(path, parts, password)
 		} else {
 			resp, err = s.backend.Call(op(request, "path", path))
 		}
@@ -331,6 +338,9 @@ func (s *settings) export(request, title, name string) {
 			} else {
 				s.notice = "已导出选中的数据：" + exportedSummary(resp, parts)
 			}
+			if request == "export_settings" && password != "" {
+				s.notice += "（已加密）"
+			}
 		}
 	})
 }
@@ -341,16 +351,16 @@ func (state *settings) importLearning() {
 		if path == "" {
 			return nil
 		}
-		resp, err := state.backend.Call(op("import_learning", "path", path))
-		return func() {
-			if err != nil {
-				state.notice = "导入失败：" + err.Error()
-				return
+		if locked, _ := checkEncryptedBackupFile(path); locked {
+			return func() {
+				state.lockedBackupPath = path
+				state.restorePassword = ""
+				state.unlockError = ""
+				state.unlockLearning = true
+				state.unlockingRestore = true
 			}
-			state.words = resp.UserWords
-			state.wordsLoaded = true
-			state.notice, _ = describe(resp.Report, "学习记录已合并")
 		}
+		return state.importLearningFromFile(path, "")
 	})
 }
 

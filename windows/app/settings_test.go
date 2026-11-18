@@ -88,7 +88,12 @@ func (f *fakeBackend) Call(r Request) (Response, error) {
 		f.words = append(f.words, UserWord{Word: "恢复词", Pinyin: "hui fu ci", Freq: 3000})
 		return Response{OK: true, UserWords: f.words, Report: &ImportReport{Added: 3}}, nil
 	case "export_settings":
-		if err := os.WriteFile(r["path"].(string), []byte(`{"format":"freetype-settings","version":1}`), 0600); err != nil {
+		rawParts, _ := json.Marshal(r["parts"])
+		content := `{"format":"freetype-settings","version":1}`
+		if r["parts"] == nil || strings.Contains(string(rawParts), `"learning"`) {
+			content = "{\n  \"format\": \"freetype-settings\",\n  \"version\": 1,\n  \"learning\": {\n    \"format\": \"freetype-learning\",\n    \"version\": 1,\n    \"words\": [\n      [\n        \"si mi\",\n        \"私密词\",\n        1000\n      ]\n    ]\n  }\n}\n"
+		}
+		if err := os.WriteFile(r["path"].(string), []byte(content), 0600); err != nil {
 			return Response{}, err
 		}
 		return Response{OK: true, Report: &ImportReport{Added: 5}}, nil
@@ -688,7 +693,7 @@ func TestSettingsSearchLocatesMatchingRowAcrossPages(t *testing.T) {
 }
 
 func TestSettingsSearchRevealsHiddenOptionsWithoutChangingConfig(t *testing.T) {
-	for _, title := range []string{"汉字和字母之间", "双拼方案", "双拼展示键位", "自动隐藏", "中英文状态"} {
+	for _, title := range []string{"汉字和字母之间", "双拼方案", "双拼展示键位", "自动隐藏", "中英文状态", "左右方向键选联想词"} {
 		s, b := newTestSettings()
 		s.config.Autospace, s.config.Shuangpin, s.config.StatusBar = false, false, false
 		s.config.DefaultMode = "global"
@@ -700,6 +705,8 @@ func TestSettingsSearchRevealsHiddenOptionsWithoutChangingConfig(t *testing.T) {
 		page := "拼音与按键"
 		if title == "自动隐藏" || title == "中英文状态" {
 			page = "常规"
+		} else if title == "左右方向键选联想词" {
+			page = "实用功能"
 		}
 		if err := tt.Click("定位 " + page + " / " + title); err != nil {
 			t.Fatal(err)
@@ -709,7 +716,7 @@ func TestSettingsSearchRevealsHiddenOptionsWithoutChangingConfig(t *testing.T) {
 		if !found || bounds.Y < 32 || bounds.Y+bounds.H > 540 {
 			t.Fatalf("应能定位隐藏选项 %s：%+v", title, bounds)
 		}
-		if s.config.Autospace || s.config.Shuangpin || s.config.StatusBar || s.config.DefaultMode != "global" || b.last("set_config") != nil {
+		if s.config.Autospace || s.config.Shuangpin || s.config.StatusBar || s.config.PredictNext || s.config.DefaultMode != "global" || b.last("set_config") != nil {
 			t.Fatal("搜索不能自行改变任何设置")
 		}
 	}
@@ -1200,25 +1207,41 @@ func TestAppPresetRulesCanBeEditedWithoutClipboardHistory(t *testing.T) {
 
 func TestPredictNextIsOffByDefaultAndSavedFromFeaturesPage(t *testing.T) {
 	s, b := newTestSettings()
-	if s.config.PredictNext || !s.config.PredictDigits || !s.config.PredictSpace {
-		t.Fatalf("上屏联想默认应关闭，两个选词键默认开：%+v", s.config)
+	if s.config.PredictNext || !s.config.PredictDigits || !s.config.PredictSpace || !s.config.PredictArrows {
+		t.Fatalf("上屏联想默认应关闭，三种选词键默认开：%+v", s.config)
 	}
 	tt := open(t, s, "实用功能")
-	if tt.HasText("数字键选联想词") {
+	if tt.HasText("数字键选联想词") || tt.HasText("左右方向键选联想词") {
 		t.Fatal("没开上屏联想时不显示它的子选项")
 	}
 	if err := tt.Click("上屏联想"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	if !b.config.PredictNext {
-		t.Fatal("上屏联想开关没有保存")
+	if !b.config.PredictNext || !b.config.PredictArrows || !tt.HasText("左右方向键选联想词") {
+		t.Fatal("开启上屏联想后，左右选词应默认开启并显示")
 	}
-	if err := tt.Click("空格选第一个联想词"); err != nil {
+	if err := tt.Click("空格选联想词"); err != nil {
 		t.Fatal(err)
 	}
-	if b.config.PredictSpace || !b.config.PredictDigits {
+	if b.config.PredictSpace || !b.config.PredictDigits || !b.config.PredictArrows {
 		t.Fatalf("子选项没有分别保存：%+v", b.config)
+	}
+	if err := tt.Click("左右方向键选联想词"); err != nil {
+		t.Fatal(err)
+	}
+	if b.config.PredictArrows || !b.config.PredictDigits || b.config.PredictSpace {
+		t.Fatalf("左右选词开关没有单独保存：%+v", b.config)
+	}
+	// 总开关再次打开时保留用户关闭的选择，不强制重置子选项。
+	for range 2 {
+		if err := tt.Click("上屏联想"); err != nil {
+			t.Fatal(err)
+		}
+		tt.Frame()
+	}
+	if !b.config.PredictNext || b.config.PredictArrows {
+		t.Fatalf("重新开启联想不能覆盖已保存的左右选词偏好：%+v", b.config)
 	}
 }
 
@@ -1262,7 +1285,7 @@ func TestSelectiveSettingsExportAllowsPickingDataAndBlocksOldServer(t *testing.T
 	}
 	// 只选「同步账号和计划」时，发给服务进程的 parts 必须是空数组 `[]` 而不是 null
 	s.exportParts = []bool{false, false, false, false, false, true}
-	if _, err := s.exportSettingsBackup(backup, s.chosenExportParts()); err != nil {
+	if _, err := s.exportSettingsBackup(backup, s.chosenExportParts(), ""); err != nil {
 		t.Fatal(err)
 	}
 	rawParts, _ = json.Marshal(b.last("export_settings")["parts"])
@@ -1273,6 +1296,94 @@ func TestSelectiveSettingsExportAllowsPickingDataAndBlocksOldServer(t *testing.T
 	if !strings.Contains(string(data), `"sync_connection"`) || !strings.Contains(string(data), `"encrypt": true`) {
 		t.Fatalf("应写出同步账号与加密开关：%s", data)
 	}
+}
+
+func TestEncryptedLocalBackupExportAndUnlockOnImport(t *testing.T) {
+	s, b := newTestSettings()
+	s.syncDir = t.TempDir()
+	s.loadSync()
+	s.sync.WebDAVUser, s.sync.Automatic, s.sync.Schedule, s.sync.DailyTime = "enc-account", true, "daily", "21:30"
+	if !s.saveSync() {
+		t.Fatal(s.syncMessage)
+	}
+	dir := t.TempDir()
+	plainBackup := filepath.Join(dir, "plain.json")
+	if _, err := s.exportSettingsBackup(plainBackup, s.chosenExportParts(), ""); err != nil {
+		t.Fatal(err)
+	}
+	plainBytes, err := os.ReadFile(plainBackup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(plainBytes), "\n  \"learning\": {\"format\":\"freetype-learning\",\"version\":1,\"words\":[[\"si mi\",\"私密词\",1000]]}") {
+		t.Fatalf("未加密导出的学习记录也应压缩在单行内：%s", plainBytes)
+	}
+
+	encBackup := filepath.Join(dir, "encrypted.json")
+	s.saveFile = func(string, string) string { return encBackup }
+	tt := open(t, s, "数据与同步")
+	if err := tt.Click("导出全部设置"); err != nil {
+		t.Fatal(err)
+	}
+	s.exportPassword = "local-backup-password"
+	if err := tt.Click("导出选中的数据"); err != nil {
+		t.Fatal(err)
+	}
+	if s.exportPassword != "" {
+		t.Fatal("导出后应立即清空内存中的导出密码")
+	}
+	encBytes, err := os.ReadFile(encBackup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isEncryptedBackup(encBytes) {
+		t.Fatalf("设置了导出密码时必须生成加密备份：%s", encBytes)
+	}
+	for _, secret := range []string{"私密词", "enc-account", "freetype-settings"} {
+		if strings.Contains(string(encBytes), secret) {
+			t.Fatalf("加密备份不应出现明文 %s：%s", secret, encBytes)
+		}
+	}
+	if !strings.Contains(strings.Join(tt.Texts(), " "), "已导出全部设置和数据（已加密）") {
+		t.Fatalf("加密导出提示不对：%q", tt.Texts())
+	}
+
+	// 导入加密备份：先弹出密码输入框，错误密码报错且不调用服务导入，正确密码解锁并恢复
+	target, tb := newTestSettings()
+	target.syncDir = t.TempDir()
+	target.openFile = func(string) string { return encBackup }
+	tt2 := open(t, target, "数据与同步")
+	if err := tt2.Click("导入全部设置"); err != nil {
+		t.Fatal(err)
+	}
+	if !target.unlockingRestore || tb.last("inspect_settings_backup") != nil {
+		t.Fatal("选择加密备份后应先提示输入密码，不能直接交给服务校验")
+	}
+	target.restorePassword = "wrong-password"
+	if err := tt2.Click("解锁备份"); err != nil {
+		t.Fatal(err)
+	}
+	if !target.unlockingRestore || !strings.Contains(target.unlockError, "备份密码不正确") || tb.last("inspect_settings_backup") != nil {
+		t.Fatalf("错误密码应留在解锁弹窗并提示错误：%q", target.unlockError)
+	}
+	target.restorePassword = "local-backup-password"
+	if err := tt2.Click("解锁备份"); err != nil {
+		t.Fatal(err)
+	}
+	if target.unlockingRestore || !target.confirmRestore || tb.last("inspect_settings_backup") == nil {
+		t.Fatalf("正确密码解锁后应进入确认恢复弹窗：unlocking=%v confirm=%v err=%q", target.unlockingRestore, target.confirmRestore, target.unlockError)
+	}
+	if err := tt2.Click("导入并替换"); err != nil {
+		t.Fatal(err)
+	}
+	if tb.last("import_settings") == nil || target.config.PageSize != 9 {
+		t.Fatalf("确认后应解密并导入设置：%+v", target.config)
+	}
+	restoredSync, err := loadSyncSettings(target.syncDir)
+	if err != nil || restoredSync.WebDAVUser != "enc-account" || restoredSync.DailyTime != "21:30" {
+		t.Fatalf("加密备份中的同步账号和计划也应恢复：%+v %v", restoredSync, err)
+	}
+	_ = b
 }
 
 func TestDictionaryNameDropsRimeSuffix(t *testing.T) {

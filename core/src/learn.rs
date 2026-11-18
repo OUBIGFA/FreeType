@@ -51,6 +51,20 @@ pub(crate) fn write_atomic(path: &Path, data: &str) -> std::io::Result<()> {
 /// 半衰期：30 天（毫秒）。
 pub const HALF_LIFE_MS: f64 = 30.0 * 24.0 * 3600.0 * 1000.0;
 
+/// 单词热度记录上限：日常活跃词通常数千条，2 万条足以覆盖长期高频词汇。
+pub const MAX_HISTORY_WORDS: usize = 20_000;
+
+/// 上下文二元搭配上限：超出时按当前衰减热度与最近使用时间淘汰冷门搭配。
+pub const MAX_USER_PAIRS: usize = 50_000;
+
+/// 衰减淘汰阈值：`0.5^6 = 1/64`（仅选过 1 次且超过 6 个半衰期即 180 天未再使用的记录，
+/// 衰减后热度低于此值，加分接近 0 且再次选中时保留次数已四舍五入为 0，存盘与导出时予以清理）。
+pub const MIN_KEEP_HEAT: f64 = 1.0 / 64.0;
+
+/// 区分真实 Unix 毫秒时间戳（2001-09-09 之后）与单测合成小整数时间戳，
+/// 避免测试混用 `now_ms()` 与常量时间戳时把合成时间误判为几十年前的过期记录。
+const REAL_EPOCH_FLOOR_MS: u64 = 1_000_000_000_000;
+
 /// 一个学过的搭配给多少分（自然对数）：`PAIR_WEIGHT * ln(1+热度)`，最多 [`PAIR_BONUS_CAP`]。
 ///
 /// 用过一次约 1.7，三次约 3.5——足够让常见的同音搭配（发给/发个、再/在）翻过来，
@@ -62,6 +76,116 @@ pub const PAIR_BONUS_CAP: f64 = 6.0;
 pub fn decayed(entry: HistoryEntry, at_ms: u64) -> f64 {
     let age = at_ms.saturating_sub(entry.last_used_ms) as f64;
     f64::from(entry.count) * 0.5f64.powf(age / HALF_LIFE_MS)
+}
+
+fn clean_token(s: &str) -> bool {
+    !s.trim().is_empty() && !s.contains(['\t', '\n', '\r'])
+}
+
+fn reference_clocks(
+    words: &HashMap<String, HistoryEntry>,
+    pairs: &UserPairs,
+) -> (u64, u64) {
+    let mut max_real = 0u64;
+    let mut max_synth = 0u64;
+    for ts in words
+        .values()
+        .map(|e| e.last_used_ms)
+        .chain(pairs.iter().map(|(_, _, e)| e.last_used_ms))
+    {
+        if ts >= REAL_EPOCH_FLOOR_MS {
+            max_real = max_real.max(ts);
+        } else {
+            max_synth = max_synth.max(ts);
+        }
+    }
+    (max_real, max_synth)
+}
+
+fn entry_heat(entry: HistoryEntry, max_real: u64, max_synth: u64) -> f64 {
+    let at_ms = if entry.last_used_ms >= REAL_EPOCH_FLOOR_MS {
+        max_real
+    } else {
+        max_synth
+    };
+    decayed(entry, at_ms)
+}
+
+/// 按衰减阈值与容量上限裁剪词热度与二元搭配，返回按字典序排好、可直接序列化或写盘的列表。
+pub(crate) fn pruned_history_and_pairs(
+    words: &HashMap<String, HistoryEntry>,
+    pairs: &UserPairs,
+) -> (
+    Vec<(String, HistoryEntry)>,
+    Vec<(String, String, HistoryEntry)>,
+) {
+    pruned_with_limits(words, pairs, MAX_HISTORY_WORDS, MAX_USER_PAIRS)
+}
+
+fn pruned_with_limits(
+    words: &HashMap<String, HistoryEntry>,
+    pairs: &UserPairs,
+    max_words: usize,
+    max_pairs: usize,
+) -> (
+    Vec<(String, HistoryEntry)>,
+    Vec<(String, String, HistoryEntry)>,
+) {
+    let (max_real, max_synth) = reference_clocks(words, pairs);
+    let mut kept_words: Vec<(String, HistoryEntry)> = words
+        .iter()
+        .filter(|(w, e)| {
+            clean_token(w)
+                && e.count > 0
+                && entry_heat(**e, max_real, max_synth) >= MIN_KEEP_HEAT
+        })
+        .map(|(w, e)| (w.clone(), *e))
+        .collect();
+    if kept_words.len() > max_words {
+        kept_words.sort_by(|(wa, ea), (wb, eb)| {
+            entry_heat(*eb, max_real, max_synth)
+                .total_cmp(&entry_heat(*ea, max_real, max_synth))
+                .then_with(|| eb.last_used_ms.cmp(&ea.last_used_ms))
+                .then_with(|| eb.count.cmp(&ea.count))
+                .then_with(|| wa.cmp(wb))
+        });
+        kept_words.truncate(max_words);
+    }
+    kept_words.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut kept_pairs: Vec<(String, String, HistoryEntry)> = pairs
+        .iter()
+        .filter(|(p, c, e)| {
+            clean_token(p)
+                && clean_token(c)
+                && e.count > 0
+                && entry_heat(*e, max_real, max_synth) >= MIN_KEEP_HEAT
+        })
+        .map(|(p, c, e)| (p.to_string(), c.to_string(), e))
+        .collect();
+    if kept_pairs.len() > max_pairs {
+        kept_pairs.sort_by(|(pa, ca, ea), (pb, cb, eb)| {
+            entry_heat(*eb, max_real, max_synth)
+                .total_cmp(&entry_heat(*ea, max_real, max_synth))
+                .then_with(|| eb.last_used_ms.cmp(&ea.last_used_ms))
+                .then_with(|| eb.count.cmp(&ea.count))
+                .then_with(|| (pa, ca).cmp(&(pb, cb)))
+        });
+        kept_pairs.truncate(max_pairs);
+    }
+    kept_pairs.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+    (kept_words, kept_pairs)
+}
+
+/// 就地清理已衰减过期的词热度和搭配，并将条目数限制在上限之内。
+pub fn prune_learning(words: &mut HashMap<String, HistoryEntry>, pairs: &mut UserPairs) {
+    let (kept_words, kept_pairs) = pruned_history_and_pairs(words, pairs);
+    words.clear();
+    words.extend(kept_words);
+    *pairs = UserPairs::default();
+    for (prev, cur, entry) in kept_pairs {
+        pairs.insert(prev, cur, entry);
+    }
 }
 
 /// 用户学到的词搭配：前一个词 -> 后一个词 -> 次数与上次使用时间。
@@ -187,20 +311,13 @@ pub fn save_history<P: AsRef<Path>>(
 ) -> Result<()> {
     let path = path.as_ref();
     let mut out = String::from("# wowtype 用户输入习惯 v1\n");
-    let clean = |s: &str| !s.contains(['\t', '\n', '\r']);
-    let mut words: Vec<_> = words.iter().filter(|(w, _)| clean(w)).collect();
-    words.sort_by(|a, b| a.0.cmp(b.0));
+    let (words, pairs) = pruned_history_and_pairs(words, pairs);
     for (word, entry) in words {
         out.push_str(&format!(
             "w\t{word}\t{}\t{}\n",
             entry.count, entry.last_used_ms
         ));
     }
-    let mut pairs: Vec<_> = pairs
-        .iter()
-        .filter(|(p, c, _)| clean(p) && clean(c))
-        .collect();
-    pairs.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
     for (prev, cur, entry) in pairs {
         out.push_str(&format!(
             "p\t{prev}\t{cur}\t{}\t{}\n",
@@ -211,7 +328,7 @@ pub fn save_history<P: AsRef<Path>>(
     Ok(())
 }
 
-/// 读回 [`save_history`] 写的文件，返回读到的条数。坏行跳过。
+/// 读回 [`save_history`] 写的文件，返回读到的条数。坏行跳过，读完后执行衰减裁剪与容量上限整理。
 pub fn load_history<P: AsRef<Path>>(
     path: P,
     words: &mut HashMap<String, HistoryEntry>,
@@ -247,6 +364,7 @@ pub fn load_history<P: AsRef<Path>>(
             _ => {}
         }
     }
+    prune_learning(words, pairs);
     Ok(loaded)
 }
 
@@ -305,5 +423,80 @@ mod tests {
         assert_eq!(w2["种地"].count, 3);
         assert_eq!(p2.get("发", "给").unwrap().count, 1);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn prune_learning_drops_decayed_entries_and_enforces_capacity_limits() {
+        let now = 10 * HALF_LIFE_MS as u64;
+        let stale = now - 7 * HALF_LIFE_MS as u64; // 7 个半衰期：1 次的热度 1/128 < 1/64
+        let mut words = HashMap::new();
+        words.insert(
+            "过期偶发词".to_string(),
+            HistoryEntry {
+                count: 1,
+                last_used_ms: stale,
+            },
+        );
+        words.insert(
+            "高频旧词".to_string(),
+            HistoryEntry {
+                count: 10,
+                last_used_ms: stale,
+            },
+        );
+        words.insert(
+            "新词A".to_string(),
+            HistoryEntry {
+                count: 1,
+                last_used_ms: now,
+            },
+        );
+        words.insert(
+            "新词B".to_string(),
+            HistoryEntry {
+                count: 3,
+                last_used_ms: now,
+            },
+        );
+
+        let mut pairs = UserPairs::default();
+        pairs.insert(
+            "旧".to_string(),
+            "搭配".to_string(),
+            HistoryEntry {
+                count: 1,
+                last_used_ms: stale,
+            },
+        );
+        pairs.insert(
+            "常".to_string(),
+            "用".to_string(),
+            HistoryEntry {
+                count: 4,
+                last_used_ms: now,
+            },
+        );
+        pairs.insert(
+            "次".to_string(),
+            "新".to_string(),
+            HistoryEntry {
+                count: 1,
+                last_used_ms: now,
+            },
+        );
+
+        // 先验证衰减淘汰
+        let (kept_w, kept_p) = pruned_history_and_pairs(&words, &pairs);
+        let word_names: Vec<_> = kept_w.iter().map(|(w, _)| w.as_str()).collect();
+        assert_eq!(word_names, vec!["新词A", "新词B", "高频旧词"]);
+        let pair_names: Vec<_> = kept_p.iter().map(|(p, c, _)| (p.as_str(), c.as_str())).collect();
+        assert_eq!(pair_names, vec![("常", "用"), ("次", "新")]);
+
+        // 再验证容量上限裁剪：只保留热度最高的条目
+        let (capped_w, capped_p) = pruned_with_limits(&words, &pairs, 2, 1);
+        let capped_word_names: Vec<_> = capped_w.iter().map(|(w, _)| w.as_str()).collect();
+        assert_eq!(capped_word_names, vec!["新词A", "新词B"]);
+        assert_eq!(capped_p.len(), 1);
+        assert_eq!((capped_p[0].0.as_str(), capped_p[0].1.as_str()), ("常", "用"));
     }
 }

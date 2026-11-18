@@ -70,14 +70,16 @@ func (s *settings) backupSection(c *ui.Context) {
 						s.exportParts[i] = true
 					}
 				}
+				s.exportPassword = ""
 				s.exportChoosing = true
 			}
 		})
 	})
 	s.exportDialog(c)
+	s.unlockDialog(c)
 	switch ui.AlertDialog(c, &s.confirmRestore, "导入全部设置？", s.restoreSummary+"\n导入会用备份里的数据替换本机对应的数据；备份里不含的数据保持不变。请先导出当前数据，保存后再导入。", "取消", "导入并替换") {
 	case 0:
-		s.restorePath, s.restoreSummary = "", ""
+		s.restorePath, s.restoreSummary, s.restorePassword = "", "", ""
 	case 1:
 		path := s.restorePath
 		s.restorePath, s.restoreSummary = "", ""
@@ -85,7 +87,7 @@ func (s *settings) backupSection(c *ui.Context) {
 	}
 }
 
-// exportDialog 让用户勾选要导出的数据，再选保存位置。
+// exportDialog 让用户勾选要导出的数据（并可选设置加密密码），再选保存位置。
 func (s *settings) exportDialog(c *ui.Context) {
 	ui.Modal(c, &s.exportChoosing, func() {
 		ui.Column(c).Gap(14).Width(420).MaxWidthPercent(100).Children(func() {
@@ -101,13 +103,16 @@ func (s *settings) exportDialog(c *ui.Context) {
 					})
 				}
 			})
+			ui.Field(c, "备份密码（可选）", func() {
+				ui.TextInput(c, &s.exportPassword).Password().Placeholder("留空则不加密；设置后用 AES-256 加密备份").Label("导出备份密码").FillWidth()
+			}).FillWidth()
 			none := len(s.chosenExportParts()) == 0
 			if none {
 				ui.Text(c, "请至少选择一项。").TextColor(c.Theme().Danger)
 			}
 			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
 				if ui.Button(c, "取消").Label("取消导出").Clicked() {
-					s.exportChoosing = false
+					s.exportChoosing, s.exportPassword = false, ""
 				}
 				if ui.PrimaryButton(c, "导出…").Label("导出选中的数据").Disabled(none).Clicked() {
 					s.exportChoosing = false
@@ -118,36 +123,171 @@ func (s *settings) exportDialog(c *ui.Context) {
 	})
 }
 
+// unlockDialog 在导入已加密的备份文件时提示用户输入密码。
+func (s *settings) unlockDialog(c *ui.Context) {
+	ui.Modal(c, &s.unlockingRestore, func() {
+		ui.Column(c).Gap(14).Width(400).MaxWidthPercent(100).Children(func() {
+			ui.Text(c, "输入备份密码").FontSize(textSize(c, 17)).FontWeight(600)
+			ui.Text(c, "备份文件「"+filepath.Base(s.lockedBackupPath)+"」已加密，请输入导出时设置的备份密码。").Wrap().TextColor(colors(c).muted)
+			ui.Field(c, "备份密码", func() {
+				ui.TextInput(c, &s.restorePassword).Password().Placeholder("备份密码").Label("导入备份密码").FillWidth()
+			}).FillWidth()
+			if s.unlockError != "" {
+				ui.Text(c, s.unlockError).Wrap().TextColor(c.Theme().Danger)
+			}
+			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
+				if ui.Button(c, "取消").Label("取消解锁备份").Clicked() {
+					s.unlockingRestore = false
+					s.lockedBackupPath, s.restorePassword, s.unlockError = "", "", ""
+				}
+				if ui.PrimaryButton(c, "继续").Label("解锁备份").Clicked() {
+					if s.restorePassword == "" {
+						s.unlockError = "请输入备份密码"
+						return
+					}
+					path, password, learning := s.lockedBackupPath, s.restorePassword, s.unlockLearning
+					s.background(func() func() {
+						if learning {
+							return s.importLearningFromFile(path, password)
+						}
+						return s.inspectSettingsBackupFile(path, password)
+					})
+				}
+			})
+		})
+	})
+}
+
+func checkEncryptedBackupFile(path string) (bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	return isEncryptedBackup(data), nil
+}
+
+// withPlainBackupFile 将可能加密的备份还原为临时明文文件供服务进程读取，调用结束后立即删除临时文件。
+func withPlainBackupFile(path, password string, fn func(plainPath string, rawPlain []byte) error) error {
+	if password == "" {
+		raw, _ := os.ReadFile(path)
+		return fn(path, raw)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	plain, err := openLocalBackup(raw, password)
+	if err != nil {
+		return err
+	}
+	temp, err := os.CreateTemp(filepath.Dir(path), ".freetype-open-*.tmp")
+	if err != nil {
+		temp, err = os.CreateTemp("", ".freetype-open-*.tmp")
+		if err != nil {
+			return err
+		}
+	}
+	name := temp.Name()
+	defer os.Remove(name)
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	if err := os.WriteFile(name, plain, 0600); err != nil {
+		return err
+	}
+	return fn(name, plain)
+}
+
 func (s *settings) chooseSettingsBackup() {
 	s.background(func() func() {
 		path := s.openFile("导入全部设置")
 		if path == "" {
 			return nil
 		}
-		response, err := s.backend.Call(op("inspect_settings_backup", "path", path))
-		var connection *backupSyncConnection
-		if err == nil {
-			connection, err = readBackupConnection(path)
+		if locked, _ := checkEncryptedBackupFile(path); locked {
+			return func() {
+				s.lockedBackupPath = path
+				s.restorePassword = ""
+				s.unlockError = ""
+				s.unlockLearning = false
+				s.unlockingRestore = true
+			}
 		}
-		return func() {
-			if err != nil {
-				s.notice = "导入失败：" + err.Error()
-				return
-			}
-			s.restorePath = path
-			s.restoreSummary = "文件：" + filepath.Base(path)
-			if connection != nil {
-				s.restoreSummary += "\n包含同步账号和计划。导入后会清空密码并暂停同步，请重新填写密码。"
-			}
-			if response.Report != nil && response.Report.Note != "" {
-				s.restoreSummary += "\n备份内容：" + response.Report.Note
-			}
-			s.confirmRestore = true
-		}
+		return s.inspectSettingsBackupFile(path, "")
 	})
 }
 
+func (s *settings) inspectSettingsBackupFile(path, password string) func() {
+	var (
+		response   Response
+		connection *backupSyncConnection
+	)
+	err := withPlainBackupFile(path, password, func(plainPath string, rawPlain []byte) error {
+		var inspectErr error
+		response, inspectErr = s.backend.Call(op("inspect_settings_backup", "path", plainPath))
+		if inspectErr != nil {
+			return inspectErr
+		}
+		if len(rawPlain) > 0 {
+			connection, inspectErr = readBackupConnectionBytes(rawPlain)
+		} else {
+			connection, inspectErr = readBackupConnection(plainPath)
+		}
+		return inspectErr
+	})
+	return func() {
+		if err != nil {
+			if password != "" {
+				s.unlockError = err.Error()
+				s.unlockingRestore = true
+				return
+			}
+			s.notice = "导入失败：" + err.Error()
+			return
+		}
+		s.unlockingRestore = false
+		s.lockedBackupPath, s.unlockError = "", ""
+		s.restorePath = path
+		s.restorePassword = password
+		s.restoreSummary = "文件：" + filepath.Base(path)
+		if connection != nil {
+			s.restoreSummary += "\n包含同步账号和计划。导入后会清空密码并暂停同步，请重新填写密码。"
+		}
+		if response.Report != nil && response.Report.Note != "" {
+			s.restoreSummary += "\n备份内容：" + response.Report.Note
+		}
+		s.confirmRestore = true
+	}
+}
+
+func (s *settings) importLearningFromFile(path, password string) func() {
+	var resp Response
+	err := withPlainBackupFile(path, password, func(plainPath string, _ []byte) error {
+		var callErr error
+		resp, callErr = s.backend.Call(op("import_learning", "path", plainPath))
+		return callErr
+	})
+	return func() {
+		if err != nil {
+			if password != "" {
+				s.unlockError = err.Error()
+				s.unlockingRestore = true
+				return
+			}
+			s.notice = "导入失败：" + err.Error()
+			return
+		}
+		s.unlockingRestore = false
+		s.lockedBackupPath, s.restorePassword, s.unlockError = "", "", ""
+		s.words = resp.UserWords
+		s.wordsLoaded = true
+		s.notice, _ = describe(resp.Report, "学习记录已合并")
+	}
+}
+
 func (s *settings) importSettingsBackup(path string) {
+	password := s.restorePassword
+	s.restorePassword = ""
 	s.background(func() func() {
 		// 与后台同步共用锁，避免恢复连接信息时仍向旧地址读写。
 		if s.autoSync != nil {
@@ -156,22 +296,33 @@ func (s *settings) importSettingsBackup(path string) {
 			}
 			defer s.autoSync.gate.Unlock()
 		}
-		connection, err := readBackupConnection(path)
-		var restored syncSettings
-		if err == nil && connection != nil {
-			restored, err = loadSyncSettings(s.syncDataDir())
-			if err == nil {
-				data, _ := json.Marshal(connection)
-				err = json.Unmarshal(data, &restored)
-				// 账号可迁移，设备身份和凭据不能迁移；等用户确认新连接再启用。
-				restored.Enabled, restored.WebDAVPassword, restored.S3SecretKey, restored.EncryptPassword = false, "", "", ""
+		var (
+			connection *backupSyncConnection
+			restored   syncSettings
+			response   Response
+			saveErr    error
+		)
+		err := withPlainBackupFile(path, password, func(plainPath string, rawPlain []byte) error {
+			var stepErr error
+			if len(rawPlain) > 0 {
+				connection, stepErr = readBackupConnectionBytes(rawPlain)
+			} else {
+				connection, stepErr = readBackupConnection(plainPath)
 			}
-		}
-		var response Response
-		if err == nil {
-			response, err = s.backend.Call(op("import_settings", "path", path))
-		}
-		var saveErr error
+			if stepErr == nil && connection != nil {
+				restored, stepErr = loadSyncSettings(s.syncDataDir())
+				if stepErr == nil {
+					data, _ := json.Marshal(connection)
+					stepErr = json.Unmarshal(data, &restored)
+					// 账号可迁移，设备身份和凭据不能迁移；等用户确认新连接再启用。
+					restored.Enabled, restored.WebDAVPassword, restored.S3SecretKey, restored.EncryptPassword = false, "", "", ""
+				}
+			}
+			if stepErr == nil {
+				response, stepErr = s.backend.Call(op("import_settings", "path", plainPath))
+			}
+			return stepErr
+		})
 		if err == nil && connection != nil {
 			saveErr = saveSyncSettings(s.syncDataDir(), restored)
 			if saveErr == nil && s.autoSync != nil {
@@ -231,6 +382,10 @@ func readBackupConnection(path string) (*backupSyncConnection, error) {
 	if err != nil {
 		return nil, err
 	}
+	return readBackupConnectionBytes(data)
+}
+
+func readBackupConnectionBytes(data []byte) (*backupSyncConnection, error) {
 	var backup struct {
 		Connection *backupSyncConnection `json:"sync_connection"`
 	}
@@ -253,8 +408,8 @@ func readBackupConnection(path string) (*backupSyncConnection, error) {
 	return backup.Connection, nil
 }
 
-// exportSettingsBackup 把 parts 这几类数据导出到 path。
-func (s *settings) exportSettingsBackup(path string, parts []string) (Response, error) {
+// exportSettingsBackup 把 parts 这几类数据导出到 path；password 非空时用口令加密整份文件。
+func (s *settings) exportSettingsBackup(path string, parts []string, password string) (Response, error) {
 	chosen := map[string]bool{}
 	for _, id := range parts {
 		chosen[id] = true
@@ -324,11 +479,34 @@ func (s *settings) exportSettingsBackup(path string, parts []string) (Response, 
 			return response, err
 		}
 	}
+	var compactLearning bytes.Buffer
+	if rawLearning, ok := document["learning"]; ok && len(rawLearning) > 0 && string(rawLearning) != "null" {
+		if err := json.Compact(&compactLearning, rawLearning); err != nil {
+			return response, err
+		}
+		document["learning"] = json.RawMessage("null")
+	}
 	data, err = json.MarshalIndent(document, "", "  ")
 	if err != nil {
 		return response, err
 	}
-	if err := os.WriteFile(name, append(data, '\n'), 0600); err != nil {
+	if compactLearning.Len() > 0 {
+		data = bytes.Replace(
+			data,
+			[]byte("\n  \"learning\": null"),
+			append([]byte("\n  \"learning\": "), compactLearning.Bytes()...),
+			1,
+		)
+	}
+	data = append(data, '\n')
+	if password != "" {
+		data, err = sealBackup(data, password)
+		if err != nil {
+			return response, err
+		}
+		data = append(data, '\n')
+	}
+	if err := os.WriteFile(name, data, 0600); err != nil {
 		return response, err
 	}
 	return response, os.Rename(name, path)

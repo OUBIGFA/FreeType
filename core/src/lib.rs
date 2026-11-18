@@ -350,12 +350,26 @@ impl Engine {
             .filter(|w| !w.is_empty())
             .unwrap_or_else(|| vec![word.to_string()]);
         let start = self.start_word();
+        let mut need_prune = false;
         if let Ok(mut pairs) = self.pairs.write() {
             if let Some(prev) = &start {
                 pairs.learn(prev, &words[0], at_ms);
             }
             for pair in words.windows(2) {
                 pairs.learn(&pair[0], &pair[1], at_ms);
+            }
+            need_prune = pairs.len() > crate::learn::MAX_USER_PAIRS;
+        }
+        if !need_prune {
+            need_prune = self
+                .history
+                .read()
+                .map(|h| h.len() > crate::learn::MAX_HISTORY_WORDS)
+                .unwrap_or(false);
+        }
+        if need_prune {
+            if let (Ok(mut history), Ok(mut pairs)) = (self.history.write(), self.pairs.write()) {
+                crate::learn::prune_learning(&mut history, &mut pairs);
             }
         }
         if let (Ok(mut last), Some(tail)) = (self.last_word.write(), words.last()) {

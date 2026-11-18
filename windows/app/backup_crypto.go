@@ -13,8 +13,8 @@ import (
 	"strings"
 )
 
-// 云端备份加密（默认关闭，在「云端同步」里打开）：上传到网盘的备份用用户自己定的密码加密。
-// 本机的一键导出不加密——别的输入法导出的词库、学习记录也是明文；导出时可以选要包含哪些数据。
+// 备份加密：云端同步（在「云端同步」里打开）与本机一键导出（填写可选备份密码时）共用同一格式。
+// 未填写密码时本机导出紧凑 JSON，导出时也可选择要包含哪些数据。
 //
 // 做法是通行的口令加密，全部用 Go 标准库：PBKDF2-HMAC-SHA256 从密码导出密钥
 // （迭代次数取 OWASP 对这个算法的建议值），AES-256-GCM 加密并校验内容没被改过。
@@ -119,6 +119,45 @@ func openBackup(data []byte, password string) ([]byte, error) {
 		return nil, errBackupPassword
 	}
 	return plain, nil
+}
+
+// isEncryptedBackup 判断文件内容是否为加密备份（含直接导出的加密文件及云端同步的加密快照）。
+func isEncryptedBackup(data []byte) bool {
+	trimmed := bytes.TrimSpace(bytes.TrimPrefix(data, []byte("\xef\xbb\xbf")))
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return false
+	}
+	var sealed sealedBackup
+	if json.Unmarshal(trimmed, &sealed) == nil && sealed.Format == sealedFormat {
+		return true
+	}
+	if end := bytes.IndexByte(trimmed, '\n'); end >= 0 {
+		body := append([]byte{'{'}, bytes.TrimSpace(trimmed[end+1:])...)
+		if json.Unmarshal(body, &sealed) == nil && sealed.Format == sealedFormat {
+			return true
+		}
+	}
+	return false
+}
+
+// openLocalBackup 解开本机导入的加密备份（兼容一键导出加密文件与带首行元数据的云端加密快照）。
+func openLocalBackup(data []byte, password string) ([]byte, error) {
+	trimmed := bytes.TrimSpace(bytes.TrimPrefix(data, []byte("\xef\xbb\xbf")))
+	var sealed sealedBackup
+	if json.Unmarshal(trimmed, &sealed) == nil && sealed.Format == sealedFormat {
+		return openBackup(trimmed, password)
+	}
+	if end := bytes.IndexByte(trimmed, '\n'); end >= 0 {
+		body := append([]byte{'{'}, bytes.TrimSpace(trimmed[end+1:])...)
+		if json.Unmarshal(body, &sealed) == nil && sealed.Format == sealedFormat {
+			plain, err := openBackup(body, password)
+			if err != nil {
+				return nil, err
+			}
+			return append(append([]byte{}, trimmed[:end+1]...), plain[1:]...), nil
+		}
+	}
+	return openBackup(trimmed, password)
 }
 
 // sealingStore 在远端存储外面加一层：上传的备份按密码加密，下载时解开。

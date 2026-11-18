@@ -65,9 +65,9 @@ The candidate window has four selected-candidate styles:
 - Log files are stored in `%LOCALAPPDATA%\FreeType\logs`.
 - Clipboard history is off by default.
 - When enabled, clipboard history keeps the latest 20 items in memory.
-- A learning backup contains personal input habits. Do not share it in public.
+- A learning backup contains personal input habits. Full-settings export lets you choose which data categories to include and optionally encrypt the backup with a password (AES-256); learning data also automatically prunes stale decayed entries and enforces capacity limits. Keep unencrypted backups private and do not share them in public.
 - Update checks connect to GitHub, and downloads use its release asset servers. Automatic updates are off by default. Update requests do not include typed text or learning data.
-- Cloud sync is off by default. When enabled, settings, dictionaries, and learning data are backed up to your configured WebDAV or S3 storage. Sync passwords and secret keys are excluded from backups.
+- Cloud sync is off by default. When enabled, settings, dictionaries, and learning data are backed up to your configured WebDAV or S3 storage (with optional backup encryption). Sync passwords and secret keys are excluded from backups.
 
 ## System requirements
 
@@ -95,9 +95,10 @@ Choose the word more often. FreeType learns your choices. You can also add the w
 
 Open **FreeType Settings → Dictionaries** and select the dictionary file. FreeType shows an import report for Sogou, Rime, and other supported formats.
 
-### I want to save my input habits
+### I want to save my input habits or all settings
 
-Open **FreeType Settings → Learned Words** and click **Export**. After you move to another computer or reinstall FreeType, click **Import**.
+- Learning data only: open **FreeType Settings → Learned Words** and click **Export…**. After you move to another computer or reinstall FreeType, click **Import…**.
+- Full settings and data backup: open **FreeType Settings → Data & Sync** and click **Export…**. You can pick which data categories to include and optionally set a backup password to encrypt the file; enter the same password when importing.
 
 ## More information
 

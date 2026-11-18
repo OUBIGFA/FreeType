@@ -53,6 +53,7 @@ type Config struct {
 	PredictNext      bool `json:"predict_next"`
 	PredictDigits    bool `json:"predict_digits"`
 	PredictSpace     bool `json:"predict_space"`
+	PredictArrows    bool `json:"predict_arrows"`
 
 	HotkeyEmoji       string `json:"hotkey_emoji"`
 	HotkeyPunct       string `json:"hotkey_punct"`
@@ -80,7 +81,7 @@ func defaultConfig() Config {
 		DefaultMode: "chinese", ModeScope: "global",
 		AppPresetRules: []AppPreset{},
 		QuickPhrases:   true, EmojiSuggest: true, DateTime: true, Calculator: true, Toolbar: true, EmailCompletion: true,
-		PredictDigits: true, PredictSpace: true,
+		PredictDigits: true, PredictSpace: true, PredictArrows: true,
 		HotkeyEmoji: "off", HotkeyPunct: "off", HotkeyTraditional: "off", HotkeyMode: "off",
 		TrayIcon: true, HintOnToggle: true, HintPosition: "top-left",
 	}

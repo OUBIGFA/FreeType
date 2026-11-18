@@ -353,22 +353,39 @@ impl PreparedBackup {
         self.parts.contains(&part)
     }
 
-    /// 写成备份文件的内容：只写有的类别。
+    /// 写成备份文件的内容：只写有的类别。学习记录固定压成单行紧凑 JSON，避免词条和搭配分行铺满文件。
     fn text(&self) -> Result<String, String> {
-        if BackupPart::ALL.into_iter().all(|part| self.has(part)) {
-            // 全部类别：和以前逐字节一样（自动同步按内容比较本机和云端的新旧）
-            return Ok(serde_json::to_string_pretty(&self.data).map_err(|error| error.to_string())? + "\n");
-        }
-        let mut value = serde_json::to_value(&self.data).map_err(|error| error.to_string())?;
-        if let Some(object) = value.as_object_mut() {
-            for part in BackupPart::ALL.into_iter().filter(|part| !self.has(*part)) {
-                let (required, optional) = part_fields(part);
-                for key in required.iter().chain(optional) {
-                    object.remove(*key);
+        let compact_learning = if self.has(BackupPart::Learning) {
+            Some(serde_json::to_string(&self.data.learning).map_err(|error| error.to_string())?)
+        } else {
+            None
+        };
+        let mut pretty = if BackupPart::ALL.into_iter().all(|part| self.has(part)) {
+            let mut value = serde_json::to_value(&self.data).map_err(|error| error.to_string())?;
+            if let Some(object) = value.as_object_mut() {
+                object.insert("learning".into(), Value::Null);
+            }
+            let shell: SettingsBackup = serde_json::from_value(value).map_err(|error| error.to_string())?;
+            serde_json::to_string_pretty(&shell).map_err(|error| error.to_string())?
+        } else {
+            let mut value = serde_json::to_value(&self.data).map_err(|error| error.to_string())?;
+            if let Some(object) = value.as_object_mut() {
+                if compact_learning.is_some() {
+                    object.insert("learning".into(), Value::Null);
+                }
+                for part in BackupPart::ALL.into_iter().filter(|part| !self.has(*part)) {
+                    let (required, optional) = part_fields(part);
+                    for key in required.iter().chain(optional) {
+                        object.remove(*key);
+                    }
                 }
             }
+            serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?
+        };
+        if let Some(learning) = compact_learning {
+            pretty = pretty.replacen("\n  \"learning\": null", &format!("\n  \"learning\": {learning}"), 1);
         }
-        Ok(serde_json::to_string_pretty(&value).map_err(|error| error.to_string())? + "\n")
+        Ok(pretty + "\n")
     }
 
     /// 合并恢复用的设置：以本机为底，只采纳备份里和出厂默认值不同的项

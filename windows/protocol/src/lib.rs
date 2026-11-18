@@ -311,10 +311,12 @@ pub struct Config {
     pub email_completion: bool,
     /// 上屏联想：一个词上屏以后，候选窗接着给出常跟在它后面的词（默认关）。
     pub predict_next: bool,
-    /// 上屏联想时数字键选联想词（关掉以后数字照常打出来，联想词只能用空格或鼠标选）。
+    /// 上屏联想时数字键选联想词（关掉以后数字照常打出来）。
     pub predict_digits: bool,
-    /// 上屏联想时空格选第一个联想词（关掉以后空格照常打出来）。
+    /// 上屏联想时空格选当前高亮的联想词（关掉以后空格照常打出来）。
     pub predict_space: bool,
+    /// 上屏联想时左右方向键移动候选高亮（默认开，独立于组字时的方向键设置）。
+    pub predict_arrows: bool,
 
     // —— 快捷键（off 表示不用） ——
     /// 表情面板：off ctrl+shift+e ctrl+alt+e。
@@ -391,6 +393,7 @@ impl Default for Config {
             predict_next: false,
             predict_digits: true,
             predict_space: true,
+            predict_arrows: true,
             hotkey_emoji: "off".into(),
             hotkey_punct: "off".into(),
             hotkey_traditional: "off".into(),
@@ -922,6 +925,16 @@ mod tests {
         assert_eq!(config.digit_punct_fullwidth, digit_punct::DEFAULT);
         assert!(!config.corner_quotes);
         assert_eq!(config.fuzzy_groups, fuzzy::DEFAULT);
+    }
+
+    #[test]
+    fn prediction_arrows_default_on_for_old_configs_and_round_trip_when_disabled() {
+        let old: Config = serde_json::from_str(r#"{"predict_next":true}"#).unwrap();
+        assert!(old.predict_arrows, "旧配置开启联想后也默认支持左右选词");
+        let disabled = Config { predict_arrows: false, ..old };
+        let restored: Config = decode(&encode(&disabled)).unwrap();
+        assert!(restored.predict_next);
+        assert!(!restored.predict_arrows, "显式关闭后不能被默认值覆盖");
     }
 
     #[test]

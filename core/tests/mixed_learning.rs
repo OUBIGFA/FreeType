@@ -154,8 +154,14 @@ fn mixed_words_history_and_pairs_survive_restart_and_backup() {
     assert_eq!(restarted.history_count("打tag"), 1);
     assert!(restarted.pair_count() > 0);
     let restored = new_engine();
+    let exported = source.export_learning().unwrap();
+    assert_eq!(
+        exported.lines().count(),
+        1,
+        "学习备份应为单行紧凑 JSON，避免逐字段换行膨胀"
+    );
     restored
-        .import_learning(&source.export_learning().unwrap())
+        .import_learning(&exported)
         .unwrap();
     assert_eq!(restored.input("datag")[0].text, "打tag");
     assert_eq!(restored.history_count("tag"), 1);

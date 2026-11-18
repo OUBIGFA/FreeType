@@ -512,9 +512,10 @@ func (s *settings) featuresPage(c *ui.Context) {
 	})
 	section(c, "联想", func() {
 		changed = s.settingSwitch(c, "features/上屏联想", false, &s.config.PredictNext) || changed
-		if s.config.PredictNext || s.showSetting("features/数字键选联想词") || s.showSetting("features/空格选第一个联想词") {
+		if s.config.PredictNext || s.showSetting("features/数字键选联想词") || s.showSetting("features/空格选联想词") || s.showSetting("features/左右方向键选联想词") {
 			changed = s.settingSwitch(c, "features/数字键选联想词", true, &s.config.PredictDigits) || changed
-			changed = s.settingSwitch(c, "features/空格选第一个联想词", true, &s.config.PredictSpace) || changed
+			changed = s.settingSwitch(c, "features/空格选联想词", true, &s.config.PredictSpace) || changed
+			changed = s.settingSwitch(c, "features/左右方向键选联想词", true, &s.config.PredictArrows) || changed
 		}
 	})
 	if s.config.PredictNext {
@@ -725,6 +726,7 @@ func (s *settings) learnedPage(c *ui.Context) {
 			}
 		})
 	})
+	s.unlockDialog(c)
 	section(c, "添加词", func() {
 		s.settingBlock(c, "learned/添加词", func() {
 			ui.Column(c).Padding(12, rowInset, 14, rowInset).Gap(14).Children(func() {
