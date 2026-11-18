@@ -26,6 +26,9 @@ fn candidate_text_palette_is_readable_in_both_appearances() {
     for light in [true, false] {
         for style in ["pink", "blue", "green", "sogou"] {
             let palette = theme_for_appearance(style, light);
+            if style == "green" {
+                assert_eq!(palette.accent, Some(rgb(0x03, 0xdd, 0x6d)));
+            }
             for (name, text, background) in [
                 ("selected", palette.accent_text, palette.accent.unwrap_or(palette.background)),
                 ("muted", palette.muted, palette.background),
@@ -309,49 +312,60 @@ fn selected_candidate_ink_is_centered_in_its_block_for_any_font() {
     let families = [
         "Microsoft YaHei", "SimSun", "KaiTi", "FangSong", "SimHei", "DengXian", "Microsoft JhengHei",
         "Segoe UI", "Arial", "Consolas", "Times New Roman", "Yu Gothic", "Malgun Gothic", "Cascadia Mono",
-        "Georgia", "Impact", "MingLiU", "Courier New",
+        "Georgia", "Impact", "MingLiU", "Courier New", "Open Sans",
     ];
+    // 第一组复现 Open Sans 下「1 字体」偏上的截图；其余覆盖不同高度、回退和混排。
+    let samples = ["字体", "你好", "小", "gyp", "FreeType", "，", "8️⃣", "混排🧑🏽‍💻hj"];
     let mut failures = Vec::new();
     for family in families {
         for scale in [1.0f32, 1.25, 1.5, 2.0] {
-            let view = View {
-                preedit: "guo".into(),
-                candidates: ["国", "过", "果"].map(str::to_string).to_vec(),
-                cursor: Some(0),
-                font_size: 18,
-                font_family: family.into(),
-                ..View::default()
-            };
-            let (layout, pixels) = rendered(view, scale);
-            save_render(&format!("center-{family}-{scale}"), &layout, &pixels);
-            let item = layout.items[0];
-            let part = |wanted: Part| layout.parts.iter().find(|piece| piece.part == wanted).unwrap().ink;
-            let (label, body) = (part(Part::Label(0)), part(Part::Candidate(0)));
-            // 色块的底色：左边留白的正中（圆角以内、标号以左）
-            let ground = pixel_at(&layout, &pixels, item.left + 2, (item.top + item.bottom) / 2);
-            // 标号和正文各自的墨迹：左右在两者中间切开，上下取整个色块
-            let split = (label.right + body.left) / 2;
-            let whole = |left: i32, right: i32| rect(left, item.top, right - left, item.bottom - item.top);
-            let label_ink = ink_bounds(&layout, &pixels, whole(item.left, split), ground);
-            let body_ink = ink_bounds(&layout, &pixels, whole(split, item.right), ground);
-            let (Some(label_ink), Some(body_ink)) = (label_ink, body_ink) else {
-                panic!("{family} {scale}: 色块里没有画出标号或正文");
-            };
-            let top = body_ink.top - item.top;
-            let bottom = item.bottom - body_ink.bottom;
-            let left = label_ink.left - item.left;
-            let right = item.right - body_ink.right;
-            // 标号和正文的中线差多少（半个像素为单位）
-            let label_off = (label_ink.top + label_ink.bottom) - (body_ink.top + body_ink.bottom);
-            // 取整和抗锯齿各占不到一个像素
-            if (top - bottom).abs() > 2 || (left - right).abs() > 2 || label_off.abs() > 3 {
-                failures.push(format!(
-                    "{family} x{scale}: 上 {top} 下 {bottom} 左 {left} 右 {right} 标号中线偏 {label_off} 个半像素"
-                ));
+            for (sample, word) in samples.into_iter().enumerate() {
+                let view = View {
+                    preedit: "zi't".into(),
+                    candidates: [word, "姿态", "字帖", "自体", "自他"].map(str::to_string).to_vec(),
+                    labels: vec![(sample + 1).to_string(), "2".into(), "3".into(), "4".into(), "5".into()],
+                    cursor: Some(0),
+                    font_size: 18,
+                    font_family: family.into(),
+                    candidate_style: if sample == 0 { "green" } else { "pink" }.into(),
+                    ..View::default()
+                };
+                let (layout, pixels) = rendered(view, scale);
+                save_render(&format!("center-{family}-{scale}-{sample}"), &layout, &pixels);
+                let item = layout.items[0];
+                let part = |wanted: Part| {
+                    layout.parts.iter().find(|piece| piece.part == wanted).unwrap().ink
+                };
+                let (label, body) = (part(Part::Label(0)), part(Part::Candidate(0)));
+                // 避开色块四个圆角：深色主题下，圆角外的底色也可能被识别为墨迹。
+                let inset = (4.0 * scale).ceil() as i32;
+                let ground = pixel_at(&layout, &pixels, item.left + 2, (item.top + item.bottom) / 2);
+                let split = (label.right + body.left) / 2;
+                let strip = |left: i32, right: i32| rect(left, item.top, right - left, item.bottom - item.top);
+                let label_ink = ink_bounds(&layout, &pixels, strip(item.left + inset, split), ground);
+                let body_ink = ink_bounds(&layout, &pixels, strip(split, item.right - inset), ground);
+                let (Some(label_ink), Some(body_ink)) = (label_ink, body_ink) else {
+                    panic!("{family} x{scale}「{word}」：色块里没有画出标号或正文");
+                };
+                let top_diff = |ink: RECT| ink.top + ink.bottom - item.top - item.bottom;
+                let side_diff = label_ink.left + body_ink.right - item.left - item.right;
+                let body_diff = top_diff(body_ink);
+                let label_diff = top_diff(label_ink);
+                // 以半个像素为单位，允许字体栅格化和抗锯齿的边缘造成轻微误差。
+                if body_diff.abs() > 3 || label_diff.abs() > 3 || side_diff.abs() > 2 {
+                    failures.push(format!(
+                        "{family} x{scale}「{word}」：正文偏 {body_diff}，序号偏 {label_diff}，水平偏 {side_diff} 个半像素"
+                    ));
+                }
             }
         }
     }
-    assert!(failures.is_empty(), "选中的候选没有在色块里居中：\n{}", failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "选中的候选没有在色块里居中（{} 例，以下是前 24 例）：\n{}",
+        failures.len(),
+        failures.iter().take(24).map(String::as_str).collect::<Vec<_>>().join("\n"),
+    );
 }
 
 #[test]

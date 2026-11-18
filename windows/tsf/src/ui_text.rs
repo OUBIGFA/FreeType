@@ -30,15 +30,7 @@ pub struct Fonts {
     pub main: Font,
     pub small: Font,
     pub hint: Font,
-    /// 候选正文里汉字的墨迹中线在基线上方多远（像素），见 [`Font::rise`]。
-    pub main_rise: f32,
-    /// 标号里数字的墨迹中线在基线上方多远。
-    pub small_rise: f32,
 }
-
-/// 量墨迹中线用的样本：占满字面的汉字、数字。只拿来量这个字体把字画在哪，不是写死的偏移。
-const HAN_SAMPLE: &str = "国";
-const DIGIT_SAMPLE: &str = "0";
 
 impl Fonts {
     pub fn new(size: f32, family: &str) -> Result<Self> {
@@ -68,13 +60,9 @@ impl Fonts {
                 format,
             })
         };
-        let main = make(size, DWRITE_FONT_WEIGHT_NORMAL)?;
-        let small = make((size * 0.78).round(), DWRITE_FONT_WEIGHT_NORMAL)?;
         Ok(Self {
-            main_rise: main.rise(HAN_SAMPLE)?,
-            small_rise: small.rise(DIGIT_SAMPLE)?,
-            main,
-            small,
+            main: make(size, DWRITE_FONT_WEIGHT_NORMAL)?,
+            small: make((size * 0.78).round(), DWRITE_FONT_WEIGHT_NORMAL)?,
             hint: make(size, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
         })
     }
@@ -82,9 +70,8 @@ impl Fonts {
 
 /// 排好的一段文字。
 ///
-/// 字体给的行框（上伸、下伸、行距）和字实际画在哪是两回事：有的字体行框上面留得多，
-/// 字就偏下。所以除了框，还记下墨迹的范围和基线，摆位置时按墨迹和基线对齐
-/// （[`Fonts::main_rise`]、[`Text::centered_in`]），换什么字体都居中。
+/// 行框里的留白随字体变化，回退字体和不同字形的墨迹也不在同一高度。
+/// 记录本段文字实际的墨迹与基线，供候选内容和图标在各自区域内对齐。
 #[derive(Clone)]
 pub struct Text {
     layout: IDWriteTextLayout,
@@ -94,7 +81,7 @@ pub struct Text {
     /// 墨迹在框里的范围（像素，向外取整）。全是空白的文字没有墨迹，这时是整个框。
     pub ink: RECT,
     /// 基线在框里的高度。
-    pub baseline: f32,
+    baseline: f32,
     /// 墨迹上下的中线在框里的高度。
     middle: f32,
 }
@@ -103,8 +90,14 @@ impl Text {
     /// 墨迹在 `area` 里上下左右都居中时，框的左上角该在哪。
     pub fn centered_in(&self, area: &RECT) -> (f32, f32) {
         let x = (area.left + area.right - self.ink.left - self.ink.right) as f32 / 2.0;
-        let y = (area.top + area.bottom) as f32 / 2.0 - self.middle;
-        (x.round(), y.round())
+        (x.round(), self.centered_y(area))
+    }
+
+    /// 对齐本段墨迹的中线；不拿汉字样本的基线套用到英文、标点和回退字形。
+    pub fn centered_y(&self, area: &RECT) -> f32 {
+        let middle = (area.top + area.bottom) as f32 / 2.0;
+        // Direct2D 绘制时会对齐基线，先在这里吸附到同一个像素网格。
+        (middle + self.baseline - self.middle).round() - self.baseline
     }
 
     /// 框的左上角在 (x, y) 时墨迹占的地方（向外取整）。
@@ -132,15 +125,6 @@ impl Text {
 }
 
 impl Font {
-    /// 这个字体画 `sample` 时，墨迹上下的中线在基线上方多远（像素）。
-    ///
-    /// 从排好的版里量，不查字体文件里的上伸、下伸：那两个数很多中文字体填得不准，
-    /// 而且字体里没有这个字、系统换了别的字体来画时，量到的也是真正用上的那个字体。
-    fn rise(&self, sample: &str) -> Result<f32> {
-        let text = self.text(sample)?;
-        Ok(text.baseline - text.middle)
-    }
-
     pub fn text(&self, text: &str) -> Result<Text> {
         unsafe {
             let layout = self.factory.CreateTextLayout(

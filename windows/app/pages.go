@@ -308,7 +308,7 @@ func candidateStyle(id string, dark bool) selectedLook {
 		}
 		return selectedLook{true, ui.Hex("#2b6ce6"), ui.Hex("#ffffff")}
 	case "green":
-		return selectedLook{true, ui.Hex("#07c160"), ui.Hex("#18181b")}
+		return selectedLook{true, ui.Hex("#03dd6d"), ui.Hex("#18181b")}
 	case "sogou":
 		if dark {
 			return selectedLook{false, ui.Color{}, ui.Hex("#6c9eff")}

@@ -150,14 +150,15 @@ fn theme(style: &str) -> Theme {
 // 显式接收外观，便于在不修改用户系统主题的情况下验证两套候选文字颜色。
 fn theme_for_appearance(style: &str, light: bool) -> Theme {
     let white = rgb(0xff, 0xff, 0xff);
+    let wechat_green = rgb(0x03, 0xdd, 0x6d);
     // (底色块, 块上的字, 提示字色)
     let (accent, accent_text, emphasis) = match (style, light) {
         // 以前的蓝色
         ("blue", true) => (Some(rgb(0x2b, 0x6c, 0xe6)), white, rgb(0x2b, 0x6c, 0xe6)),
         ("blue", false) => (Some(rgb(0x3d, 0x7f, 0xf0)), rgb(0x18, 0x18, 0x1b), rgb(0x6c, 0x9e, 0xff)),
-        // 微信输入法的绿；浅色背景上的提示字用深一档的绿，不然看不清
-        ("green", true) => (Some(rgb(0x07, 0xc1, 0x60)), rgb(0x18, 0x18, 0x1b), rgb(0x06, 0xa0, 0x50)),
-        ("green", false) => (Some(rgb(0x07, 0xc1, 0x60)), rgb(0x18, 0x18, 0x1b), rgb(0x07, 0xc1, 0x60)),
+        // 浅色主题的单字提示用深绿，保持在白底上的对比度。
+        ("green", true) => (Some(wechat_green), rgb(0x18, 0x18, 0x1b), rgb(0x06, 0x82, 0x4a)),
+        ("green", false) => (Some(wechat_green), rgb(0x18, 0x18, 0x1b), wechat_green),
         // 搜狗那样：没有底色块，选中的字是蓝色
         ("sogou", true) => (None, rgb(0x1d, 0x66, 0xdf), rgb(0x1d, 0x66, 0xdf)),
         ("sogou", false) => (None, rgb(0x6c, 0x9e, 0xff), rgb(0x6c, 0x9e, 0xff)),
@@ -335,21 +336,13 @@ fn layout(view: &View, fonts: &Fonts, scale: f32) -> Result<Layout> {
                 Ok((label, fonts.main.text(text)?))
             })
             .collect::<Result<_>>()?;
-        // 文字不按字体给的行框居中（行框上下留的空各个字体不一样，字会偏上或偏下），按墨迹：
-        // 正文的基线放在「汉字的墨迹中线正好落在色块中线」的地方，标号按数字的墨迹中线同样对齐。
-        // 同一行的候选共用一条基线，英文、表情照排版的规矩落在这条基线上。
-        // 文字的墨迹离色块中线最远有多远：
-        let reach = |text: &Text, rise: f32| {
-            let up = text.baseline - text.ink.top as f32 - rise;
-            let down = text.ink.bottom as f32 - text.baseline + rise;
-            up.max(down).ceil() as i32
-        };
-        let tallest = texts.iter().fold(0, |m, (label, body)| {
-            m.max(reach(body, fonts.main_rise))
-                .max(label.as_ref().map_or(0, |l| reach(l, fonts.small_rise)))
+        // 序号和正文分别按实际字形居中，只需为最高的墨迹留出空间。
+        let ink_height = |text: &Text| text.ink.bottom - text.ink.top;
+        let tallest = texts.iter().fold(0, |height, (label, body)| {
+            height.max(ink_height(body)).max(label.as_ref().map_or(0, ink_height))
         });
-        // 色块的高度照字体的行高定（翻页时不跟着字变）；表情这类更高的字再撑开
-        let h = (line + s(6.0)).max(2 * tallest + s(2.0));
+        // 普通候选保持统一的行高；更高的字形（例如回退的表情）再撑开。
+        let h = (line + s(6.0)).max(tallest + s(2.0));
         // 一个候选的内容从标号的墨迹左边到正文的墨迹右边，两头留一样的空；
         // 标号和正文之间照字体自己的字距再加一点
         let content = |(label, body): &(Option<Text>, Text)| match label {
@@ -361,21 +354,18 @@ fn layout(view: &View, fonts: &Fonts, scale: f32) -> Result<Layout> {
         let centered = view.panel == Panel::Grid;
         let place = |out: &mut Layout, i: usize, x: i32, y: i32, w: i32| {
             let (label, body) = &texts[i];
-            out.items.push(rect(x, y, w, h));
+            let item = rect(x, y, w, h);
+            out.items.push(item);
             let spare = if centered { (w - item_width(&texts[i])).max(0) / 2 } else { 0 };
             let mut left = (x + item_pad + spare) as f32;
-            let middle = y as f32 + h as f32 / 2.0;
-            // 基线定在整像素上：Direct2D 画字时也会把基线对齐到像素，这里先定下来，
-            // 标号和正文不会各自多偏半个像素
-            let rest = |text: &Text, rise: f32| (middle + rise).round() - text.baseline;
             if let Some(label) = label {
                 let at = left - label.ink.left as f32;
-                out.parts.push(Piece::new(Part::Label(i), label.clone(), at, rest(label, fonts.small_rise)));
+                out.parts.push(Piece::new(Part::Label(i), label.clone(), at, label.centered_y(&item)));
                 left = at + (label.size.cx + s(4.0)) as f32;
             } else {
                 left -= body.ink.left as f32;
             }
-            out.parts.push(Piece::new(Part::Candidate(i), body.clone(), left, rest(body, fonts.main_rise)));
+            out.parts.push(Piece::new(Part::Candidate(i), body.clone(), left, body.centered_y(&item)));
         };
         let prev = fonts.main.text("‹")?;
         let next = fonts.main.text("›")?;

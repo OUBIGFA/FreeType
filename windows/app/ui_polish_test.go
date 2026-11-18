@@ -79,6 +79,9 @@ func TestCandidateSelectionTextIsReadableInEveryAppearance(test *testing.T) {
 		}
 		for _, id := range []string{"pink", "blue", "green", "sogou"} {
 			style := candidateStyle(id, dark)
+			if id == "green" && (!style.block || style.fill != ui.Hex("#03dd6d")) {
+				test.Errorf("dark=%v：微信绿预览必须使用 #03DD6D 色块，得到 %+v", dark, style)
+			}
 			background := theme.Background
 			if style.block {
 				background = style.fill
