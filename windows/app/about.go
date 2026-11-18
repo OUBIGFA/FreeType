@@ -73,6 +73,11 @@ func (s *settings) aboutPage(c *ui.Context) {
 		}
 	})
 	section(c, "数据与日志", func() {
+		s.settingRow(c, "about/导出诊断", func() {
+			if ui.Button(c, "导出诊断").Disabled(s.saveFile == nil).Clicked() {
+				s.exportDiagnostics()
+			}
+		})
 		if dir := s.status.DataDir; dir != "" {
 			s.settingRowValue(c, "about/用户数据", dir, func() {
 				if ui.Button(c, "打开文件夹").Label("打开用户数据文件夹").Clicked() && s.openFolder != nil {

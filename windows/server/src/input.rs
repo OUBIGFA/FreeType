@@ -179,6 +179,12 @@ impl ClientState {
         }
     }
 
+    pub(crate) fn set_sensitive(&mut self, active: bool) {
+        self.clear();
+        self.set_before("");
+        self.session.set_no_learn(active);
+    }
+
     /// 在组字、开着面板或邮箱补全。
     pub fn busy(&self) -> bool {
         self.session.composing() || self.tool.is_some() || self.raw.is_some()
@@ -253,6 +259,7 @@ impl ClientState {
         // 数字键不选词时不标序号；空格或方向键选词时显示当前高亮
         frame.labels = if env.config.predict_digits { Vec::new() } else { vec![String::new(); items.len()] };
         frame.cursor = (env.config.predict_space || env.config.predict_arrows).then_some(self.predict_cursor);
+        frame.predict_double_space = env.config.predict_space && env.config.predict_double_space;
         frame.has_prev = false;
         frame.has_next = false;
         frame.forgettable = false;
@@ -270,6 +277,8 @@ impl ClientState {
         self.start_prediction(env);
         let mut out = self.current(true, env);
         out.frame.commit = Some(text);
+        out.frame.selected_rank = index + 1;
+        out.frame.undo_learning = self.session.has_commit_learning();
         out
     }
 
@@ -277,6 +286,14 @@ impl ClientState {
     fn predict_key(&mut self, key: &Key, env: &Env) -> Option<Out> {
         let count = self.live_prediction(env)?.len();
         let plain = key.modifiers & (modifier::CTRL | modifier::ALT | modifier::SUPER | modifier::SHIFT) == 0;
+        if plain && env.config.predict_space && env.config.predict_double_space {
+            if key.keysym == 0x20 { return Some(self.current(false, env)); }
+            if key.keysym == keysym::SPACE_DOUBLE {
+                let mut out = self.choose_prediction(self.predict_cursor, env);
+                out.frame.replace_space = out.frame.commit.is_some();
+                return Some(out);
+            }
+        }
         if plain && key.keysym == keysym::ESCAPE {
             self.predict = None;
             return Some(self.current(true, env));
@@ -315,9 +332,7 @@ impl ClientState {
         self.predict = None;
         self.tool = None;
         self.raw = None;
-        if self.session.composing() {
-            self.session.reset(false);
-        }
+        self.session.reset(false);
     }
 
     /// 核心的结果翻成应答（不带样式），记下上屏的字。
@@ -333,6 +348,7 @@ impl ClientState {
                 }
             }
             out.frame.commit = Some(self.emit(text, env));
+            out.frame.undo_learning = self.session.has_commit_learning();
         }
         let candidates: Vec<String> = if core.cand_count > 0 {
             self.session.candidates()[core.cand_start..core.cand_start + core.cand_count]
@@ -342,6 +358,21 @@ impl ClientState {
         } else {
             Vec::new()
         };
+        if !candidates.is_empty() {
+            let shown = &self.session.candidates()[core.cand_start..core.cand_start + core.cand_count];
+            out.frame.pin_slots = shown.iter().map(|c| c.pin_key.as_ref().map(|_| c.pin_position)).collect();
+            out.frame.pin_limit = env.config.page_size as u8;
+            let pin_badge = match env.config.pin_badge.as_str() {
+                "paperclip" => "📎", "pushpin" => "📌", "dot" => "•", _ => "",
+            };
+            if env.config.typo_mark || !pin_badge.is_empty() {
+                out.frame.badges = shown.iter().map(|c| {
+                    if c.pin_position > 0 { pin_badge.into() }
+                    else if env.config.typo_mark && c.corrected { "*".into() }
+                    else { String::new() }
+                }).collect();
+            }
+        }
         let expanded = core.panel == session::Panel::Expanded;
         if expanded {
             let row = core.cand_cursor.map(|c| c / session::GRID_COLS);
@@ -359,8 +390,18 @@ impl ClientState {
         }
         out.frame.forgettable = !candidates.is_empty();
         out.frame.handled = core.handled;
+        out.frame.selected_rank = core.selected_rank;
         out.frame.preedit_cursor = utf16_len(&core.preedit[..core.preedit_cursor.min(core.preedit.len())]);
         out.frame.preedit = core.preedit;
+        match env.config.inline_preedit.as_str() {
+            "raw" => {
+                let (raw, cursor) = self.session.raw_preedit();
+                out.frame.inline_cursor = utf16_len(&raw[..cursor]);
+                out.frame.inline_preedit = Some(raw);
+            }
+            "off" => out.frame.inline_preedit = Some(String::new()),
+            _ => {}
+        }
         out.frame.candidates = candidates;
         out.frame.cursor = core.cand_cursor;
         out.frame.has_prev = core.has_prev;
@@ -431,10 +472,15 @@ impl ClientState {
         symbols::fullwidth_punct(c).map(str::to_string)
     }
 
+    pub fn pairs_enabled(&self, config: &Config) -> bool {
+        config.auto_pair && config.fullwidth_punct && !matches!(self.app.as_str(),
+            "windowsterminal.exe" | "openconsole.exe" | "conhost.exe" | "cmd.exe" | "powershell.exe" | "pwsh.exe" | "mintty.exe" | "wezterm-gui.exe" | "alacritty.exe")
+    }
+
     /// 标点要上屏的字和光标往回挪几个（成对补全）。
     fn punct_commit(&mut self, c: char, env: &Env, prev: Option<char>) -> (String, usize) {
         let text = self.punct_text(c, env, prev).unwrap_or_else(|| c.to_string());
-        if env.config.auto_pair {
+        if self.pairs_enabled(env.config) {
             if let Some((_, close)) = PAIRS.iter().find(|(open, _)| *open == text) {
                 return (format!("{text}{close}"), utf16_len(close));
             }
@@ -503,7 +549,28 @@ impl ClientState {
             out.frame.handled = true;
             return out;
         };
-        // 标点：先把候选选完上屏，再上屏标点
+        let (head, emoji) = self.finish_for_punctuation(env);
+        let prev = head.chars().last().or(prev);
+        let (mark, back) = self.punct_commit(c, env, prev);
+        self.remember(&mark);
+        let mut out = self.current(true, env);
+        out.frame.commit = Some(head + &mark);
+        out.frame.caret_back = back;
+        out.emoji = emoji;
+        out
+    }
+
+    pub fn close_pair(&mut self, env: &Env) -> Out {
+        if self.raw.is_some() { return self.reset(true, env); }
+        self.dismiss_prediction();
+        let (text, emoji) = self.finish_for_punctuation(env);
+        let mut out = self.current(true, env);
+        out.frame.commit = (!text.is_empty()).then_some(text);
+        out.emoji = emoji;
+        out
+    }
+
+    fn finish_for_punctuation(&mut self, env: &Env) -> (String, Option<String>) {
         let mut text = String::new();
         let mut emoji = None;
         for _ in 0..MAX_HEAD_COMMITS {
@@ -529,15 +596,7 @@ impl ClientState {
                 text.push_str(&commit);
             }
         }
-        let head = self.emit(&text, env);
-        let prev = head.chars().last().or(prev);
-        let (mark, back) = self.punct_commit(c, env, prev);
-        self.remember(&mark);
-        let mut out = self.current(true, env);
-        out.frame.commit = Some(head + &mark);
-        out.frame.caret_back = back;
-        out.emoji = emoji.filter(|e| !e.is_empty());
-        out
+        (self.emit(&text, env), emoji.filter(|e| !e.is_empty()))
     }
 
     /// 交给应用的键；自动加空格时字母、数字前面可能要先补一个空格（自己上屏）。

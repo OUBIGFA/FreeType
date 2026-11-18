@@ -86,8 +86,12 @@ func TestCandidateSelectionTextIsReadableInEveryAppearance(test *testing.T) {
 			if style.block {
 				background = style.fill
 			}
-			if contrast := colorContrast(style.text, background); contrast < 4.5 {
-				test.Errorf("%s dark=%v：小字号候选文字对比度 %.2f:1，需至少 4.5:1", id, dark, contrast)
+			minimum := 4.5
+			if id == "green" {
+				minimum = 9.5
+			}
+			if contrast := colorContrast(style.text, background); contrast < minimum {
+				test.Errorf("%s dark=%v：候选文字对比度 %.2f:1，需至少 %.1f:1", id, dark, contrast, minimum)
 			}
 		}
 	}
@@ -120,6 +124,20 @@ func TestSettingsNavigationCanBeSelectedWithKeyboard(test *testing.T) {
 	view.Frame()
 	if state.page != "candidates" {
 		test.Fatalf("侧边栏必须支持 Tab 和 Enter：page=%s", state.page)
+	}
+}
+
+func TestCandidatePreviewCentersWhenItFits(test *testing.T) {
+	state, _ := newTestSettings()
+	state.page = "candidates"
+	for _, horizontal := range []bool{true, false} {
+		state.config.Horizontal = horizontal
+		view := ui.NewTester(state.view, 1024, 900)
+		stage, stageOK := view.Find("候选预览区域")
+		popup, popupOK := view.Find("候选预览窗口")
+		if !stageOK || !popupOK || popup.W >= stage.W || math.Abs(float64(2*(popup.X-stage.X)+popup.W-stage.W)) > 2 {
+			test.Errorf("横排=%v：预览应在区域内居中：区域=%+v，预览=%+v", horizontal, stage, popup)
+		}
 	}
 }
 

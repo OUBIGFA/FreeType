@@ -198,6 +198,8 @@ pub struct Frame {
     pub handled: bool,
     /// 要上屏的字。
     pub commit: Option<String>,
+    /// 提交的候选在全部列表中的序号，从 1 起。
+    pub selected_rank: usize,
     /// 编辑区：已选的词 + 还没选的输入（分好音节，双拼显示成全拼）。
     pub preedit: String,
     /// 编辑区光标，UTF-8 字节偏移。
@@ -332,6 +334,37 @@ pub enum CandidateKind {
 }
 
 /// 会话给出的一个候选。
+pub type ManualPins = std::collections::BTreeMap<String, std::collections::BTreeMap<u8, String>>;
+
+impl Engine {
+    /// 拷贝一份手动排位供 Windows 宿主原子保存。
+    pub fn manual_pins(&self) -> ManualPins { self.manual_pins.read().unwrap().clone() }
+    pub fn set_manual_pins(&self, pins: ManualPins) { *self.manual_pins.write().unwrap() = pins; }
+
+    fn pin_scope(&self, input: &str) -> String {
+        let scheme = if self.config().shuangpin { self.config().shuangpin_scheme.name() } else { "quanpin" };
+        format!("{scheme}:{}", input.to_ascii_lowercase())
+    }
+
+    fn apply_pins(&self, input: &str, candidates: &mut Vec<Candidate>) {
+        let pins = self.manual_pins.read().unwrap();
+        if pins.is_empty() { return; }
+        let Some(slots) = pins.get(&self.pin_scope(input)) else { return; };
+        let mut fixed = Vec::with_capacity(slots.len());
+        for (&position, key) in slots {
+            if let Some(index) = candidates.iter().position(|item| item.pin_key.as_ref() == Some(key)) {
+                let mut item = candidates.remove(index);
+                item.pin_position = position;
+                fixed.push(item);
+            }
+        }
+        for item in fixed {
+            let index = usize::from(item.pin_position.saturating_sub(1)).min(candidates.len());
+            candidates.insert(index, item);
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Candidate {
     /// 候选框里显示的字。
@@ -341,6 +374,10 @@ pub struct Candidate {
     /// 用掉了还没选词那部分输入的多少字节；比它短是句首词（选了以后剩下的接着选）。
     pub consumed: usize,
     pub kind: CandidateKind,
+    /// 纠错标志只供外壳显示，不参与上屏。
+    pub corrected: bool,
+    pub pin_key: Option<String>,
+    pub pin_position: u8,
     /// 选中时上屏的字：emoji 推荐在句尾对上时是「整句 + emoji」，其余和 text 一样。
     pub commit: String,
     /// emoji 本身（推荐候选显示的是「开心😊」，这里是「😊」）；不是 emoji 为空。
@@ -375,6 +412,10 @@ pub struct Session<'e> {
     /// 全部原始输入（包括已经选过词的部分）。
     input: String,
     selections: Vec<Selection>,
+    selection_learning: Vec<Option<(u64, u64)>>,
+    committed_learning: Vec<(u64, u64)>,
+    no_learn: bool,
+    learning_changed: bool,
     /// 编辑区光标在 input 里的字节位置；None 是在末尾（没移动过，或移回了末尾）。
     /// 只在还没选词的那段里，读的时候用 [`Session::caret`] 夹进去。
     caret: Option<usize>,
@@ -397,6 +438,7 @@ pub struct Session<'e> {
     pending: Option<String>,
     /// 这次调用上屏的字是选哪个候选来的；原样上屏输入时是 None。
     last_choice: Option<Candidate>,
+    pending_rank: usize,
     /// 这次调用忘掉了学过的词（frame 取走）。
     forgot: bool,
     /// Windows 预判副本：Some(false) 尚未遇到写操作，Some(true) 必须在实际按键时重算。
@@ -409,6 +451,10 @@ impl Default for Session<'_> {
         Self {
             input: String::new(),
             selections: Vec::new(),
+            selection_learning: Vec::new(),
+            committed_learning: Vec::new(),
+            no_learn: false,
+            learning_changed: false,
             caret: None,
             engine: None,
             config: Config::default(),
@@ -423,6 +469,7 @@ impl Default for Session<'_> {
             grid_cursor: 0,
             pending: None,
             last_choice: None,
+            pending_rank: 0,
             forgot: false,
             preview: None,
         }
@@ -478,11 +525,18 @@ impl<'e> Session<'e> {
         let Some(engine) = self.engine else {
             return;
         };
-        if self.defer_learning() {
+        if self.no_learn || self.defer_learning() {
             return;
         }
+        self.committed_learning.clear();
+        let mark = engine.learn_mark();
         engine.set_context(utf8_tail(&self.context, CONTEXT_BYTES));
         engine.record_prediction(word);
+        let end = engine.learn_mark();
+        if end > mark {
+            self.committed_learning.push((mark, end));
+            self.learning_changed = true;
+        }
     }
 
     /// 带引擎建会话。
@@ -501,6 +555,9 @@ impl<'e> Session<'e> {
             _ => false,
         };
         if !same {
+            // A mark from the old engine cannot be interpreted by its replacement.
+            self.selection_learning.fill(None);
+            self.committed_learning.clear();
             self.engine = engine;
             self.fresh = false;
         }
@@ -535,8 +592,41 @@ impl<'e> Session<'e> {
         self.fresh = false;
     }
 
+    /// 外壳标记敏感输入时不向引擎记录选词、联想或原样上屏。
+    pub fn set_no_learn(&mut self, value: bool) {
+        if value && !self.no_learn { self.clear(); }
+        self.no_learn = value;
+    }
+
+    pub fn learning_disabled(&self) -> bool { self.no_learn }
+
+    pub fn has_commit_learning(&self) -> bool { !self.committed_learning.is_empty() }
+
+    /// 只有外壳确认刚上屏的文字已被紧接的退格修改时才调用。
+    pub fn undo_commit_learning(&mut self) -> bool {
+        let marks = std::mem::take(&mut self.committed_learning);
+        for (start, end) in marks.into_iter().rev() { self.undo_range(start, end); }
+        self.take_learning_change()
+    }
+
+    pub fn take_learning_change(&mut self) -> bool { std::mem::take(&mut self.learning_changed) }
+
+    fn undo_range(&mut self, start: u64, end: u64) {
+        if !self.defer_learning() && self.engine.is_some_and(|engine| engine.undo_learning(start, end)) {
+            self.learning_changed = true;
+        }
+    }
+
+    fn pop_selection(&mut self) -> Option<Selection> {
+        if let Some(Some((start, end))) = self.selection_learning.pop() { self.undo_range(start, end); }
+        self.selections.pop()
+    }
+
     /// 处理一次按键。
     pub fn key(&mut self, key: &Key) -> Frame {
+        if !key.release && (key.keysym != keysym::BACKSPACE || self.composing()) {
+            self.committed_learning.clear();
+        }
         self.last_choice = None;
         let handled = self.handle_key(key);
         self.frame(handled)
@@ -599,9 +689,9 @@ impl<'e> Session<'e> {
                         self.input.replace_range(at - prev..at, "");
                         self.caret = Some(at - prev);
                     } else {
-                        self.selections.pop();
+                        self.pop_selection();
                     }
-                } else if self.selections.pop().is_none() {
+                } else if self.pop_selection().is_none() {
                     self.input.pop();
                 }
                 self.fresh = false;
@@ -1074,6 +1164,7 @@ impl<'e> Session<'e> {
         let mut frame = Frame {
             handled,
             commit: self.pending.take(),
+            selected_rank: std::mem::take(&mut self.pending_rank),
             forgot: std::mem::take(&mut self.forgot),
             preedit_cursor,
             preedit,
@@ -1122,12 +1213,24 @@ impl<'e> Session<'e> {
         &self.candidates[frame.cand_start..frame.cand_start + frame.cand_count]
     }
 
+    /// 所选项必须是完整输入所匹配的词，日期、联想、纠错和句首截取不进入固定排位。
+    pub fn pin_target(&mut self, index: usize) -> Option<(String, String)> {
+        let scope = self.engine?.pin_scope(self.remaining());
+        let key = self.shown().get(index)?.pin_key.clone()?;
+        Some((scope, key))
+    }
+
+    pub fn refresh_candidates(&mut self) { self.fresh = false; }
+
     /// 上一次调用上屏的字是选哪个候选来的；原样上屏输入、没上屏是 None。
     pub fn last_choice(&self) -> Option<&Candidate> {
         self.last_choice.as_ref()
     }
 
     fn clear(&mut self) {
+        self.committed_learning.clear();
+        let picks = std::mem::take(&mut self.selection_learning);
+        for (start, end) in picks.into_iter().rev().flatten() { self.undo_range(start, end); }
         self.input.clear();
         self.selections.clear();
         self.caret = None;
@@ -1251,13 +1354,19 @@ impl<'e> Session<'e> {
                 } else {
                     CandidateKind::Word
                 };
+                let corrected = c.features.typo_count > 0.0;
+                let pin_key = (kind == CandidateKind::Word && !corrected && consumed == input.len()
+                    && c.words.len() == 1 && c.words[0].known && !c.pinyin.is_empty())
+                    .then(|| format!("{}\t{}", c.pinyin, c.words[0].text));
                 Candidate {
                     commit: c.text.clone(),
                     text: c.text,
                     pinyin: c.pinyin,
                     consumed,
                     kind,
-                    emoji: String::new(),
+                    corrected,
+                    pin_key,
+                    ..Candidate::default()
                 }
             })
             .collect();
@@ -1268,6 +1377,7 @@ impl<'e> Session<'e> {
         if self.config.date_time && self.selections.is_empty() {
             self.add_date_time(&mut all, input, engine.config().shuangpin);
         }
+        engine.apply_pins(input, &mut all);
         all
     }
 
@@ -1381,6 +1491,13 @@ impl<'e> Session<'e> {
     }
 
     /// 已选的词连起来。
+    /// 已选词保留汉字，未选的部分显示实际按键和对应的光标位置。
+    pub fn raw_preedit(&self) -> (String, usize) {
+        let selected = self.selected_text();
+        let caret = selected.len() + self.caret() - self.rest_start();
+        (selected + self.remaining(), caret)
+    }
+
     pub fn selected_text(&self) -> String {
         self.selections.iter().map(|s| s.text.as_str()).collect()
     }
@@ -1431,19 +1548,24 @@ impl<'e> Session<'e> {
             }
             _ if chosen.consumed < remaining => {
                 // 句首词：先放进已选栈，剩下的拼音继续选
+                let mark = self.engine.map(Engine::learn_mark);
                 self.learn(&chosen.text, &chosen.pinyin, chosen.consumed);
+                let changed = mark.zip(self.engine.map(Engine::learn_mark)).filter(|(start, end)| start < end);
                 self.push_selection(Selection {
                     plain: self.plain_of(&chosen.text),
                     text: chosen.text,
                     pinyin: chosen.pinyin,
                     bytes: chosen.consumed,
                 });
+                *self.selection_learning.last_mut().unwrap() = changed;
+                self.learning_changed |= changed.is_some();
             }
             _ => {
                 self.commit_with(&chosen.text, &chosen.pinyin);
                 self.last_choice = Some(chosen);
             }
         }
+        if self.pending.is_some() { self.pending_rank = index + 1; }
         true
     }
 
@@ -1462,7 +1584,8 @@ impl<'e> Session<'e> {
     /// 已选的词 + tail 上屏，记选词，清空。
     fn commit_with(&mut self, tail: &str, tail_pinyin: &str) {
         let text = self.selected_text() + tail;
-        if self.engine.is_some() && !text.is_empty() {
+        let mark = self.engine.map(Engine::learn_mark);
+        if self.engine.is_some() && !self.no_learn && !text.is_empty() {
             if !tail.is_empty() {
                 // 带上拼音：选够次数后引擎会自动把这个词收进用户词库
                 self.learn(tail, tail_pinyin, self.remaining().len());
@@ -1473,8 +1596,7 @@ impl<'e> Session<'e> {
                 && !tail_pinyin.is_empty()
                 && self.selections.iter().all(|s| !s.pinyin.is_empty())
             {
-                // 分几次选出来的也记一次，下次能一次打出来。四个字以内的当成用户造的词，
-                // 用一次就收进用户词库（「霜」「频」「阁」→ 霜频阁）；更长的是整句，照常按次数学。
+                // 短词需再次确认；更长的整句仍按普通次数学习。
                 let mut pinyin = String::new();
                 for selection in &self.selections {
                     pinyin.push_str(&selection.pinyin);
@@ -1498,6 +1620,10 @@ impl<'e> Session<'e> {
             }
         }
         self.finish(text);
+        if let Some((start, end)) = mark.zip(self.engine.map(Engine::learn_mark)).filter(|(a, b)| a < b) {
+            self.committed_learning.push((start, end));
+            self.learning_changed = true;
+        }
     }
 
     /// 候选在词库里的写法（开着繁体时候选是转换过的），见 [`Engine::lexicon_form`]。
@@ -1511,7 +1637,7 @@ impl<'e> Session<'e> {
         let Some(engine) = self.engine else {
             return;
         };
-        if self.defer_learning() {
+        if self.no_learn || self.defer_learning() {
             return;
         }
         let context = self.context.clone() + &self.selected_text();
@@ -1526,7 +1652,7 @@ impl<'e> Session<'e> {
         let Some(engine) = self.engine else {
             return;
         };
-        if self.defer_learning() {
+        if self.no_learn || self.defer_learning() {
             return;
         }
         engine.set_context(utf8_tail(&self.context, CONTEXT_BYTES));
@@ -1536,13 +1662,16 @@ impl<'e> Session<'e> {
 
     /// 上屏 text（空的不上屏，frame 取走），清空编辑区。
     fn finish(&mut self, text: String) {
+        let marks = std::mem::take(&mut self.selection_learning);
         self.clear();
+        self.committed_learning = marks.into_iter().flatten().collect();
         self.pending = (!text.is_empty()).then_some(text);
     }
 
     /// 选了句首词，压进已选栈（测试里不带引擎时用）。
     pub fn push_selection(&mut self, selection: Selection) {
         self.selections.push(selection);
+        self.selection_learning.push(None);
         self.caret = None;
         self.fresh = false;
     }
@@ -1577,6 +1706,7 @@ fn add_emoji_suggestion(all: &mut Vec<Candidate>, input_len: usize) {
             consumed: input_len,
             kind: CandidateKind::Emoji,
             commit: s.commit,
+            ..Candidate::default()
         })
         .collect();
     let at = EMOJI_SLOT.min(all.len());
@@ -1603,6 +1733,7 @@ fn add_keycap(all: &mut Vec<Candidate>, input_len: usize, page_size: usize) {
                 kind: CandidateKind::Emoji,
                 commit: keycap.to_owned(),
                 emoji: keycap.to_owned(),
+                ..Candidate::default()
             },
         );
         return;

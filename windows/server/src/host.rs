@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use freetype_protocol::{
-    modifier, AppWindow, BackupPart, Command, Config, DefaultMode, Frame, ImportReport, Key, Mode, Request, Response,
+    keysym, modifier, AppWindow, BackupPart, CandidateAction, Command, Config, DefaultMode, Frame, ImportReport, Key, Mode, Request, Response,
     Status, UserWord, PROTOCOL_VERSION,
 };
 use wowtype_core::msime;
@@ -48,6 +48,11 @@ pub struct BarState {
     /// 有输入框在用 FreeType，且设置里开着状态栏。
     pub visible: bool,
     pub autohide: bool,
+    pub scale: u32,
+    pub icon_size: u32,
+    pub hide_seconds: u32,
+    pub shadow: bool,
+    pub parts: u8,
     pub mode: Mode,
     pub chinese_punct: bool,
     pub traditional: bool,
@@ -72,6 +77,7 @@ struct Client {
     state: ClientState,
     /// test 算出来的结果：(键, 按下以后的状态, 应答)。
     pending: Option<(Key, ClientState, Out)>,
+    revision: u64,
 }
 
 pub struct Host {
@@ -98,6 +104,7 @@ pub struct Host {
     recent_emoji: Vec<String>,
     /// 正在用的输入框（状态栏按它显示）。
     focused: Option<ClientId>,
+    next_page_revision: u64,
     desktop: Option<Box<dyn Desktop>>,
     last_bar: Option<BarState>,
     /// 正在用的主词库文件。
@@ -106,6 +113,8 @@ pub struct Host {
     lexicon_change: Option<String>,
     /// 学到了新东西，还没存盘。
     dirty: bool,
+    saver: crate::saver::Saver,
+    stats: crate::stats::Stats,
     // 包含尚未存盘的学习变化；同步导出、轮询和远端恢复不更新此时间。
     sync_modified_ms: u64,
 }
@@ -127,6 +136,7 @@ fn configure_engine(engine: &mut Engine, config: &Config) {
         engine.set_shuangpin_scheme(scheme);
     }
     engine.set_typo_correction(config.typo_correction);
+    engine.set_typo_kinds(config.typo_kinds);
     engine.set_traditional(config.traditional);
     engine.set_rare_ext_chars(config.rare_chars);
 }
@@ -157,18 +167,36 @@ pub fn load_engine(resources: &Path, store_dir: &Path, lexicon: &str) -> Result<
     let _ = engine.load_english(resources.join("english.txt"));
     let _ = engine.load_conversion(resources.join("s2t.tsv"));
     let store = Store::new(store_dir.to_path_buf());
-    if store.user_dict_path().exists() {
-        let _ = engine.load_user_dict(store.user_dict_path());
+    for (path, history) in [(store.user_dict_path(), false), (store.history_path(), true)] {
+        if !path.exists() { continue; }
+        let loaded = if history { engine.load_history(&path) } else { engine.load_user_dict(&path) };
+        if let Err(error) = loaded {
+            if error.downcast_ref::<std::io::Error>().is_some_and(|e| e.kind() != std::io::ErrorKind::InvalidData) {
+                return Err(format!("学习文件读取失败：{error:#}"));
+            }
+            let bad = path.with_extension(format!("tsv.{}-{}.bad", std::process::id(), wowtype_core::now_ms()));
+            std::fs::rename(&path, &bad).map_err(|failure| format!("损坏学习文件无法留底：{failure}"))?;
+            crate::log("检测到损坏的学习文件，已保留 .bad 副本");
+        }
     }
-    if store.history_path().exists() {
-        let _ = engine.load_history(store.history_path());
-    }
-    // 可选：微信输入法的神经语言模型（用户自己放进来，不随安装包分发）
-    let nnlm = store.dir().join("wetype").join("nlrgpt2_nnlm.bin");
-    if nnlm.exists() {
-        let _ = engine.load_nnlm(&nnlm);
+    // 用户导入的模型优先；不可用时仍可使用随安装包发布的固定模型。
+    let external = store.dir().join("wetype").join("nlrgpt2_nnlm.bin");
+    for model in [external, resources.join("nnlm.bin")] {
+        if !model.is_file() { continue; }
+        match engine.load_nnlm(&model) {
+            Ok(_) => break,
+            Err(error) => crate::log(&format!("整句增强模型载入失败：{error:#}")),
+        }
     }
     Ok(engine)
+}
+
+fn read_pins(path: &Path) -> Result<wowtype_core::session::ManualPins, String> {
+    match std::fs::read_to_string(path) {
+        Ok(data) => serde_json::from_str(&data).map_err(|error| format!("固定排位文件无法读取：{error}")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Default::default()),
+        Err(error) => Err(format!("读取固定排位失败：{error}")),
+    }
 }
 
 fn mode_hint(mode: Mode) -> String {
@@ -195,6 +223,8 @@ impl Host {
     pub fn new(store: Store) -> Self {
         let config = store.load_config();
         let recent_emoji = store.load_recent_emoji();
+        let mut stats = crate::stats::Stats::new(store.dir().to_path_buf());
+        if config.typing_stats { stats.prepare(); }
         let mut host = Self {
             clients: HashMap::new(),
             engine: None,
@@ -210,11 +240,14 @@ impl Host {
             phrases: Vec::new(),
             recent_emoji,
             focused: None,
+            next_page_revision: 0,
             desktop: None,
             last_bar: None,
             lexicon_in_use: String::new(),
             lexicon_change: None,
             dirty: false,
+            saver: crate::saver::Saver::default(),
+            stats,
             sync_modified_ms: 0,
         };
         host.load_phrases();
@@ -248,6 +281,7 @@ impl Host {
         for client in self.clients.values_mut() {
             client.state.session.set_engine(None);
             client.pending = None;
+            client.revision = 0;
         }
     }
 
@@ -265,7 +299,7 @@ impl Host {
     pub fn take_lexicon_change(&mut self) -> Option<String> {
         let change = self.lexicon_change.take()?;
         self.dirty = true;
-        self.save_if_dirty();
+        if let Err(error) = self.save_learning() { crate::log(&error); }
         Some(change)
     }
 
@@ -283,12 +317,20 @@ impl Host {
                 let learning = current.export_learning().map_err(|e| format!("读取当前学习记录失败：{e:#}"))?;
                 engine.clear_learned();
                 engine.import_learning(&learning).map_err(|e| format!("接续学习记录失败：{e:#}"))?;
+                engine.inherit_pending_words(current);
             }
             Ok(engine)
         });
         self.detach();
         match result {
             Ok(mut engine) => {
+                let pins = self.store.dir().join("candidate-pins.json");
+                if pins.is_file() {
+                    match read_pins(&pins) {
+                        Ok(pins) => engine.set_manual_pins(pins),
+                        Err(error) => crate::log(&error),
+                    }
+                }
                 configure_engine(&mut engine, &self.config);
                 self.engine = Some(Box::new(engine));
                 self.engine_error = None;
@@ -313,6 +355,11 @@ impl Host {
     /// 快捷短语、导入的词库交给引擎（不用 &mut）。
     fn apply_user_data(&mut self) {
         self.load_phrases();
+        self.apply_quick_phrases();
+        self.apply_dictionaries();
+    }
+
+    fn apply_quick_phrases(&self) {
         let Some(engine) = self.engine.as_deref() else {
             return;
         };
@@ -322,6 +369,10 @@ impl Host {
             String::new()
         };
         engine.lexicon().set_custom_tsv(&phrases);
+    }
+
+    fn apply_dictionaries(&self) {
+        let Some(engine) = self.engine.as_deref() else { return; };
         let words = self
             .store
             .load_dictionaries()
@@ -344,6 +395,9 @@ impl Host {
         let current_mode = self.base_mode_of(self.current_app());
         let old_scope = self.config.mode_scope.clone();
         let old_lexicon = self.config.lexicon.clone();
+        let quick_phrases_changed = config.quick_phrases != self.config.quick_phrases;
+        if !config.typing_stats || !self.config.typing_stats { self.stats.break_activity(); }
+        if config.typing_stats && !self.config.typing_stats { self.stats.prepare(); }
         self.config = config.sanitized();
         if !self.config.app_presets || !self.config.app_preset_rules.iter().any(|rule| rule.app == self.foreground) {
             self.preset_mode = None;
@@ -364,7 +418,8 @@ impl Host {
             configure_engine(engine, &self.config);
         }
         self.attach();
-        self.apply_user_data();
+        // 改外观、标点等普通设置时，输入线程无需重新读入所有导入词库。
+        if quick_phrases_changed { self.apply_quick_phrases(); }
         self.prepare_prediction();
         self.notify_bar();
     }
@@ -388,11 +443,14 @@ impl Host {
 
     pub fn connect(&mut self, id: ClientId, app: String) {
         let state = ClientState::new(self.engine_ref(), &self.config, app);
-        self.clients.insert(id, Client { state, pending: None });
+        self.clients.insert(id, Client { state, pending: None, revision: 0 });
     }
 
     pub fn disconnect(&mut self, id: ClientId) {
-        self.clients.remove(&id);
+        if let Some(mut client) = self.clients.remove(&id) {
+            client.state.clear();
+            if client.state.session.take_learning_change() { self.dirty = true; self.mark_sync_change(); }
+        }
         if self.focused == Some(id) {
             self.focused = None;
             self.notify_bar();
@@ -401,21 +459,34 @@ impl Host {
 
     /// 存用户词库和输入习惯（有新东西时）。
     pub fn save_if_dirty(&mut self) {
-        if !self.dirty {
-            return;
-        }
-        if let Err(error) = self.save_learning() {
+        if let Err(error) = self.stats.save(false) { crate::log(&error); }
+        if let Err(error) = self.saver.result(false) {
             crate::log(&error);
+            self.dirty = true;
+        }
+        if !self.dirty { return; }
+        let Some(engine) = self.engine.as_deref() else { return; };
+        let snapshot = engine.learning_snapshot();
+        let dict = self.store.user_dict_path();
+        let history = self.store.history_path();
+        let job = Box::new(move || {
+            std::fs::create_dir_all(dict.parent().unwrap()).map_err(|error| format!("创建用户目录失败：{error}"))?;
+            snapshot.save(&dict, &history).map_err(|error| format!("{error:#}"))
+        });
+        match self.saver.enqueue("learning", job) {
+            Ok(()) => self.dirty = false,
+            Err(error) => crate::log(&error),
         }
     }
 
     fn save_learning(&mut self) -> Result<(), String> {
+        // 等旧快照写完，避免它在用户手动保存或清空以后覆盖新数据。
+        if let Err(error) = self.saver.result(true) { crate::log(&error); }
+        self.dirty = true;
         let engine = self.engine.as_deref().ok_or("词库还在载入，请稍后再试")?;
         std::fs::create_dir_all(self.store.dir()).map_err(|error| format!("创建用户目录失败：{error}"))?;
-        engine.save_user_dict(self.store.user_dict_path())
-            .map_err(|error| format!("保存学习词条失败：{error:#}"))?;
-        engine.save_history(self.store.history_path())
-            .map_err(|error| format!("保存输入习惯失败：{error:#}"))?;
+        engine.learning_snapshot().save(&self.store.user_dict_path(), &self.store.history_path())
+            .map_err(|error| format!("{error:#}"))?;
         self.dirty = false;
         Ok(())
     }
@@ -570,6 +641,11 @@ impl Host {
         let state = BarState {
             visible: self.config.status_bar && self.focused.is_some(),
             autohide: self.config.status_bar_autohide,
+            scale: self.config.bar_scale,
+            icon_size: self.config.bar_icon_size,
+            hide_seconds: self.config.bar_hide_seconds,
+            shadow: self.config.bar_shadow,
+            parts: self.config.bar_parts,
             mode: self.effective(self.current_mode()),
             chinese_punct: self.config.fullwidth_punct,
             traditional: self.config.traditional,
@@ -594,6 +670,8 @@ impl Host {
             data_dir: self.store.dir().display().to_string(),
             log_dir: crate::local_dir().join("logs").display().to_string(),
             lexicon: self.lexicon_in_use.clone(),
+            neural_model: self.engine.as_ref().and_then(|engine| engine.model_path()).map_or_else(String::new, |path|
+                if path == self.store.dir().join("wetype/nlrgpt2_nnlm.bin") { "external".into() } else { "bundled".into() }),
             error: self.engine_error.clone(),
         }
     }
@@ -624,6 +702,12 @@ impl Host {
         frame.font_size = self.config.font_size;
         frame.font_family = self.config.font_family.clone();
         frame.candidate_style = self.config.candidate_style.clone();
+        frame.candidate_wheel = self.config.candidate_wheel;
+        frame.hide_candidate_preedit = !self.config.candidate_preedit;
+        frame.preedit_size = self.config.preedit_size;
+        frame.lock_candidate_position = !self.config.candidate_follow;
+        frame.wrap_candidates = !self.config.candidate_single_line;
+        frame.font_fallbacks = self.config.font_fallbacks.clone();
         frame.vertical = !self.config.horizontal;
         frame.hint_position = self.config.hint_position.clone();
         frame.want_before = self.config.autospace;
@@ -737,13 +821,13 @@ impl Host {
         if self.set_caps(key.modifiers & modifier::CAPS != 0) {
             self.notify_bar();
         }
+        let app = self.app_of(id);
         if let Some(response) = self.hotkey(id, &key) {
             if let Some(client) = self.clients.get_mut(&id) {
                 client.pending = None;
             }
             return response;
         }
-        let app = self.app_of(id);
         let mode = self.effective(self.mode_of(&app));
         let engine = self.engine_ref();
         let Some(client) = self.clients.get_mut(&id) else {
@@ -892,6 +976,44 @@ impl Host {
         response
     }
 
+    fn candidate_action(&mut self, id: ClientId, revision: u64, action: CandidateAction) -> Response {
+        if revision == 0 || self.clients.get(&id).is_none_or(|client| client.revision != revision) {
+            return self.with_client(id, |state, env| state.current(true, env));
+        }
+        match action {
+            CandidateAction::Select { index } => self.with_client(id, |state, env| state.select(index, env)),
+            CandidateAction::Page { next } => self.with_client(id, |state, env| state.page(next, env)),
+            CandidateAction::Forget { index } => self.forget(id, index),
+            CandidateAction::Pin { index, place } => self.pin(id, index, place),
+        }
+    }
+
+    fn pin(&mut self, id: ClientId, index: usize, place: u8) -> Response {
+        if u32::from(place) > self.config.page_size { return Response::error("固定排位不在本页范围内"); }
+        let Some(client) = self.clients.get_mut(&id) else { return Response::error("输入会话已结束"); };
+        if client.state.tool.is_some() || client.state.raw.is_some() || client.state.session.learning_disabled() {
+            return Response::error("当前候选不能固定排位");
+        }
+        let Some((scope, key)) = client.state.session.pin_target(index) else { return Response::error("当前候选不能固定排位"); };
+        let Some(engine) = self.engine.as_deref() else { return Response::error("词库未加载"); };
+        let path = self.store.dir().join("candidate-pins.json");
+        // 不覆盖损坏记录；保留给用户排查，重新打开仍可使用输入法。
+        let mut pins = match read_pins(&path) { Ok(pins) => pins, Err(error) => return Response::error(error) };
+        let slots = pins.entry(scope.clone()).or_default();
+        slots.retain(|_, existing| *existing != key);
+        if place > 0 { slots.insert(place, key); }
+        if slots.is_empty() { pins.remove(&scope); }
+        let saved = serde_json::to_string(&pins).map_err(std::io::Error::other).and_then(|data| crate::store::write_atomic(&path, &data));
+        if let Err(error) = saved { return Response::error(format!("保存固定排位失败：{error}")); }
+        engine.set_manual_pins(pins);
+        for client in self.clients.values_mut() {
+            client.state.session.refresh_candidates();
+            client.pending = None;
+            client.revision = 0;
+        }
+        self.with_client(id, |state, env| state.current(true, env))
+    }
+
     fn forget(&mut self, id: ClientId, index: usize) -> Response {
         let mut forgot = None;
         let mut word = String::new();
@@ -945,16 +1067,6 @@ impl Host {
                 report: Some(report),
                 ..Response::ok()
             },
-            Err(error) => Response::error(error),
-        }
-    }
-
-    fn done(&mut self, result: Result<(), String>) -> Response {
-        match result {
-            Ok(()) => {
-                self.apply_user_data();
-                Response::ok()
-            }
             Err(error) => Response::error(error),
         }
     }
@@ -1095,6 +1207,13 @@ impl Host {
         let prepared = match backup::read(path) { Ok(data) => data, Err(error) => return Response::error(error) };
         // 只替换备份里有的类别；没有的类别（文件、引擎里的状态）保持不变。
         let config = prepared.restored_config(&self.store, &self.config);
+        // 排空旧学习快照，再替换备份文件，保证重启仍读取恢复后的数据。
+        if prepared.has(BackupPart::Learning) {
+            if let Err(error) = self.saver.result(true) {
+                self.dirty = true;
+                crate::log(&error);
+            }
+        }
         let cleanup_note = match prepared.restore_files(&self.store, &self.config) { Ok(note) => note, Err(error) => return Response::error(error) };
         if prepared.has(BackupPart::Learning) {
             engine.clear_learned();
@@ -1104,8 +1223,8 @@ impl Host {
             self.dirty = false;
             self.recent_emoji = prepared.data.recent_emoji.clone();
         }
-        // 没有设置这一类时也要走一遍：快捷短语、词库从文件重新交给引擎
         self.set_config(config);
+        self.apply_user_data();
         // 同一路径的主词库内容也可能变了，不能只按路径字符串判断是否重新载入。
         if prepared.has(BackupPart::Dictionaries) && prepared.data.main_lexicon.is_some() {
             self.lexicon_change = Some(self.config.lexicon.clone());
@@ -1158,10 +1277,10 @@ impl Host {
         }
         self.recent_emoji.truncate(RECENT_EMOJI);
         let _ = self.store.save_recent_emoji(&self.recent_emoji);
-        // 存设置时一并把合并后的快捷短语、词库交给引擎
         if let Err(error) = self.save_config(prepared.merged_config(&self.config)) {
             return Response::error(error);
         }
+        self.apply_user_data();
         let common = match self.store.load_common_phrases() { Ok(common) => common, Err(error) => return Response::error(error) };
         let report = ImportReport {
             added: counts.quick_phrases + counts.common_phrases + counts.dictionaries + learned,
@@ -1222,10 +1341,42 @@ impl Host {
             | Request::ImportLearning { .. } | Request::ImportSettings { .. } | Request::MergeSettings { .. }
             | Request::ForgetWords { .. } | Request::AddUserWord { .. } | Request::ClearLearned
             | Request::ToggleMode { .. } | Request::Command { .. } | Request::Reload);
+        let scan = match &request {
+            Request::PhysicalKey { key, scan, .. } if !key.test => Some(*scan),
+            _ => None,
+        };
+        let preview = matches!(&request, Request::Key { key: Key { test: true, .. }, .. } | Request::PhysicalKey { key: Key { test: true, .. }, .. });
+        let actual = matches!(&request,
+            Request::Key { key: Key { test: false, .. }, .. }
+            | Request::PhysicalKey { key: Key { test: false, .. }, .. } | Request::Select { .. }
+            | Request::CandidateAction { action: CandidateAction::Select { .. }, .. });
+        if matches!(&request, Request::SensitiveFocus { active: true } | Request::Focus { active: false, .. }) {
+            self.stats.break_activity();
+        }
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.handle_inner(id, request)));
         match result {
-            Ok(response) => {
-                if response.ok && may_edit { self.mark_sync_change(); }
+            Ok(mut response) => {
+                if !preview {
+                    if let (Some(frame), Some(client)) = (&mut response.frame, self.clients.get_mut(&id)) {
+                        if frame.candidates.is_empty() { client.revision = 0; }
+                        else if frame.handled || client.revision == 0 {
+                            self.next_page_revision = self.next_page_revision.wrapping_add(1).max(1);
+                            client.revision = self.next_page_revision;
+                        }
+                        frame.page_revision = client.revision;
+                    }
+                }
+                if let (Some(client), Some(frame)) = (self.clients.get(&id), &mut response.frame) {
+                    frame.pair_enabled = frame.mode == Mode::Chinese && client.state.pairs_enabled(&self.config);
+                }
+                let learned = self.clients.get_mut(&id).is_some_and(|client| client.state.session.take_learning_change());
+                self.dirty |= learned;
+                if response.ok && (may_edit || learned) { self.mark_sync_change(); }
+                if self.config.typing_stats && actual && self.clients.get(&id).is_some_and(|client| !client.state.session.learning_disabled()) {
+                    if let Some(frame) = response.frame.as_ref().filter(|frame| frame.handled) {
+                        self.stats.record(id, scan, frame.commit.as_deref(), frame.selected_rank, self.config.stats_retention);
+                    }
+                }
                 response
             },
             Err(_) => {
@@ -1241,6 +1392,57 @@ impl Host {
         }
     }
 
+    fn change_neural_model(&mut self, path: Option<String>) -> Response {
+        use std::io::Read;
+        use wowtype_core::nnlm::Nnlm;
+        const MAX_BYTES: u64 = 32 << 20;
+        let Some(engine) = self.engine.as_deref() else { return Response::error("词库还在载入，请稍后再试"); };
+        let target = self.store.dir().join("wetype/nlrgpt2_nnlm.bin");
+        let result = (|| -> Result<(), String> {
+            if let Some(source) = path {
+                let file = std::fs::File::open(&source).map_err(|e| format!("打开模型失败：{e}"))?;
+                if !file.metadata().map_err(|e| e.to_string())?.is_file() { return Err("请选择模型文件".into()); }
+                let mut data = Vec::new();
+                file.take(MAX_BYTES + 1).read_to_end(&mut data).map_err(|e| format!("读取模型失败：{e}"))?;
+                if data.len() as u64 > MAX_BYTES { return Err("模型文件超过 32 MB".into()); }
+                let model = Nnlm::from_bytes(&data).map_err(|e| format!("模型校验失败：{e:#}"))?;
+                crate::store::write_atomic_bytes(&target, &data).map_err(|e| format!("保存模型失败：{e}"))?;
+                engine.install_nnlm(std::sync::Arc::new(model), target);
+            } else {
+                let bundled = crate::resource_dir().join("nnlm.bin");
+                let model = Nnlm::load(&bundled).map_err(|e| format!("随包模型无法读取：{e:#}"))?;
+                match std::fs::remove_file(&target) {
+                    Ok(()) => {},
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+                    Err(error) => return Err(format!("移除外部模型失败：{error}")),
+                }
+                engine.install_nnlm(std::sync::Arc::new(model), bundled);
+            }
+            Ok(())
+        })();
+        if let Err(error) = result { return Response::error(error); }
+        for client in self.clients.values_mut() {
+            client.state.session.refresh_candidates();
+            client.state.dismiss_prediction();
+            client.revision = 0;
+            client.pending = None;
+        }
+        Response { status: Some(self.status()), ..Response::ok() }
+    }
+
+    fn config_response(&self) -> Response {
+        use wowtype_core::shuangpin::{encode, Scheme};
+        let shuangpin_example = self.config.shuangpin.then(|| {
+            let scheme = Scheme::from_name(&self.config.shuangpin_scheme)?;
+            let keys: Vec<_> = ["ni", "hao"].iter().filter_map(|syllable| {
+                let pair = *encode(scheme, syllable).first()?;
+                String::from_utf8(pair.to_vec()).ok()
+            }).collect();
+            (keys.len() == 2).then(|| keys.join(" "))
+        }).flatten();
+        Response { config: Some(self.config.clone()), shuangpin_example, ..Response::ok() }
+    }
+
     fn handle_inner(&mut self, id: ClientId, request: Request) -> Response {
         match request {
             Request::Hello { session, app } => {
@@ -1253,6 +1455,48 @@ impl Host {
                 }
             }
             Request::Key { key, before } => self.key(id, key, before),
+            Request::PhysicalKey { key, before, shown_revision, .. } => {
+                let selects = matches!(key.keysym,
+                    keysym::SPACE_DOUBLE | 0x20 | 0x27 | 0x3b | 0x5b | 0x5d | 0x30..=0x39 | keysym::KP_0..=keysym::KP_9
+                );
+                if selects && shown_revision.is_some_and(|revision| self.clients.get(&id).is_some_and(|client| {
+                    client.revision != revision && (client.state.busy() || revision != 0)
+                })) {
+                    return self.with_client(id, |state, env| state.current(true, env));
+                }
+                self.key(id, key, before)
+            }
+            Request::CandidateAction { revision, action } => self.candidate_action(id, revision, action),
+            Request::ListTypingStats => match self.stats.snapshot(self.config.stats_retention) {
+                Ok(days) => Response { typing_stats: Some(days), ..Response::ok() },
+                Err(error) => Response::error(error),
+            },
+            Request::ClearTypingStats => match self.stats.clear() {
+                Ok(()) => Response::ok(),
+                Err(error) => Response::error(error),
+            },
+            Request::SensitiveFocus { active } => {
+                if active && self.focused == Some(id) { self.focused = None; }
+                let response = self.with_client(id, |state, env| {
+                    state.set_sensitive(active);
+                    state.current(false, env)
+                });
+                self.notify_bar();
+                response
+            }
+            Request::ClosePair => self.with_client(id, |state, env| state.close_pair(env)),
+            Request::UndoCommitLearning => {
+                let changed = self.clients.get_mut(&id).is_some_and(|client| {
+                    client.pending = None;
+                    client.state.dismiss_prediction();
+                    client.state.session.undo_commit_learning()
+                });
+                if changed {
+                    self.dirty = true;
+                    self.mark_sync_change();
+                }
+                Response::ok()
+            }
             Request::Select { index } => self.with_client(id, |state, env| state.select(index, env)),
             Request::Page { next } => self.with_client(id, |state, env| state.page(next, env)),
             Request::Forget { index } => self.forget(id, index),
@@ -1269,17 +1513,10 @@ impl Host {
                 apps: Some(self.desktop.as_ref().map(|desktop| desktop.open_apps()).unwrap_or_default()),
                 ..Response::ok()
             },
-            Request::GetConfig => Response {
-                config: Some(self.config.clone()),
-                ..Response::ok()
-            },
+            Request::GetConfig => self.config_response(),
+            Request::SetNeuralModel { path } => self.change_neural_model(path),
             Request::SetConfig { config } => match self.save_config(config) {
-                Ok(()) => {
-                    Response {
-                        config: Some(self.config.clone()),
-                        ..Response::ok()
-                    }
-                }
+                Ok(()) => self.config_response(),
                 Err(e) => Response::error(e),
             },
             Request::ListQuickPhrases => Response {
@@ -1287,12 +1524,13 @@ impl Host {
                 ..Response::ok()
             },
             Request::SetQuickPhrases { phrases } => {
-                let result = self.store.set_quick_phrases(&phrases);
-                self.done(result)
+                if let Err(error) = self.store.set_quick_phrases(&phrases) { return Response::error(error); }
+                self.apply_quick_phrases();
+                Response::ok()
             }
             Request::ImportQuickPhrases { path, replace } => {
                 let response = Self::report(self.store.import_quick_phrases(Path::new(&path), replace));
-                self.apply_user_data();
+                if response.ok { self.apply_quick_phrases(); }
                 response
             }
             Request::ExportQuickPhrases { path } => match self.store.export_quick_phrases(Path::new(&path)) {
@@ -1314,8 +1552,9 @@ impl Host {
                 Err(error) => Response::error(error),
             },
             Request::SetCommonPhrases { phrases } => {
-                let result = self.store.set_common_phrases(phrases);
-                self.done(result)
+                if let Err(error) = self.store.set_common_phrases(phrases) { return Response::error(error); }
+                self.load_phrases();
+                Response::ok()
             }
             Request::ImportCommonPhrases { path, replace } => {
                 let result = self.store.import_common_phrases(Path::new(&path), replace);
@@ -1332,12 +1571,13 @@ impl Host {
             Request::ImportDictionary { path, name } => {
                 let reading = |words: &[String]| self.reading(words);
                 let response = Self::report(self.store.import_dictionary(Path::new(&path), &name, &reading));
-                self.apply_user_data();
+                if response.ok { self.apply_dictionaries(); }
                 response
             }
             Request::RemoveDictionary { name } => {
-                let result = self.store.remove_dictionary(&name);
-                self.done(result)
+                if let Err(error) = self.store.remove_dictionary(&name) { return Response::error(error); }
+                self.apply_dictionaries();
+                Response::ok()
             }
             Request::ExportUserDictionary { path } => {
                 let Some(engine) = self.engine.as_deref() else {
@@ -1414,12 +1654,25 @@ impl Host {
                 Response::ok()
             }
             Request::Shutdown => {
-                self.save_if_dirty();
+                if let Err(error) = self.stats.save(true) { crate::log(&error); }
+                for client in self.clients.values_mut() {
+                    client.state.clear();
+                    self.dirty |= client.state.session.take_learning_change();
+                }
+                if let Err(error) = self.saver.result(true) {
+                    crate::log(&error);
+                    self.dirty = true;
+                }
+                if self.dirty && self.engine.is_some() {
+                    if let Err(error) = self.save_learning() { return Response::error(error); }
+                }
                 Response::ok()
             }
             Request::Reload => {
                 let config = self.store.load_config();
                 self.set_config(config);
+                self.apply_user_data();
+                self.lexicon_change = Some(self.config.lexicon.clone());
                 Response {
                     status: Some(self.status()),
                     ..Response::ok()

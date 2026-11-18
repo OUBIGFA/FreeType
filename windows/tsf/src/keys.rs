@@ -25,6 +25,7 @@ pub fn named_keysym(vk: u16) -> Option<u32> {
         0x6d => keysym::KP_SUBTRACT,
         0x6e => keysym::KP_DECIMAL,
         0x6f => keysym::KP_DIVIDE,
+        0x70..=0x7b => keysym::F1 + u32::from(vk - 0x70),
         _ => return None,
     })
 }

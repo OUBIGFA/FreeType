@@ -100,8 +100,11 @@ impl Engine {
             })
             .collect();
 
-        // 只留分数最高的 keep 个：攒到两倍再砍一次，「的」后面八万多个搭配也不用全排
-        let keep = limit + habits.len();
+        let model = self.nnlm.read().ok().and_then(|slot| slot.clone());
+        let prefix = model.as_ref().map(|m| m.context_tokens(context));
+        let mut first_scores = HashMap::new();
+        // Only the best first-character continuations need full inference. Keep personal pairs separately.
+        let keep = if model.is_some() { limit.max(12) } else { limit } + habits.len();
         let mut top: Vec<(f64, String)> = Vec::new();
         let mut floor = f64::NEG_INFINITY;
         self.lm.next_lifts(&prev, &mut |word, lift| {
@@ -123,13 +126,23 @@ impl Engine {
             if habit.is_none() && (word == prev || !word.chars().all(autospace::is_han)) {
                 return;
             }
-            let score = LIFT_WEIGHT * lift + ln_freq + habit.unwrap_or(0.0);
-            if score <= floor {
+            let score = match (&model, &prefix) {
+                (Some(model), Some(prefix)) if habit.is_none() => {
+                    let Some(first) = word.chars().next() else { return };
+                    if !model.knows(first) { return; }
+                    let score = *first_scores.entry(first).or_insert_with(|| model.next_char_logprob(prefix, first)) as f64;
+                    if score < -(400.0f64).ln() { return; }
+                    score
+                }
+                (Some(_), _) => 100.0 + habit.unwrap_or_default(),
+                _ => LIFT_WEIGHT * lift + ln_freq + habit.unwrap_or(0.0),
+            };
+            if score < floor {
                 return;
             }
             top.push((score, word.to_string()));
             if top.len() >= keep * 2 {
-                top.sort_by(|a, b| b.0.total_cmp(&a.0));
+                top.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
                 top.truncate(keep);
                 floor = top[keep - 1].0;
             }
@@ -138,7 +151,14 @@ impl Engine {
         for (word, (bonus, seen)) in &habits {
             if !seen {
                 let ln_freq = prior.get(&word_key(word)).map_or(UNKNOWN_FREQ.ln(), |p| f64::from(*p));
-                top.push((ln_freq + bonus, (*word).to_string()));
+                top.push((if model.is_some() { 100.0 + bonus } else { ln_freq + bonus }, (*word).to_string()));
+            }
+        }
+        if let (Some(model), Some(prefix)) = (&model, &prefix) {
+            for (score, word) in &mut top {
+                if !habits.contains_key(word.as_str()) {
+                    *score = model.score(prefix, word) / (word.chars().count() as f64).sqrt();
+                }
             }
         }
         drop(pairs);
@@ -167,7 +187,7 @@ impl Engine {
         let start = self.start_word();
         let mut need_prune = false;
         if let (Some(prev), Ok(mut pairs)) = (start, self.pairs.write()) {
-            pairs.learn(&prev, word, at_ms);
+            if let Some(change) = pairs.bump(&prev, word, at_ms) { self.note_learning(change); }
             need_prune = pairs.len() > crate::learn::MAX_USER_PAIRS;
         }
         if need_prune {
@@ -175,10 +195,7 @@ impl Engine {
                 crate::learn::prune_learning(&mut history, &mut pairs);
             }
         }
-        if let Ok(mut last) = self.last_word.write() {
-            last.clear();
-            last.push_str(word);
-        }
+        self.record_last_word(word);
     }
 }
 

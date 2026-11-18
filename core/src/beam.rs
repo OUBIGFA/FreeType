@@ -64,9 +64,10 @@ impl Default for BeamConfig {
             max_word_syllables: 6,
             max_expansions_per_state: 32,
             unknown_cost: 18.0,
-            lm_weight: 1.0,
-            typo_cost: 6.0,
-            completion_cost: 1.2,
+            // WowType 0.5.1 的联合调优基线。
+            lm_weight: 0.85,
+            typo_cost: 8.0,
+            completion_cost: 1.5,
             max_typos: 2,
             max_typos_per_word: 1,
             swap_discount: 1.5,

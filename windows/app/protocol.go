@@ -10,7 +10,14 @@ type Config struct {
 	FontSize   int    `json:"font_size"`
 	FontFamily string `json:"font_family"`
 	// CandidateStyle 是选中候选的样子：pink blue green sogou。
-	CandidateStyle string `json:"candidate_style"`
+	CandidateStyle      string `json:"candidate_style"`
+	CandidateWheel      bool   `json:"candidate_wheel"`
+	InlinePreedit       string `json:"inline_preedit"`
+	CandidatePreedit    bool   `json:"candidate_preedit"`
+	PreeditSize         int    `json:"preedit_size"`
+	CandidateFollow     bool   `json:"candidate_follow"`
+	CandidateSingleLine bool   `json:"candidate_single_line"`
+	FontFallbacks       string `json:"font_fallbacks"`
 
 	Fuzzy             bool   `json:"fuzzy"`
 	FuzzyGroups       int    `json:"fuzzy_groups"`
@@ -18,6 +25,9 @@ type Config struct {
 	ShuangpinScheme   string `json:"shuangpin_scheme"`
 	ShuangpinShowKeys bool   `json:"shuangpin_show_keys"`
 	TypoCorrection    bool   `json:"typo_correction"`
+	TypoKinds         int    `json:"typo_kinds"`
+	TypoMark          bool   `json:"typo_mark"`
+	PinBadge          string `json:"pin_badge"`
 	RareChars         bool   `json:"rare_chars"`
 	Lexicon           string `json:"lexicon"`
 
@@ -34,26 +44,29 @@ type Config struct {
 	DigitPunctFullwidth  int         `json:"digit_punct_fullwidth"`
 	CornerQuotes         bool        `json:"corner_quotes"`
 	AutoPair             bool        `json:"auto_pair"`
-	Autospace        bool        `json:"autospace"`
-	AutospaceLetters bool        `json:"autospace_letters"`
-	AutospaceDigits  bool        `json:"autospace_digits"`
-	DefaultMode      string      `json:"default_mode"`
-	ModeScope        string      `json:"mode_scope"`
-	Traditional      bool        `json:"traditional"`
-	AppPresets       bool        `json:"app_presets"`
-	AppPresetRules   []AppPreset `json:"app_preset_rules"`
+	Autospace            bool        `json:"autospace"`
+	AutospaceLetters     bool        `json:"autospace_letters"`
+	AutospaceDigits      bool        `json:"autospace_digits"`
+	DefaultMode          string      `json:"default_mode"`
+	ModeScope            string      `json:"mode_scope"`
+	Traditional          bool        `json:"traditional"`
+	AppPresets           bool        `json:"app_presets"`
+	AppPresetRules       []AppPreset `json:"app_preset_rules"`
 
-	QuickPhrases     bool `json:"quick_phrases"`
-	EmojiSuggest     bool `json:"emoji_suggest"`
-	DateTime         bool `json:"date_time"`
-	Calculator       bool `json:"calculator"`
-	Toolbar          bool `json:"toolbar"`
-	ClipboardHistory bool `json:"clipboard_history"`
-	EmailCompletion  bool `json:"email_completion"`
-	PredictNext      bool `json:"predict_next"`
-	PredictDigits    bool `json:"predict_digits"`
-	PredictSpace     bool `json:"predict_space"`
-	PredictArrows    bool `json:"predict_arrows"`
+	QuickPhrases       bool `json:"quick_phrases"`
+	EmojiSuggest       bool `json:"emoji_suggest"`
+	DateTime           bool `json:"date_time"`
+	Calculator         bool `json:"calculator"`
+	Toolbar            bool `json:"toolbar"`
+	ClipboardHistory   bool `json:"clipboard_history"`
+	EmailCompletion    bool `json:"email_completion"`
+	PredictNext        bool `json:"predict_next"`
+	PredictDigits      bool `json:"predict_digits"`
+	PredictSpace       bool `json:"predict_space"`
+	PredictDoubleSpace bool `json:"predict_double_space"`
+	PredictArrows      bool `json:"predict_arrows"`
+	TypingStats        bool `json:"typing_stats"`
+	StatsRetention     int  `json:"stats_retention"`
 
 	HotkeyEmoji       string `json:"hotkey_emoji"`
 	HotkeyPunct       string `json:"hotkey_punct"`
@@ -63,6 +76,11 @@ type Config struct {
 	TrayIcon                bool   `json:"tray_icon"`
 	StatusBar               bool   `json:"status_bar"`
 	StatusBarAutohide       bool   `json:"status_bar_autohide"`
+	BarScale                int    `json:"bar_scale"`
+	BarIconSize             int    `json:"bar_icon_size"`
+	BarHideSeconds          int    `json:"bar_hide_seconds"`
+	BarShadow               bool   `json:"bar_shadow"`
+	BarParts                int    `json:"bar_parts"`
 	HintOnToggle            bool   `json:"hint_on_toggle"`
 	HintOnFocus             bool   `json:"hint_on_focus"`
 	HintPosition            string `json:"hint_position"`
@@ -73,17 +91,18 @@ type Config struct {
 // defaultConfig 和服务进程的默认值一样（连不上服务进程时界面先按它画）。
 func defaultConfig() Config {
 	return Config{
-		PageSize: 7, Horizontal: true, FontSize: 18, FontFamily: "Microsoft YaHei", CandidateStyle: "pink",
-		FuzzyGroups: fuzzyDefault, ShuangpinScheme: "xiaohe", TypoCorrection: true,
+		PageSize: 7, Horizontal: true, FontSize: 18, FontFamily: "Microsoft YaHei", CandidateStyle: "pink", PinBadge: "paperclip",
+		InlinePreedit: "segmented", CandidatePreedit: true, CandidateFollow: true, CandidateSingleLine: true,
+		FuzzyGroups: fuzzyDefault, ShuangpinScheme: "xiaohe", TypoCorrection: true, TypoKinds: 15,
 		ShiftToggle: "both", PageKeys: pageKeyMinus, SelectKeys: "off", PickChar: true, ArrowKeys: "candidates", NumpadDot: true,
 		FullwidthPunct: true, DigitHalfwidthPunct: true, DigitPunctExceptions: true, DigitPunctFullwidth: digitPunctDefault,
 		AutoPair: true, Autospace: true, AutospaceLetters: true, AutospaceDigits: true,
 		DefaultMode: "chinese", ModeScope: "global",
 		AppPresetRules: []AppPreset{},
 		QuickPhrases:   true, EmojiSuggest: true, DateTime: true, Calculator: true, Toolbar: true, EmailCompletion: true,
-		PredictDigits: true, PredictSpace: true, PredictArrows: true,
+		PredictSpace: true, PredictDoubleSpace: true, PredictArrows: true, StatsRetention: 365,
 		HotkeyEmoji: "off", HotkeyPunct: "off", HotkeyTraditional: "off", HotkeyMode: "off",
-		TrayIcon: true, HintOnToggle: true, HintPosition: "top-left",
+		TrayIcon: true, HintOnToggle: true, HintPosition: "top-left", BarScale: 100, BarIconSize: 15, BarHideSeconds: 4, BarShadow: true, BarParts: 11,
 	}
 }
 
@@ -185,6 +204,7 @@ type Status struct {
 	DataDir      string `json:"data_dir"`
 	LogDir       string `json:"log_dir"`
 	Lexicon      string `json:"lexicon"`
+	NeuralModel  string `json:"neural_model"`
 	Error        string `json:"error,omitempty"`
 }
 
@@ -203,20 +223,30 @@ type Frame struct {
 	Traditional  bool   `json:"traditional"`
 }
 
+type typingDay struct {
+	Characters [5]uint64      `json:"characters"`
+	ActiveMS   uint64         `json:"active_ms"`
+	Hours      [24]uint64     `json:"hours"`
+	Keys       map[int]uint64 `json:"keys"`
+	Candidates [11]uint64     `json:"candidates"`
+}
+
 // Response 是一条应答。
 type Response struct {
-	OK             bool          `json:"ok"`
-	ModifiedUnixMS int64         `json:"modified_unix_ms,omitempty"`
-	Error          string        `json:"error,omitempty"`
-	Status         *Status       `json:"status,omitempty"`
-	Config         *Config       `json:"config,omitempty"`
-	QuickPhrases   []QuickPhrase `json:"quick_phrases,omitempty"`
-	CommonPhrases  []string      `json:"common_phrases,omitempty"`
-	Dictionaries   []Dictionary  `json:"dictionaries,omitempty"`
-	UserWords      []UserWord    `json:"user_words,omitempty"`
-	Report         *ImportReport `json:"report,omitempty"`
-	Frame          *Frame        `json:"frame,omitempty"`
-	Apps           []AppWindow   `json:"apps,omitempty"`
+	OK               bool                 `json:"ok"`
+	ModifiedUnixMS   int64                `json:"modified_unix_ms,omitempty"`
+	Error            string               `json:"error,omitempty"`
+	Status           *Status              `json:"status,omitempty"`
+	Config           *Config              `json:"config,omitempty"`
+	QuickPhrases     []QuickPhrase        `json:"quick_phrases,omitempty"`
+	CommonPhrases    []string             `json:"common_phrases,omitempty"`
+	Dictionaries     []Dictionary         `json:"dictionaries,omitempty"`
+	UserWords        []UserWord           `json:"user_words,omitempty"`
+	Report           *ImportReport        `json:"report,omitempty"`
+	Frame            *Frame               `json:"frame,omitempty"`
+	Apps             []AppWindow          `json:"apps,omitempty"`
+	TypingStats      map[string]typingDay `json:"typing_stats,omitempty"`
+	ShuangpinExample string               `json:"shuangpin_example,omitempty"`
 }
 
 // Request 是一条请求：op 加上各自的字段。

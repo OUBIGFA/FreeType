@@ -11,6 +11,9 @@ from test_update_handoff import ServerFixture
 
 @unittest.skipUnless(os.name == "nt", "Windows input performance")
 class InputPerformanceTests(ServerFixture, unittest.TestCase):
+    # As with an installed service, keep the executable path stable across launches.
+    # Each process still gets private resources, writable files, mutex and pipe.
+    copy_server = False
 
     def ready(self):
         server = self.launch(self.server)
@@ -45,6 +48,11 @@ class InputPerformanceTests(ServerFixture, unittest.TestCase):
         dictionary = self.root / "extra.tsv"
         dictionary.write_text("".join(f"测{i}\tce\t1000\n" for i in range(300000)), encoding="utf-8")
         self.call(connection, "import_dictionary", path=str(dictionary), name="performance")
+        config = self.call(connection, "get_config")["config"]
+        config["page_size"] = 5
+        started = time.perf_counter()
+        self.call(connection, "set_config", config=config)
+        self.assertLess(time.perf_counter() - started, 0.5, "Changing page size reloaded imported words")
         elapsed = [self.type_word(connection) for _ in range(4)]
         self.assertTrue(any(word["word"] == "你好" for word in self.call(connection, "list_user_words")["user_words"]))
         self.assertLess(max(elapsed), 0.15, f"Learning rebuilt the imported dictionary: {elapsed}")
@@ -60,6 +68,21 @@ class InputPerformanceTests(ServerFixture, unittest.TestCase):
             time.sleep(0.05)
         self.assertTrue(history.exists(), "Continuous requests starved the periodic learning save")
         self.assertIn("你好", history.read_text(encoding="utf-8"))
+
+    def test_shutdown_keeps_unsaved_learning_available_for_retry(self):
+        server, connection = self.ready()
+        self.type_word(connection)
+        blocked = self.data / "history.tsv"
+        blocked.mkdir()
+        try:
+            connection.write(b'{"op":"shutdown"}\n')
+            self.assertFalse(json.loads(connection.readline())["ok"])
+            self.assertTrue(self.call(connection, "status")["status"]["ready"])
+        finally:
+            blocked.rename(self.data / "blocked-history")
+        self.call(connection, "shutdown")
+        self.assertEqual(server.wait(timeout=10), 0)
+        self.assertIn("你好", blocked.read_text(encoding="utf-8"))
 
     def test_export_custom_dictionary_does_not_rebuild_query_indexes(self):
         main = Path(__file__).resolve().parents[2] / ".local/data/lexicon.tsv"

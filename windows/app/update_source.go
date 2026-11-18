@@ -56,6 +56,10 @@ func (source *githubUpdates) ListReleases(ctx context.Context, _ selfupdate.Repo
 		if err != nil {
 			return nil, err
 		}
+		// Only public, stable GitHub releases can supply installers.
+		if release.GetDraft() || release.GetPrerelease() {
+			continue
+		}
 		version, parseErr := semver.StrictNewVersion(strings.TrimPrefix(release.GetTagName(), "freetype-"))
 		if parseErr != nil || version.Prerelease() != "" || version.Metadata() != "" {
 			continue

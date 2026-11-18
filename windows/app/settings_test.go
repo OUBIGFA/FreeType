@@ -205,6 +205,37 @@ func TestGeneralPageShowsStatusAndSavesWholeConfig(t *testing.T) {
 	}
 }
 
+func TestDefaultInputMethodPrecedesStatusAndUsesGeneralSectionBackground(t *testing.T) {
+	for _, dark := range []bool{false, true} {
+		t.Run(fmt.Sprintf("dark=%t", dark), func(t *testing.T) {
+			s, _ := newTestSettings()
+			view := ui.NewTester(s.view, 780, 720)
+			view.SetDark(dark)
+			view.Frame()
+			serviceStatus, hasServiceStatus := view.Find("FreeType 输入法")
+			defaultTip, hasDefaultTip := view.Find("默认输入法")
+			status, hasStatus := view.Find("现在的状态")
+			if !hasServiceStatus || !hasDefaultTip || !hasStatus || serviceStatus.Y+serviceStatus.H > defaultTip.Y || defaultTip.Y+defaultTip.H > status.Y {
+				t.Fatal("常规页应依次显示服务状态卡、默认输入法和现在的状态")
+			}
+			image := view.Image()
+			rowBackground := func(label string) [4]uint8 {
+				t.Helper()
+				bounds, ok := view.Find(label)
+				if !ok {
+					t.Fatalf("常规页缺少 %q", label)
+				}
+				// Sample the left padding, clear of the text and the card border.
+				pixel := image.RGBAAt(int(bounds.X)-8, int(bounds.Y+bounds.H/2))
+				return [4]uint8{pixel.R, pixel.G, pixel.B, pixel.A}
+			}
+			if got, want := rowBackground("默认输入法"), rowBackground("简体 / 繁体"); got != want {
+				t.Fatalf("默认输入法应与常规设置区块使用同一底色：%v，预期 %v", got, want)
+			}
+		})
+	}
+}
+
 func TestGlobalDefaultChoiceSavesAndHidesConflictingScope(t *testing.T) {
 	s, b := newTestSettings()
 	tt := open(t, s, "")
@@ -1207,41 +1238,52 @@ func TestAppPresetRulesCanBeEditedWithoutClipboardHistory(t *testing.T) {
 
 func TestPredictNextIsOffByDefaultAndSavedFromFeaturesPage(t *testing.T) {
 	s, b := newTestSettings()
-	if s.config.PredictNext || !s.config.PredictDigits || !s.config.PredictSpace || !s.config.PredictArrows {
-		t.Fatalf("上屏联想默认应关闭，三种选词键默认开：%+v", s.config)
+	if s.config.PredictNext || s.config.PredictDigits || !s.config.PredictSpace || !s.config.PredictDoubleSpace || !s.config.PredictArrows {
+		t.Fatalf("上屏联想和数字选词默认关，空格、双击空格和左右选词默认开：%+v", s.config)
 	}
 	tt := open(t, s, "实用功能")
-	if tt.HasText("数字键选联想词") || tt.HasText("左右方向键选联想词") {
-		t.Fatal("没开上屏联想时不显示它的子选项")
+	labels := []string{"数字键选联想词", "空格选联想词", "双击空格键选词", "左右方向键选联想词"}
+	for _, label := range labels {
+		if tt.HasText(label) {
+			t.Fatalf("没开上屏联想时不应显示 %q", label)
+		}
 	}
 	if err := tt.Click("上屏联想"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	if !b.config.PredictNext || !b.config.PredictArrows || !tt.HasText("左右方向键选联想词") {
-		t.Fatal("开启上屏联想后，左右选词应默认开启并显示")
+	for _, label := range labels {
+		if !tt.HasText(label) {
+			t.Fatalf("开启上屏联想后应显示 %q", label)
+		}
 	}
-	if err := tt.Click("空格选联想词"); err != nil {
-		t.Fatal(err)
+	if tt.HasText("自定义联想选词键") || len(findSettings("自定义联想选词键")) != 0 {
+		t.Error("已移除的自定义选词键不应出现在设置页或搜索结果中")
 	}
-	if b.config.PredictSpace || !b.config.PredictDigits || !b.config.PredictArrows {
+	if !b.config.PredictNext || b.config.PredictDigits || !b.config.PredictSpace || !b.config.PredictDoubleSpace || !b.config.PredictArrows {
+		t.Fatalf("开启上屏联想应保存选词键的默认值：%+v", b.config)
+	}
+	for _, label := range []string{"数字键选联想词", "双击空格键选词", "空格选联想词", "左右方向键选联想词"} {
+		if err := tt.Click(label); err != nil {
+			t.Fatal(err)
+		}
+		tt.Frame()
+	}
+	if tt.HasText("双击空格键选词") {
+		t.Fatal("关闭空格选词时应隐藏双击子项")
+	}
+	if !b.config.PredictDigits || b.config.PredictSpace || b.config.PredictDoubleSpace || b.config.PredictArrows {
 		t.Fatalf("子选项没有分别保存：%+v", b.config)
 	}
-	if err := tt.Click("左右方向键选联想词"); err != nil {
-		t.Fatal(err)
-	}
-	if b.config.PredictArrows || !b.config.PredictDigits || b.config.PredictSpace {
-		t.Fatalf("左右选词开关没有单独保存：%+v", b.config)
-	}
-	// 总开关再次打开时保留用户关闭的选择，不强制重置子选项。
+	// 重新打开总开关时保留已保存的按键偏好。
 	for range 2 {
 		if err := tt.Click("上屏联想"); err != nil {
 			t.Fatal(err)
 		}
 		tt.Frame()
 	}
-	if !b.config.PredictNext || b.config.PredictArrows {
-		t.Fatalf("重新开启联想不能覆盖已保存的左右选词偏好：%+v", b.config)
+	if !b.config.PredictNext || !b.config.PredictDigits || b.config.PredictSpace || b.config.PredictDoubleSpace || b.config.PredictArrows {
+		t.Fatalf("重新开启联想不能覆盖已保存的选词键偏好：%+v", b.config)
 	}
 }
 

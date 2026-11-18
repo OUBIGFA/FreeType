@@ -52,6 +52,9 @@ pub mod keysym {
     pub const DELETE: u32 = 0xffff;
     pub const SHIFT_L: u32 = 0xffe1;
     pub const SHIFT_R: u32 = 0xffe2;
+    pub const F1: u32 = 0xffbe;
+    /// Windows 宿主确认的双击空格；键码需与服务进程保持一致。
+    pub const SPACE_DOUBLE: u32 = 0x11_0001;
 }
 
 /// 修饰键位掩码（和 `wowtype_core::session::modifier` 一致）。
@@ -232,6 +235,17 @@ pub struct Config {
     pub font_family: String,
     /// 选中候选的样子：pink 品牌粉、blue 蓝、green 微信绿、sogou 不画底色块只换字色。
     pub candidate_style: String,
+    /// 鼠标悬停候选窗时允许滚轮翻页。
+    pub candidate_wheel: bool,
+    /// 行内预编辑：segmented、raw、off；候选窗预编辑独立控制。
+    pub inline_preedit: String,
+    pub candidate_preedit: bool,
+    /// 0 按候选字号自动缩放。
+    pub preedit_size: u32,
+    pub candidate_follow: bool,
+    pub candidate_single_line: bool,
+    /// 逗号分隔的字体族名，按顺序供 DirectWrite 补字。
+    pub font_fallbacks: String,
 
     // —— 拼音 ——
     /// 模糊音总开关；打开时用 [`Config::fuzzy_groups`] 里的几组。
@@ -244,6 +258,11 @@ pub struct Config {
     pub shuangpin_show_keys: bool,
     /// 按错键纠错。
     pub typo_correction: bool,
+    /// 乱序、邻键、漏字、多字。旧设置缺字段时保持全部开启。
+    pub typo_kinds: u8,
+    pub typo_mark: bool,
+    /// 固定排位的显示角标：off、paperclip、pushpin、dot。
+    pub pin_badge: String,
     /// 也出 CJK 扩展 B 区以后的生僻单字（常见字体显示不了，默认不出）。
     pub rare_chars: bool,
     /// 主词库文件（`拼音<Tab>词<Tab>词频`）的路径；空串用安装包里的雾凇词库。
@@ -311,12 +330,18 @@ pub struct Config {
     pub email_completion: bool,
     /// 上屏联想：一个词上屏以后，候选窗接着给出常跟在它后面的词（默认关）。
     pub predict_next: bool,
-    /// 上屏联想时数字键选联想词（关掉以后数字照常打出来）。
+    /// 上屏联想时数字键选联想词（默认关，数字照常输入）。
     pub predict_digits: bool,
-    /// 上屏联想时空格选当前高亮的联想词（关掉以后空格照常打出来）。
+    /// 上屏联想时允许用空格选当前高亮的联想词（默认开）。
     pub predict_space: bool,
+    /// 默认开；仅在允许空格选词时生效，单次空格照常交给应用。
+    pub predict_double_space: bool,
     /// 上屏联想时左右方向键移动候选高亮（默认开，独立于组字时的方向键设置）。
     pub predict_arrows: bool,
+    /// 只在本机统计每日聚合数字，默认关闭。
+    pub typing_stats: bool,
+    /// 0 表示永久；其余是保留天数。
+    pub stats_retention: u32,
 
     // —— 快捷键（off 表示不用） ——
     /// 表情面板：off ctrl+shift+e ctrl+alt+e。
@@ -335,6 +360,12 @@ pub struct Config {
     pub status_bar: bool,
     /// 状态栏一会儿不用就隐藏，切换状态时再出来。
     pub status_bar_autohide: bool,
+    pub bar_scale: u32,
+    pub bar_icon_size: u32,
+    pub bar_hide_seconds: u32,
+    pub bar_shadow: bool,
+    /// 标点、简繁、表情、设置，位 0–3；中英切换始终显示。
+    pub bar_parts: u8,
     /// 切换中英、标点、简繁时在光标旁提示。
     pub hint_on_toggle: bool,
     /// 换到另一个输入框时在光标旁提示当前中英文状态。
@@ -355,12 +386,22 @@ impl Default for Config {
             font_size: 18,
             font_family: DEFAULT_FONT.into(),
             candidate_style: "pink".into(),
+            candidate_wheel: false,
+            inline_preedit: "segmented".into(),
+            candidate_preedit: true,
+            preedit_size: 0,
+            candidate_follow: true,
+            candidate_single_line: true,
+            font_fallbacks: String::new(),
             fuzzy: false,
             fuzzy_groups: fuzzy::DEFAULT,
             shuangpin: false,
             shuangpin_scheme: "xiaohe".into(),
             shuangpin_show_keys: false,
             typo_correction: true,
+            typo_kinds: 0xf,
+            typo_mark: false,
+            pin_badge: "paperclip".into(),
             rare_chars: false,
             lexicon: String::new(),
             shift_toggle: "both".into(),
@@ -391,9 +432,12 @@ impl Default for Config {
             clipboard_history: false,
             email_completion: true,
             predict_next: false,
-            predict_digits: true,
+            predict_digits: false,
             predict_space: true,
+            predict_double_space: true,
             predict_arrows: true,
+            typing_stats: false,
+            stats_retention: 365,
             hotkey_emoji: "off".into(),
             hotkey_punct: "off".into(),
             hotkey_traditional: "off".into(),
@@ -401,6 +445,11 @@ impl Default for Config {
             tray_icon: true,
             status_bar: false,
             status_bar_autohide: false,
+            bar_scale: 100,
+            bar_icon_size: 15,
+            bar_hide_seconds: 4,
+            bar_shadow: true,
+            bar_parts: 0b1011,
             hint_on_toggle: true,
             hint_on_focus: false,
             hint_position: "top-left".into(),
@@ -448,6 +497,11 @@ impl Config {
         let d = Config::default();
         self.page_size = self.page_size.clamp(3, 10);
         self.font_size = self.font_size.clamp(12, 36);
+        if self.preedit_size != 0 { self.preedit_size = self.preedit_size.clamp(10, 36); }
+        pick(&mut self.inline_preedit, &["segmented", "raw", "off"], &d.inline_preedit);
+        self.font_fallbacks = self.font_fallbacks.split([',', '，']).map(str::trim)
+            .filter(|name| !name.is_empty() && name.len() <= 64 && !name.chars().any(char::is_control))
+            .take(6).collect::<Vec<_>>().join(",");
         let family = self.font_family.trim();
         self.font_family = if family.is_empty() || family.len() > 64 {
             d.font_family.clone()
@@ -459,6 +513,13 @@ impl Config {
             self.lexicon.clear();
         }
         self.fuzzy_groups &= 0xffff;
+        self.bar_scale = self.bar_scale.clamp(75, 150);
+        self.bar_icon_size = self.bar_icon_size.clamp(12, 23);
+        self.bar_hide_seconds = self.bar_hide_seconds.clamp(1, 60);
+        self.bar_parts &= 0xf;
+        self.typo_kinds &= 0xf;
+        pick(&mut self.pin_badge, &["off", "paperclip", "pushpin", "dot"], &d.pin_badge);
+        if ![0, 30, 90, 180, 365].contains(&self.stats_retention) { self.stats_retention = d.stats_retention; }
         self.page_keys &= 0xf;
         self.digit_punct_fullwidth &= digit_punct::ALL;
         pick(&mut self.candidate_style, &CANDIDATE_STYLES, &d.candidate_style);
@@ -580,6 +641,26 @@ impl BackupPart {
     ];
 }
 
+/// 一天的统计只有数字，键位是 Windows 扫描码，不含按键顺序。
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TypingDay {
+    pub characters: [u64; 5], // 汉字、拉丁字母、数字、标点、其他
+    pub active_ms: u64,
+    pub hours: [u64; 24],
+    pub keys: std::collections::BTreeMap<u16, u64>,
+    pub candidates: [u64; 11], // 第 1–10 位、第 11 位以后
+}
+
+/// 由已完成绘制的候选页发出的动作。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CandidateAction {
+    Select { index: usize },
+    Page { next: bool },
+    Forget { index: usize },
+    Pin { index: usize, place: u8 }, // 0 = 取消固定
+}
+
 /// 请求。`op` 字段区分种类。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
@@ -598,6 +679,24 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         before: Option<String>,
     },
+    /// 实际按键的扫描码只用来累加按键统计（预判与非 TSF 客户端仍可发 Key）。
+    PhysicalKey {
+        key: Key,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        before: Option<String>,
+        scan: u16,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shown_revision: Option<u64>,
+    },
+    CandidateAction { revision: u64, action: CandidateAction },
+    ListTypingStats,
+    ClearTypingStats,
+    /// Windows 宿主识别敏感输入框时，不保留编辑区、上下文和联想。
+    SensitiveFocus { active: bool },
+    /// TSF 已核对紧接的退格确实删除了刚上屏的字符。
+    UndoCommitLearning,
+    /// TSF 已验证右标点存在，先把当前输入候选上屏，不再追加一个右符号。
+    ClosePair,
     /// 鼠标点候选：当前页里的序号。
     Select { index: usize },
     /// 候选窗上的翻页按钮。
@@ -627,6 +726,8 @@ pub enum Request {
     /// 现在开着窗口的程序（设置里添加指定软件时挑）。
     ListApps,
     GetConfig,
+    /// 仅设置程序可用；None 移除外部模型并回退随包版本。
+    SetNeuralModel { path: Option<String> },
     SetConfig { config: Config },
     ListQuickPhrases,
     /// 整份替换快捷短语。
@@ -705,6 +806,11 @@ pub enum Panel {
     List,
 }
 
+/// TSF 自身验证并执行的文档动作，不携带实际正文。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PairEdit { Skip, Erase }
+
 /// 一次按键之后 DLL 要做的事。
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Frame {
@@ -713,21 +819,55 @@ pub struct Frame {
     /// 要上屏的字。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub commit: Option<String>,
+    /// 刚提交的内容有可撤销的学习记录；空按键预判不发布此标识。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub undo_learning: bool,
+    /// 本次上屏的候选全局序号，从 1 起；0 为不是候选提交。
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub selected_rank: usize,
     /// 上屏后光标往回挪几个字（UTF-16），成对标点补全时停在中间。
     #[serde(default, skip_serializing_if = "is_zero")]
     pub caret_back: usize,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pair_enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pair_edit: Option<PairEdit>,
     /// 编辑区（组字）文字；空串表示没有在组字。
     #[serde(default)]
     pub preedit: String,
     /// 编辑区光标，UTF-16 偏移。
     #[serde(default)]
     pub preedit_cursor: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inline_preedit: Option<String>,
+    #[serde(default)]
+    pub inline_cursor: usize,
+    /// 布尔反义保持旧协议缺省值仍显示并跟随。
+    #[serde(default)]
+    pub hide_candidate_preedit: bool,
+    #[serde(default)]
+    pub preedit_size: u32,
+    #[serde(default)]
+    pub lock_candidate_position: bool,
+    #[serde(default)]
+    pub wrap_candidates: bool,
+    #[serde(default)]
+    pub font_fallbacks: String,
     /// 候选窗顶上的标题（工具栏、表情面板、邮箱补全的说明）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     /// 这一页的候选（显示用：换行、Tab 已画成 ⏎、⇥）。
     #[serde(default)]
     pub candidates: Vec<String>,
+    /// 与候选一一对应的纯显示角标，不改变选择或上屏的文本。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub badges: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pin_slots: Vec<Option<u8>>,
+    #[serde(default)]
+    pub pin_limit: u8,
+    #[serde(default)]
+    pub page_revision: u64,
     /// 候选前的标号；空表示 1–9、0（第 10 个）；某一项是空串表示不标。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<String>,
@@ -749,6 +889,11 @@ pub struct Frame {
     /// 这些候选是上屏联想：没有在组字，不认的键照常交给应用，一会儿不选就收起来。
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub predict: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub predict_double_space: bool,
+    /// 双击选词时替换刚由应用插入且经 TSF 核对过的一个半角空格。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub replace_space: bool,
     #[serde(default)]
     pub mode: Mode,
     /// 中文标点（状态显示用）。
@@ -771,6 +916,8 @@ pub struct Frame {
     /// 候选强调色，见 [`Config::candidate_style`]。
     #[serde(default)]
     pub candidate_style: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub candidate_wheel: bool,
     /// 候选竖排。
     #[serde(default)]
     pub vertical: bool,
@@ -803,6 +950,8 @@ pub struct Status {
     /// 正在用的主词库文件。
     #[serde(default)]
     pub lexicon: String,
+    #[serde(default)]
+    pub neural_model: String,
     /// 载入失败的原因。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -835,6 +984,8 @@ pub struct Response {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<Config>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shuangpin_example: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quick_phrases: Option<Vec<QuickPhrase>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub common_phrases: Option<Vec<String>>,
@@ -846,6 +997,8 @@ pub struct Response {
     pub report: Option<ImportReport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub apps: Option<Vec<AppWindow>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub typing_stats: Option<std::collections::BTreeMap<String, TypingDay>>,
 }
 
 impl Response {
@@ -928,13 +1081,21 @@ mod tests {
     }
 
     #[test]
-    fn prediction_arrows_default_on_for_old_configs_and_round_trip_when_disabled() {
+    fn prediction_defaults_fill_missing_fields_and_preserve_explicit_preferences() {
+        let defaults: Config = serde_json::from_str("{}").unwrap();
+        assert!(!defaults.predict_next);
         let old: Config = serde_json::from_str(r#"{"predict_next":true}"#).unwrap();
-        assert!(old.predict_arrows, "旧配置开启联想后也默认支持左右选词");
-        let disabled = Config { predict_arrows: false, ..old };
-        let restored: Config = decode(&encode(&disabled)).unwrap();
-        assert!(restored.predict_next);
-        assert!(!restored.predict_arrows, "显式关闭后不能被默认值覆盖");
+        assert!(!old.predict_digits);
+        assert!(old.predict_space && old.predict_double_space && old.predict_arrows);
+        let explicit = Config {
+            predict_digits: true,
+            predict_space: false,
+            predict_double_space: false,
+            predict_arrows: false,
+            ..old
+        };
+        let restored: Config = decode(&encode(&explicit)).unwrap();
+        assert_eq!(restored, explicit, "不能用默认值覆盖已保存的选词键偏好");
     }
 
     #[test]

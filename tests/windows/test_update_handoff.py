@@ -15,6 +15,8 @@ INCLUDE = ROOT / "windows/app/installer.nsh"
 
 
 class ServerFixture:
+    copy_server = True
+
     def setUp(self):
         scratch = Path(os.environ.get("FREETYPE_TEST_TEMP", ROOT / "_temp/update-tests"))
         scratch.mkdir(parents=True, exist_ok=True)
@@ -23,13 +25,16 @@ class ServerFixture:
         self.mutex = "Local\\FreeType.Server-" + self.instance
         self.compiler = Path(os.environ.get("FREETYPE_MAKENSIS", str(
             Path(os.environ["LOCALAPPDATA"]) / "mygo/nsis-3.13/makensis.exe")))
-        self.server = self.root / "app/bin/FreeTypeServer.exe"
-        self.server.parent.mkdir(parents=True)
-        shutil.copyfile(Path(os.environ.get("FREETYPE_TEST_SERVER", ROOT / "target/release/FreeTypeServer.exe")), self.server)
+        self.server = Path(os.environ.get("FREETYPE_TEST_SERVER", ROOT / "target/release/FreeTypeServer.exe")).resolve()
+        if self.copy_server:
+            installed = self.root / "app/bin/FreeTypeServer.exe"
+            installed.parent.mkdir(parents=True)
+            shutil.copyfile(self.server, installed)
+            self.server = installed
         self.data = self.root / "data"
         self.data.mkdir()
         self.resources = self.root / "app/data"
-        self.resources.mkdir()
+        self.resources.mkdir(parents=True)
         self.lexicon = self.resources / "lexicon.tsv"
         # More than one page of real words across unrelated single and multiple syllables.
         self.words = {

@@ -355,20 +355,17 @@ pub struct Syllable {
 impl Syllable {
     /// 由文本构造音节。
     pub fn from_text(text: &str) -> Option<Self> {
-        let id = id_of(text)?;
-        let (initial, final_) = split(text)?;
-        Some(Self {
-            id,
-            text: SYLLABLES[id as usize],
-            initial,
-            final_,
-        })
+        Self::from_id(id_of(text)?)
     }
 
     /// 由 ID 构造音节。
     pub fn from_id(id: SyllableId) -> Option<Self> {
-        let text = *SYLLABLES.get(id as usize)?;
-        Self::from_text(text)
+        // 每份词库反复使用同一组音节，只拆分一次声母和韵母。
+        static TABLE: std::sync::OnceLock<Vec<Option<Syllable>>> = std::sync::OnceLock::new();
+        TABLE.get_or_init(|| SYLLABLES.iter().enumerate().map(|(id, &text)| {
+            let (initial, final_) = split(text)?;
+            Some(Syllable { id: id as SyllableId, text, initial, final_ })
+        }).collect()).get(id as usize).copied().flatten()
     }
 
     /// 首字母（简拼用的那一维）。

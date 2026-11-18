@@ -72,7 +72,7 @@ fn cache_paths(path: &Path) -> Vec<std::path::PathBuf> {
     out
 }
 
-/// 源文件的 (大小, 修改时间秒)。拿不到就不用缓存。
+/// 保留文件系统提供的时间精度，同一秒内覆盖等长词库也要重建快照。
 fn source_stamp(path: &Path) -> Option<(u64, u64)> {
     let meta = fs::metadata(path).ok()?;
     let mtime = meta
@@ -80,7 +80,7 @@ fn source_stamp(path: &Path) -> Option<(u64, u64)> {
         .ok()?
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?
-        .as_secs();
+        .as_nanos().try_into().ok()?;
     Some((meta.len(), mtime))
 }
 
@@ -275,8 +275,6 @@ impl MemoryLexicon {
                 }
             }
         };
-        push(self.full_index.entry(keys.clone()).or_default());
-        push(self.jianpin_index.entry(initials.clone()).or_default());
         let mut hash = KEY_HASH_SEED;
         for key in keys.iter().take(keys.len().saturating_sub(1)) {
             hash = key_hash_step(hash, *key);
@@ -287,6 +285,8 @@ impl MemoryLexicon {
             hash = initial_hash_step(hash, letter);
             self.initial_prefixes.insert(hash);
         }
+        push(self.full_index.entry(keys).or_default());
+        push(self.jianpin_index.entry(initials).or_default());
         self.total_freq += freq;
     }
 
@@ -820,6 +820,14 @@ pub struct UserLexicon {
     snapshot: RwLock<Arc<MemoryLexicon>>,
 }
 
+pub(crate) fn user_dict_text(words: &[(String, String, f64)]) -> String {
+    let mut out = String::from("# 用户词库\n");
+    for (code, word, freq) in words {
+        out.push_str(&format!("{code}\t{word}\t{freq}\n"));
+    }
+    out
+}
+
 /// 自定义词默认频次：和最常用的词差不多，所以排在同音词前面。
 pub const CUSTOM_WORD_FREQ: f64 = 5_000_000.0;
 
@@ -867,14 +875,18 @@ impl UserLexicon {
         let mut changed = 0;
         {
             let mut words = self.words.write().map_err(|_| anyhow!("user words lock poisoned"))?;
-            for (pinyin, word, frequency) in &checked {
-                if let Some(current) = words.iter_mut().find(|(_, existing, _)| existing == word) {
-                    if *frequency > current.2 {
-                        current.2 = *frequency;
+            // 整份备份只扫描一次现有词表，重复词仍保留本机读音。
+            let mut positions: HashMap<String, usize> = words.iter().enumerate()
+                .map(|(index, (_, word, _))| (word.clone(), index)).collect();
+            for (pinyin, word, frequency) in checked {
+                if let Some(&index) = positions.get(&word) {
+                    if frequency > words[index].2 {
+                        words[index].2 = frequency;
                         changed += 1;
                     }
                 } else {
-                    words.push((pinyin.trim().to_string(), word.clone(), *frequency));
+                    positions.insert(word.clone(), words.len());
+                    words.push((pinyin, word, frequency));
                     changed += 1;
                 }
             }
@@ -899,6 +911,20 @@ impl UserLexicon {
         removed
     }
 
+    pub(crate) fn user_word(&self, word: &str) -> Option<(String, f64)> {
+        self.words.read().ok()?.iter().find(|(_, text, _)| text == word)
+            .map(|(code, _, freq)| (code.clone(), *freq))
+    }
+
+    /// 只在词条仍是这次自动学习写入的值时撤销，保留用户随后手工改的值。
+    pub(crate) fn restore_word(&self, word: &str, before: Option<(String, f64)>, after: (String, f64)) -> bool {
+        if self.user_word(word) != Some(after) { return false; }
+        match before {
+            Some((code, freq)) => self.add(&code, word, freq).is_ok(),
+            None => self.remove(word),
+        }
+    }
+
     pub fn words(&self) -> Vec<(String, String, f64)> {
         self.words.read().map(|w| w.clone()).unwrap_or_default()
     }
@@ -913,12 +939,7 @@ impl UserLexicon {
     /// 把用户词写成 TSV（与 lexicon 格式一致）。空的也写（只有注释行）：
     /// 用户把学到的词都删掉以后，旧文件不能留着，不然重启又回来了。
     pub fn save_tsv<P: AsRef<Path>>(&self, path: P) -> Result<()> {
-        let words = self.words();
-        let mut out = String::from("# 用户词库\n");
-        for (pinyin, word, freq) in words {
-            out.push_str(&format!("{}\t{}\t{}\n", pinyin, word, freq as i64));
-        }
-        crate::learn::write_atomic(path.as_ref(), &out)
+        crate::learn::write_atomic(path.as_ref(), &user_dict_text(&self.words()))
             .with_context(|| format!("写入用户词库失败: {}", path.as_ref().display()))
     }
 
@@ -927,6 +948,7 @@ impl UserLexicon {
         let data = fs::read_to_string(path.as_ref())
             .with_context(|| format!("读取用户词库失败: {}", path.as_ref().display()))?;
         let mut added = 0;
+        let mut nonempty = false;
         // 批量合并后只建一次索引；逐条调用 add 会使启动耗时随学习词数平方增长。
         let mut words = self.words.write().map_err(|_| anyhow!("user words lock poisoned"))?;
         let mut positions: HashMap<String, usize> = words.iter().enumerate()
@@ -935,6 +957,7 @@ impl UserLexicon {
             if line.trim().is_empty() || line.starts_with('#') {
                 continue;
             }
+            nonempty = true;
             let mut cols = line.split('\t');
             let (Some(pinyin), Some(word)) = (cols.next(), cols.next()) else {
                 continue;
@@ -951,6 +974,7 @@ impl UserLexicon {
             }
         }
         drop(words);
+        anyhow::ensure!(!nonempty || added > 0, "找不到可识别的用户词条");
         if added > 0 {
             self.rebuild();
         }
@@ -1002,8 +1026,12 @@ impl UserLexicon {
             custom.push((pinyin, word.to_string(), freq));
         }
         let count = custom.len() + codes.len();
+        let mut rebuild = false;
         if let Ok(mut slot) = self.custom.write() {
-            *slot = custom;
+            if *slot != custom {
+                *slot = custom;
+                rebuild = true;
+            }
         }
         if let Ok(mut slot) = self.codes.write() {
             *slot = codes;
@@ -1011,7 +1039,7 @@ impl UserLexicon {
         if let Ok(mut slot) = self.phrases.write() {
             *slot = phrases;
         }
-        self.rebuild();
+        if rebuild { self.rebuild(); }
         count
     }
 
@@ -1100,23 +1128,22 @@ impl UserLexicon {
     }
 
     fn rebuild(&self) {
-        let mut words = self.words.read().map(|w| w.clone()).unwrap_or_default();
+        let mut lexicon = MemoryLexicon::new();
         let mut learned_codes = Vec::new();
-        words.retain(|(input, word, freq)| {
-            if parse_pinyin_keys(input).is_ok() { return true; }
-            learned_codes.push((input.clone(), word.clone(), *freq));
-            false
-        });
-        words.extend(self.custom_words());
-        let mut tsv = String::new();
-        for (pinyin, word, freq) in &words {
-            tsv.push_str(&format!("{}\t{}\t{}\n", pinyin, word, freq));
-        }
-        if let Ok(lexicon) = MemoryLexicon::from_tsv_str(&tsv) {
-            if let Ok(mut slot) = self.snapshot.write() {
-                *slot = Arc::new(lexicon);
+        // 数据在加入词库时已校验，直接构建索引，省去整表 TSV 往返。
+        if let Ok(words) = self.words.read() {
+            for (input, word, freq) in words.iter() {
+                if lexicon.insert(input, word, *freq).is_err() {
+                    learned_codes.push((input.clone(), word.clone(), *freq));
+                }
             }
         }
+        if let Ok(custom) = self.custom.read() {
+            for (input, word, freq) in custom.iter() {
+                let _ = lexicon.insert(input, word, *freq);
+            }
+        }
+        if let Ok(mut slot) = self.snapshot.write() { *slot = Arc::new(lexicon); }
         if let Ok(mut slot) = self.learned_codes.write() { *slot = learned_codes; }
     }
 }
@@ -1724,6 +1751,21 @@ mod tests {
         .unwrap();
         let second = MemoryLexicon::from_tsv_path_cached(&path).unwrap();
         assert_eq!(second.len(), 3, "源文件更新后应当重新解析");
+        cleanup(&path);
+    }
+
+    #[test]
+    fn same_length_rewrite_in_one_second_invalidates_snapshot() {
+        use std::time::{Duration, UNIX_EPOCH};
+        let path = temp_lexicon("same-size", "ni\t你\t100\n");
+        let base = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        for (offset, word) in [(100, "你"), (200, "泥")] {
+            fs::write(&path, format!("ni\t{word}\t100\n")).unwrap();
+            fs::OpenOptions::new().write(true).open(&path).unwrap()
+                .set_modified(base + Duration::from_millis(offset)).unwrap();
+            let lex = MemoryLexicon::from_tsv_path_cached(&path).unwrap();
+            assert_eq!(lex.entries[0].word, word);
+        }
         cleanup(&path);
     }
 

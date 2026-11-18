@@ -637,8 +637,8 @@ fn traditional_learns_the_lexicon_form() {
         texts(&mut session)
     };
     assert_eq!(shown(&engine)[0], "晚理");
-    {
-        // 一个字一个字选出来（萬、裏），拼成的词马上收进用户词库
+    for _ in 0..2 {
+        // 连续两次分段选中后才正式收进用户词库。
         let mut session = with_engine_ref(&engine);
         type_keys(&mut session, "wanli");
         choose_text(&mut session, "萬");
@@ -1272,9 +1272,9 @@ fn shuangpin_semicolon_is_a_key_on_odd_count() {
     assert_eq!(session.input(), "x;");
 }
 
-/// 分几次选出来的词，用一次就记住（https://x.com/so1v3/status/2120415675969896729）。
+/// 分几次选出的词，首次候选收录，第二次进入词库。
 #[test]
-fn composed_word_is_learned_after_one_use() {
+fn composed_word_is_learned_after_second_use() {
     let lexicon: Arc<dyn Lexicon> = Arc::new(
         MemoryLexicon::from_tsv_str(concat!(
             "shuang\t双\t9000\n",
@@ -1298,15 +1298,14 @@ fn composed_word_is_learned_after_one_use() {
     let mut session = with(engine);
     type_keys(&mut session, "shuangpinge");
     assert_ne!(texts(&mut session).first().map(String::as_str), Some("霜频阁"));
-    choose_text(&mut session, "霜");
-    choose_text(&mut session, "频");
-    let frame = choose_text(&mut session, "阁");
-    assert_eq!(frame.commit.as_deref(), Some("霜频阁"));
-    assert!(
-        engine.user_words().iter().any(|(_, w, _)| w == "霜频阁"),
-        "选一次就进用户词库：{:?}",
-        engine.user_words()
-    );
+    for use_no in 1..=2 {
+        if use_no == 2 { type_keys(&mut session, "shuangpinge"); }
+        choose_text(&mut session, "霜");
+        choose_text(&mut session, "频");
+        let frame = choose_text(&mut session, "阁");
+        assert_eq!(frame.commit.as_deref(), Some("霜频阁"));
+        assert_eq!(engine.user_words().iter().any(|(_, w, _)| w == "霜频阁"), use_no == 2);
+    }
 
     let mut again = with(engine);
     type_keys(&mut again, "shuangpinge");
@@ -1359,10 +1358,12 @@ fn ctrl(keysym: u32) -> Key {
 fn ctrl_delete_forgets_learned_word() {
     let engine = forget_engine();
     let mut session = with(engine);
-    type_keys(&mut session, "shuangpinge");
-    choose_text(&mut session, "霜");
-    choose_text(&mut session, "频");
-    choose_text(&mut session, "阁");
+    for _ in 0..2 {
+        type_keys(&mut session, "shuangpinge");
+        choose_text(&mut session, "霜");
+        choose_text(&mut session, "频");
+        choose_text(&mut session, "阁");
+    }
     assert!(engine.user_words().iter().any(|(_, w, _)| w == "霜频阁"));
 
     let mut again = with(engine);

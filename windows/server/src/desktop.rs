@@ -63,6 +63,7 @@ pub enum BarEvent {
     ToggleMode,
     TogglePunct,
     ToggleTraditional,
+    EmojiPanel,
     OpenSettings,
     HideBar,
     /// 前台窗口换到了这个程序的窗口（小写文件名，见 [`window_app`]）。
@@ -76,9 +77,6 @@ const WM_STATE: u32 = WM_APP + 1;
 const HIDE_TIMER: usize = 1;
 /// 鼠标离开窗口（TrackMouseEvent）。
 const WM_MOUSELEAVE: u32 = 0x02a3;
-/// 自动隐藏：多久不变就收起。
-const HIDE_MS: u32 = 4000;
-
 /// 握把宽、按钮宽高（96 DPI 下）。
 const GRIP: f32 = 12.0;
 const BUTTON: f32 = 30.0;
@@ -89,10 +87,18 @@ enum Part {
     Mode,
     Punct,
     Traditional,
+    Emoji,
     Settings,
 }
 
-const PARTS: [Part; 4] = [Part::Mode, Part::Punct, Part::Traditional, Part::Settings];
+fn visible_parts(mask: u8) -> impl Iterator<Item = Part> {
+    std::iter::once(Part::Mode).chain([Part::Punct, Part::Traditional, Part::Emoji, Part::Settings]
+        .into_iter().enumerate().filter_map(move |(i, part)| (mask & (1 << i) != 0).then_some(part)))
+}
+
+fn bar_state() -> BarState {
+    shared().and_then(|shared| shared.state.lock().ok().map(|state| state.clone())).unwrap_or_default()
+}
 
 struct Shared {
     state: Mutex<BarState>,
@@ -146,6 +152,16 @@ impl Desktop for DesktopHandle {
 }
 
 /// 打开设置程序（安装目录里的 FreeType.exe，本程序在它下面的 bin）。
+pub fn open_emoji_panel() {
+    // The bar does not activate itself, so Windows opens its picker over the active app.
+    use windows::Win32::UI::Input::KeyboardAndMouse::{SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VIRTUAL_KEY};
+    let sequence = [(0x5b, false), (0xbe, false), (0xbe, true), (0x5b, true)].map(|(vk, up)| INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: VIRTUAL_KEY(vk), dwFlags: if up { KEYEVENTF_KEYUP } else { Default::default() }, ..Default::default() } },
+    });
+    unsafe { SendInput(&sequence, std::mem::size_of::<INPUT>() as i32); }
+}
+
 pub fn open_settings(exe: &std::path::Path) {
     if exe.exists() {
         let _ = std::process::Command::new(exe).spawn();
@@ -468,13 +484,13 @@ fn light_mode() -> bool {
     value != 0
 }
 
-fn scale_of(hwnd: HWND) -> f32 {
-    unsafe { GetDpiForWindow(hwnd).max(96) as f32 / 96.0 }
+fn scale_of(hwnd: HWND, state: &BarState) -> f32 {
+    (unsafe { GetDpiForWindow(hwnd).max(96) } as f32 / 96.0) * state.scale.clamp(75, 150) as f32 / 100.0
 }
 
-fn size_of_bar(scale: f32) -> (i32, i32) {
+fn size_of_bar(scale: f32, parts: u8) -> (i32, i32) {
     (
-        ((GRIP + BUTTON * PARTS.len() as f32 + 6.0) * scale).round() as i32,
+        ((GRIP + BUTTON * visible_parts(parts).count() as f32 + 6.0) * scale).round() as i32,
         (HEIGHT * scale).round() as i32,
     )
 }
@@ -491,10 +507,11 @@ fn part_rect(i: usize, scale: f32) -> RECT {
 }
 
 fn part_at(hwnd: HWND, x: i32, y: i32) -> Option<Part> {
-    let scale = scale_of(hwnd);
-    PARTS.iter().enumerate().find_map(|(i, part)| {
+    let state = bar_state();
+    let scale = scale_of(hwnd, &state);
+    visible_parts(state.parts).enumerate().find_map(|(i, part)| {
         let r = part_rect(i, scale);
-        (x >= r.left && x < r.right && y >= r.top && y < r.bottom).then_some(*part)
+        (x >= r.left && x < r.right && y >= r.top && y < r.bottom).then_some(part)
     })
 }
 
@@ -521,6 +538,7 @@ fn label(part: Part, state: &BarState) -> &'static str {
                 "简"
             }
         }
+        Part::Emoji => "☺",
         Part::Settings => "⚙",
     }
 }
@@ -530,6 +548,7 @@ fn tip(part: Part) -> &'static str {
         Part::Mode => "中 / 英",
         Part::Punct => "中文 / 英文标点",
         Part::Traditional => "简体 / 繁体",
+        Part::Emoji => "表情与符号",
         Part::Settings => "设置",
     }
 }
@@ -544,8 +563,8 @@ fn paint(hwnd: HWND) {
     };
     let state = shared.state.lock().map(|s| s.clone()).unwrap_or_default();
     let hovered = shared.hovered.lock().ok().and_then(|h| *h);
-    let scale = scale_of(hwnd);
-    let (w, h) = size_of_bar(scale);
+    let scale = scale_of(hwnd, &state);
+    let (w, h) = size_of_bar(scale, state.parts);
     let light = light_mode();
     let (background, border, text, muted, hover, accent) = if light {
         (rgb(0xfb, 0xfb, 0xfb), rgb(0xd9, 0xd9, 0xd9), rgb(0x1f, 0x1f, 0x1f), rgb(0xa0, 0xa0, 0xa0), rgb(0xea, 0xea, 0xea), rgb(0x2b, 0x6c, 0xe6))
@@ -584,7 +603,7 @@ fn paint(hwnd: HWND) {
 
         SetBkMode(hdc, TRANSPARENT);
         let font = CreateFontW(
-            -((15.0 * scale).round() as i32),
+            -((state.icon_size.clamp(12, 23) as f32 * scale).round() as i32),
             0,
             0,
             0,
@@ -601,9 +620,9 @@ fn paint(hwnd: HWND) {
         );
         let old_font = SelectObject(hdc, font.into());
         let radius = (6.0 * scale).round() as i32;
-        for (i, part) in PARTS.iter().enumerate() {
+        for (i, part) in visible_parts(state.parts).enumerate() {
             let r = part_rect(i, scale);
-            if hovered == Some(*part) {
+            if hovered == Some(part) {
                 let b = CreateSolidBrush(hover);
                 let p = CreatePen(PS_SOLID, 1, hover);
                 let ob = SelectObject(hdc, b.into());
@@ -614,10 +633,10 @@ fn paint(hwnd: HWND) {
                 let _ = DeleteObject(b.into());
                 let _ = DeleteObject(p.into());
             }
-            let label = wide(label(*part, &state));
+            let label = wide(label(part, &state));
             let mut size = windows::Win32::Foundation::SIZE::default();
             let _ = GetTextExtentPoint32W(hdc, &label, &mut size);
-            let color = if *part == Part::Mode { accent } else { text };
+            let color = if part == Part::Mode { accent } else { text };
             SetTextColor(hdc, color);
             let _ = TextOutW(
                 hdc,
@@ -637,9 +656,9 @@ fn paint(hwnd: HWND) {
 }
 
 /// 读记下的位置；没有就放在主显示器右下角、任务栏上面。
-fn initial_position(hwnd: HWND) -> (i32, i32) {
-    let scale = scale_of(hwnd);
-    let (w, h) = size_of_bar(scale);
+fn initial_position(hwnd: HWND, state: &BarState) -> (i32, i32) {
+    let scale = scale_of(hwnd, state);
+    let (w, h) = size_of_bar(scale, state.parts);
     let saved = shared()
         .and_then(|s| std::fs::read_to_string(&s.position_file).ok())
         .and_then(|text| {
@@ -687,13 +706,15 @@ fn apply_state(hwnd: HWND) {
             let _ = ShowWindow(hwnd, SW_HIDE);
             return;
         }
-        let scale = scale_of(hwnd);
-        let (w, h) = size_of_bar(scale);
+        let scale = scale_of(hwnd, &state);
+        let (w, h) = size_of_bar(scale, state.parts);
+        let _ = windows::Win32::UI::WindowsAndMessaging::SetClassLongW(hwnd,
+            windows::Win32::UI::WindowsAndMessaging::GCL_STYLE, if state.shadow { CS_DROPSHADOW.0 as i32 } else { 0 });
         let mut rect = RECT::default();
         let _ = GetWindowRect(hwnd, &mut rect);
         let first = rect.right - rect.left <= 1;
         if first {
-            let (x, y) = initial_position(hwnd);
+            let (x, y) = initial_position(hwnd, &state);
             let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), x, y, w, h, SWP_NOACTIVATE);
         } else {
             let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), rect.left, rect.top, w, h, SWP_NOACTIVATE);
@@ -702,7 +723,7 @@ fn apply_state(hwnd: HWND) {
         let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOACTIVATE | SWP_NOSIZE | windows::Win32::UI::WindowsAndMessaging::SWP_NOMOVE | SWP_SHOWWINDOW);
         let _ = InvalidateRect(Some(hwnd), None, false);
         if state.autohide {
-            SetTimer(Some(hwnd), HIDE_TIMER, HIDE_MS, None);
+            SetTimer(Some(hwnd), HIDE_TIMER, state.hide_seconds.clamp(1, 60) * 1000, None);
         } else {
             let _ = KillTimer(Some(hwnd), HIDE_TIMER);
         }
@@ -756,7 +777,7 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 let _ = GetWindowRect(hwnd, &mut rect);
             }
             let local = x - rect.left;
-            if local < (GRIP * scale_of(hwnd)) as i32 {
+            if local < (GRIP * scale_of(hwnd, &bar_state())) as i32 {
                 LRESULT(HTCAPTION as isize)
             } else {
                 LRESULT(HTCLIENT as isize)
@@ -810,9 +831,9 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 if let Ok(mut hovered) = shared.hovered.lock() {
                     *hovered = None;
                 }
-                if shared.state.lock().is_ok_and(|s| s.autohide) {
-                    unsafe {
-                        SetTimer(Some(hwnd), HIDE_TIMER, HIDE_MS, None);
+                if let Ok(state) = shared.state.lock() {
+                    if state.autohide {
+                        unsafe { SetTimer(Some(hwnd), HIDE_TIMER, state.hide_seconds.clamp(1, 60) * 1000, None); }
                     }
                 }
             }
@@ -826,6 +847,7 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 Some(Part::Mode) => send(BarEvent::ToggleMode),
                 Some(Part::Punct) => send(BarEvent::TogglePunct),
                 Some(Part::Traditional) => send(BarEvent::ToggleTraditional),
+                Some(Part::Emoji) => send(BarEvent::EmojiPanel),
                 Some(Part::Settings) => send(BarEvent::OpenSettings),
                 None => {}
             }

@@ -16,11 +16,12 @@ try {
         if ($Targets.Count -eq 0) { continue }
         if ($Path -eq $ServerPath) {
             $Stop = Start-Process -FilePath $ServerPath -ArgumentList '--stop' -WindowStyle Hidden -PassThru
-            if (-not $Stop.WaitForExit(5000)) {
-                $Stop.Kill()
-                if (-not $Stop.WaitForExit(5000)) { throw 'The shutdown request did not exit.' }
+            try {
+                if (-not $Stop.WaitForExit(30000)) { throw 'Timed out waiting for FreeType to save its data.' }
+                if ($Stop.ExitCode -ne 0) { throw 'FreeType could not save its data. The update was stopped.' }
+            } finally {
+                $Stop.Dispose()
             }
-            $Stop.Dispose()
         }
         foreach ($Target in $Targets) {
             try {

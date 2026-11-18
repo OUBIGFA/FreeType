@@ -152,6 +152,39 @@ func TestPendingUpdateRejectsInvalidRecordAndDefaultsOff(t *testing.T) {
 	}
 }
 
+func TestPendingUpdateOnlyAcceptsStableInstallerRecords(t *testing.T) {
+	manager, err := newUpdates(t.TempDir(), "0.0.1", http.DefaultClient, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(manager.directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte("MZ pending installer fixture; never executed")
+	if err := os.WriteFile(manager.installerPath(), payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(payload)
+	for _, test := range []struct {
+		name, version, extra string
+		valid                bool
+	}{
+		{"stable", "0.2.0", "", true},
+		{"pre-release version", "0.2.0-rc.1", "", false},
+		{"nonstandard record", "0.2.0", `,"channel":"preview"`, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			record := fmt.Sprintf(`{"version":%q,"sha256":"%x"%s}`, test.version, digest, test.extra)
+			if err := os.WriteFile(manager.pendingPath(), []byte(record), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := manager.verifyPending(); (err == nil) != test.valid {
+				t.Fatalf("待更新记录的校验结果不符：%v", err)
+			}
+		})
+	}
+}
+
 func TestAutomaticUpdatesDownloadWithoutLaunchingAndSurviveRestart(t *testing.T) {
 	payload := []byte("MZ automatic update fixture")
 	sum := sha256.Sum256(payload)
@@ -184,17 +217,29 @@ func TestAutomaticUpdatesDownloadWithoutLaunchingAndSurviveRestart(t *testing.T)
 		t.Fatal("后台下载不能立即启动安装器")
 	}
 	restarted, err := newUpdates(directory, "0.0.1", server.Client(), server.URL+"/")
-	if err != nil || !restarted.snapshot().Ready {
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted.restorePending()
+	if !restarted.snapshot().Ready {
 		t.Fatalf("下次启动必须读取已校验的下载：%v", err)
 	}
 	// An interrupted installation may have copied the new app before the
 	// administrator cancels TSF registration. The same installer must retry.
 	partiallyInstalled, err := newUpdates(directory, "0.2.0", server.Client(), server.URL+"/")
-	if err != nil || !partiallyInstalled.snapshot().Ready {
+	if err != nil {
+		t.Fatal(err)
+	}
+	partiallyInstalled.restorePending()
+	if !partiallyInstalled.snapshot().Ready {
 		t.Fatalf("组件注册未完成时，同版本的待安装记录必须可重试：%v", err)
 	}
 	newerInstalled, err := newUpdates(directory, "0.3.0", server.Client(), server.URL+"/")
-	if err != nil || newerInstalled.snapshot().Ready {
+	if err != nil {
+		t.Fatal(err)
+	}
+	newerInstalled.restorePending()
+	if newerInstalled.snapshot().Ready {
 		t.Fatalf("更旧的待安装器不能用于降级：%v", err)
 	}
 	restarted.launch = func(path, dir string) error {

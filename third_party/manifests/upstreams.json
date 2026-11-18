@@ -12,6 +12,13 @@
       }
     },
     {
+      "name": "WowType NNLM inference and exact-syllable recall",
+      "repository": "https://github.com/Gloridust/WowType",
+      "revision": "a757e8f4ac0cd07908de5692e7d489353db1c4a4",
+      "use": "WTNN 解码与字级概率推理；精确单音节补回行为另参考 59b3c919b8f4d36ffb4d1adb2384fe30a3a606c9。模型文件单独登记于 neural-model.json",
+      "license": "MIT OR Apache-2.0；按 Apache-2.0 分发"
+    },
+    {
       "name": "mygo",
       "repository": "https://github.com/egoist/mygo",
       "version": "v0.10.0",

@@ -10,7 +10,7 @@
 
 use std::cell::RefCell;
 
-use freetype_protocol::{Frame, Panel};
+use freetype_protocol::{CandidateAction, Frame, Panel};
 use windows::core::{w, HSTRING, PCWSTR, Result};
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND};
@@ -33,7 +33,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     KillTimer, LoadCursorW, PostMessageW, RegisterClassExW, SetCursor, SetTimer, SetWindowLongPtrW, SetWindowPos,
     ShowWindow, CS_DROPSHADOW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, HWND_TOPMOST, IDC_ARROW, IDC_HAND,
     MA_NOACTIVATE, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE, WM_APP, WM_CAPTURECHANGED, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP, WM_SETCURSOR, WM_TIMER,
+    WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP, WM_SETCURSOR, WM_TIMER,
     WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
@@ -58,10 +58,9 @@ const WM_MOUSELEAVE: u32 = 0x02a3;
 /// 候选窗上的点击（交给文本服务处理）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Click {
-    Select(usize),
-    Page(bool),
-    /// 删除这一页第几个候选的记忆。
-    Forget(usize),
+    Candidate { action: CandidateAction, revision: u64 },
+    /// 展开固定排位子菜单，带原候选页的绘制编号。
+    PinChoices { owner: HWND, index: usize, revision: u64 },
     Settings,
     /// 上屏联想一会儿没选：收起来（服务进程那边也结束联想，数字键、空格不再选词）。
     Dismiss,
@@ -98,6 +97,10 @@ fn caret_tick(hwnd: HWND) {
 }
 
 fn dispatch(click: Click) {
+    if let Click::PinChoices { owner, index, revision } = click {
+        open_pin_choices(owner, index, revision);
+        return;
+    }
     HANDLER.with(|h| {
         if let Some(handler) = h.borrow().as_ref() {
             handler(click);
@@ -198,6 +201,7 @@ struct View {
     title: Option<String>,
     preedit: String,
     candidates: Vec<String>,
+    badges: Vec<String>,
     labels: Vec<String>,
     cursor: Option<usize>,
     has_prev: bool,
@@ -206,8 +210,17 @@ struct View {
     hint_position: String,
     font_size: u32,
     font_family: String,
+    font_fallbacks: String,
+    preedit_size: u32,
+    lock_position: bool,
+    wrap_width: i32,
+    wrap: bool,
     /// 候选强调色，见 [`theme`]。
     candidate_style: String,
+    candidate_wheel: bool,
+    revision: u64,
+    pin_slots: Vec<Option<u8>>,
+    pin_limit: u8,
     vertical: bool,
     panel: Panel,
     columns: usize,
@@ -281,6 +294,16 @@ struct Data {
     pressed: Option<usize>,
     /// 长按已经弹出菜单了（松开时不再选词）。
     long_fired: bool,
+    // 精密滚轮可能分多条消息报告一格。
+    wheel_delta: i32,
+    painted_revision: u64,
+    anchor: Option<RECT>,
+}
+
+impl Data {
+    fn click(&self, action: CandidateAction) -> Click {
+        Click::Candidate { action, revision: self.painted_revision }
+    }
 }
 
 fn rect(x: i32, y: i32, w: i32, h: i32) -> RECT {
@@ -317,7 +340,7 @@ fn layout(view: &View, fonts: &Fonts, scale: f32) -> Result<Layout> {
             if text.is_empty() {
                 continue;
             }
-            let text = fonts.small.text(&text)?;
+            let text = if part == Part::Preedit { &fonts.preedit } else { &fonts.small }.text(&text)?;
             let size = text.size;
             out.parts.push(Piece::new(part, text, (pad + s(4.0)) as f32, y as f32));
             width = width.max(size.cx + s(8.0));
@@ -333,7 +356,11 @@ fn layout(view: &View, fonts: &Fonts, scale: f32) -> Result<Layout> {
             .map(|(i, text)| -> Result<_> {
                 let label = view.label(i);
                 let label = if label.is_empty() { None } else { Some(fonts.small.text(&label)?) };
-                Ok((label, fonts.main.text(text)?))
+                let display = match view.badges.get(i).filter(|badge| !badge.is_empty()) {
+                    Some(badge) => format!("{text} {badge}"),
+                    None => text.clone(),
+                };
+                Ok((label, fonts.main.text(&display)?))
             })
             .collect::<Result<_>>()?;
         // 序号和正文分别按实际字形居中，只需为最高的墨迹留出空间。
@@ -376,15 +403,24 @@ fn layout(view: &View, fonts: &Fonts, scale: f32) -> Result<Layout> {
             let mut x = pad;
             for i in 0..texts.len() {
                 let w = item_width(&texts[i]);
+                if view.wrap_width > 0 && x > pad && x + w + pad > view.wrap_width {
+                    width = width.max(x - pad);
+                    x = pad;
+                    y += h;
+                }
                 place(&mut out, i, x, y, w);
                 x += w + s(2.0);
             }
             width = width.max(x - pad);
             if paging {
-                let ax = pad + width + s(4.0);
+                let mut ax = x + s(4.0);
+                if view.wrap_width > 0 && ax + 2 * arrow_w + pad > view.wrap_width {
+                    ax = pad;
+                    y += h;
+                }
                 out.arrows.push((rect(ax, y, arrow_w, h), false, prev.clone()));
                 out.arrows.push((rect(ax + arrow_w, y, arrow_w, h), true, next.clone()));
-                width += s(4.0) + 2 * arrow_w;
+                width = width.max(ax + 2 * arrow_w - pad);
             }
             if !texts.is_empty() {
                 y += h;
@@ -415,7 +451,7 @@ fn layout(view: &View, fonts: &Fonts, scale: f32) -> Result<Layout> {
     Ok(out)
 }
 
-fn paint(hwnd: HWND, data: &Data) {
+fn paint(hwnd: HWND, data: &mut Data) {
     unsafe {
         let mut ps = PAINTSTRUCT::default();
         let target = BeginPaint(hwnd, &mut ps);
@@ -424,8 +460,14 @@ fn paint(hwnd: HWND, data: &Data) {
         let bitmap = CreateCompatibleBitmap(target, w, h);
         let old_bitmap = SelectObject(hdc, bitmap.into());
         match draw(hdc, data) {
-            Ok(()) => { let _ = BitBlt(target, 0, 0, w, h, Some(hdc), 0, 0, SRCCOPY); }
-            Err(error) => crate::log::write("候选窗绘制失败", &error.to_string()),
+            Ok(()) if BitBlt(target, 0, 0, w, h, Some(hdc), 0, 0, SRCCOPY).is_ok() => {
+                data.painted_revision = data.view.revision;
+            }
+            Ok(()) => data.painted_revision = 0,
+            Err(error) => {
+                data.painted_revision = 0;
+                crate::log::write("候选窗绘制失败", &error.to_string());
+            }
         }
         SelectObject(hdc, old_bitmap);
         let _ = DeleteObject(bitmap.into());
@@ -503,16 +545,55 @@ fn open_menu(owner: HWND, item: Option<usize>) {
     };
     let mut entries: Vec<(String, Click)> = Vec::new();
     if let Some(i) = item.filter(|_| data.view.forgettable) {
+        if data.view.pin_slots.get(i).is_some_and(Option::is_some) {
+            entries.push(("置顶".into(), data.click(CandidateAction::Pin { index: i, place: 1 })));
+            entries.push(("固定排位 ›".into(), Click::PinChoices { owner, index: i, revision: data.painted_revision }));
+        }
         if let Some(word) = data.view.candidates.get(i) {
-            entries.push((format!("删除「{word}」的记忆"), Click::Forget(i)));
+            entries.push((format!("删除「{word}」的记忆"), data.click(CandidateAction::Forget { index: i })));
         }
     }
     entries.push(("打开 FreeType 设置".into(), Click::Settings));
+    show_candidate_menu(owner, data, entries);
+}
+
+fn open_pin_choices(owner: HWND, index: usize, revision: u64) {
+    let Some(data) = data_of(owner).filter(|data| revision != 0 && data.painted_revision == revision) else { return; };
+    let Some(Some(current)) = data.view.pin_slots.get(index) else { return; };
+    let mut entries: Vec<_> = (1..=data.view.pin_limit).map(|place| {
+        let label = format!("{}固定到第 {place} 位", if *current == place { "✓ " } else { "" });
+        (label, data.click(CandidateAction::Pin { index, place }))
+    }).collect();
+    if *current != 0 {
+        entries.push(("取消固定".into(), data.click(CandidateAction::Pin { index, place: 0 })));
+    }
+    show_candidate_menu(owner, data, entries);
+}
+
+fn show_candidate_menu(owner: HWND, data: &Data, entries: Vec<(String, Click)>) {
     let mut pt = POINT::default();
     unsafe {
         let _ = GetCursorPos(&mut pt);
     }
     menu::show(owner, pt, entries, data.view.font_family.clone(), data.scale);
+}
+
+/// 将高分辨率滚轮的零碎移动折合成系统的一格（120）。
+fn wheel_steps(remainder: &mut i32, delta: i32) -> i32 {
+    let total = *remainder + delta;
+    *remainder = total % 120;
+    total / 120
+}
+
+#[test]
+fn wheel_pages_accumulate_and_cancel() {
+    let mut rest = 0;
+    assert_eq!(wheel_steps(&mut rest, -40), 0);
+    assert_eq!(wheel_steps(&mut rest, 30), 0);
+    assert_eq!(wheel_steps(&mut rest, -120), -1);
+    assert_eq!(rest, -10);
+    assert_eq!(wheel_steps(&mut rest, 250), 2);
+    assert_eq!(rest, 0);
 }
 
 unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -559,8 +640,29 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             }
             LRESULT(0)
         }
+        WM_MOUSEWHEEL => {
+            let delta = (wparam.0 >> 16) as i16 as i32;
+            let steps = {
+                let Some(data) = data_of(hwnd) else { return LRESULT(0) };
+                if !data.view.candidate_wheel || !(data.view.has_prev || data.view.has_next) {
+                    return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+                }
+                wheel_steps(&mut data.wheel_delta, delta)
+            };
+            // dispatch 会更新窗口数据，不能带着上面的借用调用。
+            for _ in 0..steps.unsigned_abs() {
+                if !data_of(hwnd).is_some_and(|data| if steps < 0 { data.view.has_next } else { data.view.has_prev }) {
+                    break;
+                }
+                if let Some(data) = data_of(hwnd) {
+                    dispatch(data.click(CandidateAction::Page { next: steps < 0 }));
+                }
+            }
+            LRESULT(0)
+        }
         WM_MOUSELEAVE => {
             if let Some(data) = data_of(hwnd) {
+                data.wheel_delta = 0;
                 if data.hovered.take().is_some() {
                     unsafe {
                         let _ = InvalidateRect(Some(hwnd), None, false);
@@ -600,8 +702,8 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
                     return None;
                 }
                 match hit(data, x, y) {
-                    Some(Hover::Item(i)) if pressed == Some(i) => Some(Click::Select(i)),
-                    Some(Hover::Arrow(next)) => Some(Click::Page(next)),
+                    Some(Hover::Item(i)) if pressed == Some(i) => Some(data.click(CandidateAction::Select { index: i })),
+                    Some(Hover::Arrow(next)) => Some(data.click(CandidateAction::Page { next })),
                     _ => None,
                 }
             });
@@ -761,6 +863,9 @@ impl CandidateWindow {
             hovered: None,
             pressed: None,
             long_fired: false,
+            wheel_delta: 0,
+            painted_revision: 0,
+            anchor: None,
         });
         unsafe {
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(data) as _);
@@ -771,6 +876,11 @@ impl CandidateWindow {
 
     pub fn hide(&self) {
         menu::close();
+        if let Some(data) = data_of(self.hwnd) {
+            data.wheel_delta = 0;
+            data.painted_revision = 0;
+            data.anchor = None;
+        }
         unsafe {
             let _ = KillTimer(Some(self.hwnd), PREDICT_TIMER);
             let _ = ShowWindow(self.hwnd, SW_HIDE);
@@ -785,6 +895,11 @@ impl CandidateWindow {
         unsafe { IsWindowVisible(self.hwnd).as_bool() }
     }
 
+    pub fn painted_revision(&self) -> u64 {
+        if !self.visible() { return 0; }
+        data_of(self.hwnd).map_or(0, |data| data.painted_revision)
+    }
+
     /// 回到应用的消息循环以后叫一次 [`set_caret_handler`] 的处理函数；它说还要等，就定时再叫。
     pub fn request_caret_tick(&self) {
         unsafe {
@@ -796,16 +911,26 @@ impl CandidateWindow {
     pub fn update(&self, frame: &Frame, caret: Option<RECT>) {
         let view = View {
             title: frame.title.clone(),
-            preedit: frame.preedit.clone(),
+            preedit: if frame.hide_candidate_preedit { String::new() } else { frame.preedit.clone() },
             candidates: frame.candidates.clone(),
+            badges: frame.badges.clone(),
             labels: frame.labels.clone(),
             cursor: frame.cursor,
             has_prev: frame.has_prev,
             has_next: frame.has_next,
+            candidate_wheel: frame.candidate_wheel,
+            revision: frame.page_revision,
+            pin_slots: frame.pin_slots.clone(),
+            pin_limit: frame.pin_limit,
             hint: frame.hint.clone(),
             hint_position: frame.hint_position.clone(),
             font_size: frame.font_size,
             font_family: frame.font_family.clone(),
+            font_fallbacks: frame.font_fallbacks.clone(),
+            preedit_size: frame.preedit_size,
+            lock_position: frame.lock_candidate_position,
+            wrap: frame.wrap_candidates,
+            wrap_width: 0,
             candidate_style: frame.candidate_style.clone(),
             vertical: frame.vertical,
             panel: frame.panel,
@@ -847,7 +972,12 @@ impl CandidateWindow {
     /// 打字时每个键都会走到这里（浏览器类应用排好版后还会再来一次），所以已经显示着的窗口
     /// 只做必要的改动：不先挪走再挪回来，内容和位置都没变就什么都不做，变了就当场画完。
     /// （以前每次都先缩成 1×1 挪到光标处取 DPI，再放大、等消息循环空了才重画，每打一个字母闪一下。）
-    fn show(&self, view: View, caret: RECT) {
+    fn show(&self, mut view: View, mut caret: RECT) {
+        if let Some(data) = data_of(self.hwnd) {
+            if view.lock_position && view.hint.is_none() {
+                caret = *data.anchor.get_or_insert(caret);
+            } else { data.anchor = None; }
+        }
         menu::close();
         unsafe {
             // 按光标所在显示器的 DPI 排版：窗口还没显示、或光标到了另一块显示器时，先把窗口挪过去
@@ -860,8 +990,10 @@ impl CandidateWindow {
             }
             let dpi = GetDpiForWindow(self.hwnd).max(96);
             let scale = dpi as f32 / 96.0;
-            let result = Fonts::new(view.font_size.max(12) as f32 * scale, &view.font_family)
-                .and_then(|fonts| layout(&view, &fonts, scale));
+            let work = work_area(caret.left, caret.bottom);
+            if view.wrap { view.wrap_width = work.right - work.left; }
+            let result = Fonts::styled(view.font_size.max(12) as f32 * scale, &view.font_family,
+                view.preedit_size as f32 * scale, &view.font_fallbacks).and_then(|fonts| layout(&view, &fonts, scale));
             let layout = match result {
                 Ok(layout) => layout,
                 Err(error) => {
@@ -871,7 +1003,6 @@ impl CandidateWindow {
             };
 
             let gap = (4.0 * scale) as i32;
-            let work = work_area(caret.left, caret.bottom);
             let (w, h) = (layout.width, layout.height);
             let hint = view.hint.is_some();
             let (mut x, mut y) = if hint {
@@ -891,6 +1022,10 @@ impl CandidateWindow {
             if let Some(data) = data_of(self.hwnd) {
                 changed = !visible || current != rect(x, y, w, h) || data.view != view;
                 if changed {
+                    if data.view.revision != view.revision {
+                        data.pressed = None;
+                        data.painted_revision = 0;
+                    }
                     data.view = view;
                     data.layout = layout;
                     data.scale = scale;

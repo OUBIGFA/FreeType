@@ -23,6 +23,7 @@ var pages = []struct {
 	{"phrases", "快捷短语", &icons.phrases},
 	{"common", "常用语", &icons.common},
 	{"learned", "学到的词", &icons.learned},
+	{"stats", "输入统计", &icons.stats},
 	{"sync", "数据与同步", &icons.sync},
 	{"about", "关于", &icons.about},
 }
@@ -61,6 +62,9 @@ func (s *settings) body(c *ui.Context, p palette) {
 							}
 							s.page = pg.ID
 							s.settingQuery, s.locatedSetting, s.revealSetting = "", "", false
+							if pg.ID == "stats" {
+								s.loadStats(false)
+							}
 							if pg.ID == "learned" && !s.wordsLoaded {
 								s.loadWords()
 							}
@@ -98,6 +102,8 @@ func (s *settings) body(c *ui.Context, p palette) {
 					s.commonPage(c)
 				case "learned":
 					s.learnedPage(c)
+				case "stats":
+					s.statsPage(c)
 				case "sync":
 					s.syncPage(c)
 				case "about":
@@ -134,7 +140,7 @@ func (s *settings) logo(c *ui.Context, size float32) {
 	})
 }
 
-// statusCard 是常规页顶上的服务状态。
+// statusCard 显示服务状态、默认输入法和当前输入状态。
 func (s *settings) statusCard(c *ui.Context) {
 	p := colors(c)
 	t := c.Theme()
@@ -164,6 +170,9 @@ func (s *settings) statusCard(c *ui.Context) {
 				})
 			}
 		})
+	})
+	section(c, "", func() {
+		s.defaultTipRow(c)
 	})
 	if s.statusErr != "" || !s.status.Ready {
 		return
@@ -225,6 +234,9 @@ func (s *settings) generalPage(c *ui.Context) {
 		if s.config.StatusBar || s.showSetting("general/自动隐藏") {
 			changed = s.settingSwitch(c, "general/自动隐藏", true, &s.config.StatusBarAutohide) || changed
 		}
+		if s.config.StatusBar {
+			changed = s.statusBarAppearance(c) || changed
+		}
 		changed = s.settingSwitch(c, "general/切换状态时提示", false, &s.config.HintOnToggle) || changed
 		changed = s.settingSwitch(c, "general/切换输入框时提示", false, &s.config.HintOnFocus) || changed
 		s.settingRow(c, "general/提示位置", func() {
@@ -234,6 +246,41 @@ func (s *settings) generalPage(c *ui.Context) {
 	if changed {
 		s.saveConfig()
 	}
+}
+
+func (s *settings) statusBarAppearance(c *ui.Context) (changed bool) {
+	for _, field := range []struct {
+		title     string
+		value     *int
+		low, high float64
+	}{
+		{"缩放比例 (%)", &s.config.BarScale, 75, 150}, {"图标字号", &s.config.BarIconSize, 12, 23}, {"自动隐藏延时 (秒)", &s.config.BarHideSeconds, 1, 60},
+	} {
+		if field.title == "自动隐藏延时 (秒)" && !s.config.StatusBarAutohide {
+			continue
+		}
+		subRow(c, field.title, "", func() {
+			value := float64(*field.value)
+			if ui.NumberInput(c, &value, field.low, field.high, 1).Label(field.title).Width(120).Changed() {
+				*field.value = int(value)
+				changed = true
+			}
+		})
+	}
+	changed = switchLine(c, "阴影", "", &s.config.BarShadow, true) || changed
+	subRow(c, "显示组件", "", func() {
+		ui.Row(c).Wrap().Gap(10).Children(func() {
+			for i, label := range []string{"标点", "简繁", "Windows 表情", "设置"} {
+				bit := 1 << i
+				on := s.config.BarParts&bit != 0
+				if checkbox(c, &on, label).Changed() {
+					s.config.BarParts ^= bit
+					changed = true
+				}
+			}
+		})
+	})
+	return changed
 }
 
 func (s *settings) candidatesPage(c *ui.Context) {
@@ -276,6 +323,10 @@ func (s *settings) candidatesPage(c *ui.Context) {
 				changed = true
 			}
 		})
+		changed = s.settingSwitch(c, "candidates/滚轮翻页", false, &s.config.CandidateWheel) || changed
+		s.settingRow(c, "candidates/固定排位角标", func() {
+			changed = choose(c, "固定排位角标", []choice{{"paperclip", "回形针"}, {"pushpin", "图钉"}, {"dot", "圆点"}, {"off", "不显示"}}, &s.config.PinBadge, 140) || changed
+		})
 		s.settingRow(c, "candidates/排列方向", func() {
 			dir := 0
 			if !s.config.Horizontal {
@@ -283,6 +334,33 @@ func (s *settings) candidatesPage(c *ui.Context) {
 			}
 			if ui.Segmented(c, &dir, "横排", "竖排").Label("排列方向").Changed() {
 				s.config.Horizontal = dir == 0
+				changed = true
+			}
+		})
+	})
+	section(c, "预编辑与位置", func() {
+		s.settingRow(c, "candidates/行内预编辑", func() {
+			changed = choose(c, "行内预编辑", []choice{{"segmented", "拼音分词"}, {"raw", "原始按键"}, {"off", "不显示"}}, &s.config.InlinePreedit, 160) || changed
+		})
+		changed = s.settingSwitch(c, "candidates/候选窗预编辑", false, &s.config.CandidatePreedit) || changed
+		s.settingRow(c, "candidates/预编辑字号", func() {
+			size := float64(s.config.PreeditSize)
+			if size == 0 {
+				size = float64(s.config.FontSize) * 0.78
+			}
+			if ui.NumberInput(c, &size, 10, 36, 1).Width(110).Label("预编辑字号").Changed() {
+				s.config.PreeditSize = int(size)
+				changed = true
+			}
+			if s.config.PreeditSize != 0 && ui.Button(c, "自动").Clicked() {
+				s.config.PreeditSize = 0
+				changed = true
+			}
+		})
+		changed = s.settingSwitch(c, "candidates/跟随光标", false, &s.config.CandidateFollow) || changed
+		changed = s.settingSwitch(c, "candidates/横排保持单行", false, &s.config.CandidateSingleLine) || changed
+		s.settingRow(c, "candidates/补充字体", func() {
+			if ui.TextInput(c, &s.config.FontFallbacks).Label("补充字体").Placeholder("Microsoft YaHei, SimSun").Width(220).MaxWidthPercent(100).Changed() {
 				changed = true
 			}
 		})
@@ -331,45 +409,58 @@ func (s *settings) candidatePreview(c *ui.Context) {
 		// 外层画安静的预览舞台，横排按真实字号绘制；超出可用宽度时在预览内滚动，不压缩候选词。
 		ui.Column(c).FillWidth().Padding(16, rowInset, 12, rowInset).Radius(panelRadius).
 			Background(p.subtle).Border(1, p.border).Children(func() {
-			ui.ScrollHorizontal(c).FillWidth().MinWidth(0).Padding(2, 2, 10, 2).Children(func() {
-				popup := ui.Column(c).Padding(8, 10).Radius(panelRadius).Background(p.card).Border(1, p.border).
-					AlignSelf(ui.Start).Shrink(0).Gap(4)
-				if !c.Preferences().HighContrast {
-					alpha := float32(0.06)
-					if t.Dark {
-						alpha = 0.28
-					}
-					popup.Shadow(0, 2, 8, 0, ui.RGBA(0, 0, 0, alpha))
-				}
-				popup.Children(func() {
-					ui.Text(c, "ni hao").Font(family).FontSize(size*0.78).TextColor(p.muted).Padding(0, 4)
-					list := ui.Row(c).Gap(2)
-					if !s.config.Horizontal {
-						list = ui.Column(c).Gap(2)
-					}
-					list.Children(func() {
-						defer func() {
-							// 和真的候选窗一样，最后是翻页箭头
-							ui.Row(c).Gap(6).Padding(3, 8).Children(func() {
-								ui.Text(c, "‹").Font(family).FontSize(size).TextColor(p.muted)
-								ui.Text(c, "›").Font(family).FontSize(size).TextColor(t.Text)
-							})
-						}()
-						style := candidateStyle(s.config.CandidateStyle, t.Dark)
-						for i, w := range words {
-							item := ui.Row(c).Gap(4).Padding(4, 8).Radius(controlRadius).AlignItems(ui.Center).Shrink(0)
-							label, text := p.muted, t.Text
-							if i == 0 {
-								if style.block {
-									item.Background(style.fill)
-								}
-								label, text = style.text, style.text
-							}
-							item.Children(func() {
-								ui.Text(c, fmt.Sprint((i+1)%10)).Font(family).FontSize(size * 0.78).TextColor(label)
-								ui.Text(c, w).Font(family).FontSize(size).TextColor(text)
-							})
+			// 外层用可视宽度对齐；内层按候选宽度收起，放不下时才缩到可视宽度。
+			ui.Row(c).FillWidth().Justify(ui.Center).Label("候选预览区域").Children(func() {
+				ui.ScrollHorizontal(c).MinWidth(0).Shrink(1).Padding(2, 2, 10, 2).Children(func() {
+					popup := ui.Column(c).Padding(8, 10).Radius(panelRadius).Background(p.card).Border(1, p.border).
+						Label("候选预览窗口").AlignSelf(ui.Start).Shrink(0).Gap(4)
+					if !c.Preferences().HighContrast {
+						alpha := float32(0.06)
+						if t.Dark {
+							alpha = 0.28
 						}
+						popup.Shadow(0, 2, 8, 0, ui.RGBA(0, 0, 0, alpha))
+					}
+					popup.Children(func() {
+						if s.config.CandidatePreedit {
+							preedit := "ni hao"
+							if s.config.Shuangpin && s.shuangpinExample != "" {
+								preedit = s.shuangpinExample
+							}
+							preeditSize := size * 0.78
+							if s.config.PreeditSize > 0 {
+								preeditSize = textSize(c, float32(s.config.PreeditSize))
+							}
+							ui.Text(c, preedit).Font(family).FontSize(preeditSize).TextColor(p.muted).Padding(0, 4)
+						}
+						list := ui.Row(c).Gap(2)
+						if !s.config.Horizontal {
+							list = ui.Column(c).Gap(2)
+						}
+						list.Children(func() {
+							defer func() {
+								// 和真的候选窗一样，最后是翻页箭头
+								ui.Row(c).Gap(6).Padding(3, 8).Children(func() {
+									ui.Text(c, "‹").Font(family).FontSize(size).TextColor(p.muted)
+									ui.Text(c, "›").Font(family).FontSize(size).TextColor(t.Text)
+								})
+							}()
+							style := candidateStyle(s.config.CandidateStyle, t.Dark)
+							for i, w := range words {
+								item := ui.Row(c).Gap(4).Padding(4, 8).Radius(controlRadius).AlignItems(ui.Center).Shrink(0)
+								label, text := p.muted, t.Text
+								if i == 0 {
+									if style.block {
+										item.Background(style.fill)
+									}
+									label, text = style.text, style.text
+								}
+								item.Children(func() {
+									ui.Text(c, fmt.Sprint((i+1)%10)).Font(family).FontSize(size * 0.78).TextColor(label)
+									ui.Text(c, w).Font(family).FontSize(size).TextColor(text)
+								})
+							}
+						})
 					})
 				})
 			})
@@ -412,6 +503,23 @@ func (s *settings) typingPage(c *ui.Context) {
 			})
 		}
 		changed = s.settingSwitch(c, "typing/按错键纠错", false, &s.config.TypoCorrection) || changed
+		if s.config.TypoCorrection || s.showSetting("typing/纠错类型") {
+			s.settingRow(c, "typing/纠错类型", func() {
+				ui.Row(c).Wrap().GapX(14).GapY(8).Children(func() {
+					for index, label := range []string{"乱序", "邻键", "漏字", "多字"} {
+						bit := 1 << index
+						on := s.config.TypoKinds&bit != 0
+						if checkbox(c, &on, label).Changed() {
+							s.config.TypoKinds ^= bit
+							changed = true
+						}
+					}
+				})
+			})
+		}
+		if s.config.TypoCorrection || s.showSetting("typing/纠错标记") {
+			changed = s.settingSwitch(c, "typing/纠错标记", true, &s.config.TypoMark) || changed
+		}
 		changed = s.settingSwitch(c, "typing/显示更多生僻字", false, &s.config.RareChars) || changed
 	})
 	section(c, "选词与翻页", func() {
@@ -504,6 +612,7 @@ func (s *settings) featuresPage(c *ui.Context) {
 		changed = s.settingSwitch(c, "features/推荐 emoji", false, &s.config.EmojiSuggest) || changed
 	})
 	section(c, "智能输入", func() {
+		s.neuralModelRow(c)
 		changed = s.settingSwitch(c, "features/邮箱、网址补全", false, &s.config.EmailCompletion) || changed
 		changed = s.settingSwitch(c, "features/日期时间", false, &s.config.DateTime) || changed
 		changed = s.settingSwitch(c, "features/V 模式：计算与数字大写", false, &s.config.Calculator) || changed
@@ -512,9 +621,14 @@ func (s *settings) featuresPage(c *ui.Context) {
 	})
 	section(c, "联想", func() {
 		changed = s.settingSwitch(c, "features/上屏联想", false, &s.config.PredictNext) || changed
-		if s.config.PredictNext || s.showSetting("features/数字键选联想词") || s.showSetting("features/空格选联想词") || s.showSetting("features/左右方向键选联想词") {
+		if s.config.PredictNext || s.showSetting("features/数字键选联想词") || s.showSetting("features/空格选联想词") || s.showSetting("features/左右方向键选联想词") || s.showSetting("features/双击空格键选词") {
 			changed = s.settingSwitch(c, "features/数字键选联想词", true, &s.config.PredictDigits) || changed
 			changed = s.settingSwitch(c, "features/空格选联想词", true, &s.config.PredictSpace) || changed
+			if s.config.PredictSpace || s.showSetting("features/双击空格键选词") {
+				ui.Column(c).FillWidth().Padding(0, 0, 0, 20).Children(func() {
+					changed = s.settingSwitch(c, "features/双击空格键选词", true, &s.config.PredictDoubleSpace) || changed
+				})
+			}
 			changed = s.settingSwitch(c, "features/左右方向键选联想词", true, &s.config.PredictArrows) || changed
 		}
 	})

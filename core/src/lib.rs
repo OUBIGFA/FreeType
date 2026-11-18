@@ -114,6 +114,8 @@ pub struct EngineConfig {
     pub auto_learn_threshold: u32,
     /// 按错键纠错（相邻键、两键按反、多按/漏按）。双拼下不生效。
     pub typo_correction: bool,
+    /// 各类全拼错因，可沿用既有总开关单独暂停所有纠错。
+    pub typo_kinds: u8,
     /// 句首词候选最多几个（0 表示不给）。长句打错时可以先选开头的词。
     pub prefix_candidates: usize,
     /// 前面几页之后把剩下的词全补上（整个输入的同音词、句首词、单字），直到
@@ -127,7 +129,7 @@ pub struct EngineConfig {
 /// （自然对数，和语言模型的分数同一个尺度）。见 [`Engine::word_lm_context_score`]。
 pub const MERGED_PAIR_SCORE: f64 = 1.5;
 
-/// 分几次选出来的词，多长以内用一次就学（人名、术语、成语大多在四个字以内）。
+/// 分几次选出来的词，多长以内按二次确认收录（人名、术语、成语大多在四个字以内）。
 pub const COMPOSED_WORD_MAX_CHARS: usize = 4;
 /// 混输短词按汉字数判断，同时沿用英文候选的长度范围，避免把长句当作造词。
 const MIXED_WORD_MAX_CHARS: usize = 32;
@@ -149,6 +151,7 @@ impl Default for EngineConfig {
             auto_learn: true,
             auto_learn_threshold: 3,
             typo_correction: true,
+            typo_kinds: crate::graph::typo::ALL,
             prefix_candidates: 16,
             more_candidates: true,
             nnlm_rerank: 8,
@@ -157,9 +160,9 @@ impl Default for EngineConfig {
 }
 
 /// 用户历史里的一条记录。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HistoryEntry {
-    pub count: u32,
+    pub count: f64,
     /// 上次使用时间（epoch 毫秒）。
     pub last_used_ms: u64,
 }
@@ -183,6 +186,8 @@ pub struct Engine {
     config: EngineConfig,
     /// 用户选词历史：候选文本 -> (次数, 上次时间)。
     history: RwLock<HashMap<String, HistoryEntry>>,
+    pending_words: RwLock<HashMap<String, learn::NewWord>>,
+    learning_journal: std::sync::Mutex<learn::Journal>,
     /// 光标前已上屏的文本，用于上下文 bigram 特征。
     context: RwLock<String>,
     /// 用户学到的词搭配（上一个词 -> 这个词）。
@@ -193,12 +198,15 @@ pub struct Engine {
     last_words: RwLock<HashMap<String, Vec<String>>>,
     /// 上屏联想用的词频表（词的哈希 -> ln 词频），第一次联想时建，见 [`predict`]。
     word_prior: OnceLock<HashMap<u64, f32>>,
+    /// 显式固定排位与自动选词热度互不影响。
+    manual_pins: RwLock<session::ManualPins>,
     /// 简繁字符映射表。
     converter: RwLock<Arc<Converter>>,
     /// 英文词表：小写编码 -> 上屏形式（github -> GitHub）。
     english: RwLock<Arc<HashMap<String, String>>>,
     /// 字级神经语言模型（微信输入法的 nlrgpt2，本机有才加载），给整句候选重排。
     nnlm: RwLock<Option<Arc<nnlm::Nnlm>>>,
+    nnlm_path: RwLock<Option<std::path::PathBuf>>,
 }
 
 impl Engine {
@@ -211,30 +219,44 @@ impl Engine {
             ranker: Arc::new(LinearRanker::default()),
             config: EngineConfig::default(),
             history: RwLock::new(HashMap::new()),
+            pending_words: RwLock::new(HashMap::new()),
+            learning_journal: std::sync::Mutex::new(learn::Journal::default()),
             context: RwLock::new(String::new()),
             pairs: RwLock::new(UserPairs::default()),
             last_word: RwLock::new(String::new()),
             last_words: RwLock::new(HashMap::new()),
             word_prior: OnceLock::new(),
+            manual_pins: RwLock::new(session::ManualPins::new()),
             converter: RwLock::new(Arc::new(Converter::new())),
             english: RwLock::new(Arc::new(HashMap::new())),
             nnlm: RwLock::new(None),
+            nnlm_path: RwLock::new(None),
         }
     }
 
     /// 加载微信输入法的字级神经语言模型（`nlrgpt2_nnlm.bin`），返回字表大小。
     /// 模型不随 WowType 分发，见 `docs/DATA.md`。
     pub fn load_nnlm<P: AsRef<std::path::Path>>(&self, path: P) -> Result<usize> {
+        let path = path.as_ref();
         let model = nnlm::Nnlm::load(path)?;
         let size = model.vocab_size();
-        self.set_nnlm(Some(Arc::new(model)));
+        self.install_nnlm(Arc::new(model), path.to_path_buf());
         Ok(size)
     }
 
     pub fn set_nnlm(&self, model: Option<Arc<nnlm::Nnlm>>) {
+        if let Ok(mut path) = self.nnlm_path.write() { *path = None; }
         if let Ok(mut slot) = self.nnlm.write() {
             *slot = model;
         }
+    }
+
+    pub fn model_path(&self) -> Option<std::path::PathBuf> { self.nnlm_path.read().ok()?.clone() }
+
+    /// Windows 设置已完成文件校验与原子替换后，接续使用内存中的模型。
+    pub fn install_nnlm(&self, model: Arc<nnlm::Nnlm>, path: std::path::PathBuf) {
+        self.set_nnlm(Some(model));
+        if let Ok(mut slot) = self.nnlm_path.write() { *slot = Some(path); }
     }
 
     pub fn has_nnlm(&self) -> bool {
@@ -264,22 +286,24 @@ impl Engine {
     /// 加成用户词——这等价于「记住用户的偏好」，不会覆盖原词条。
     pub fn record_selection_with_pinyin(&self, word: &str, pinyin: Option<&str>) {
         let word = &self.lexicon_form(word);
-        self.record_selection(word);
+        let at_ms = now_ms();
+        self.record_selection_at(word, at_ms);
         if !self.config.auto_learn || word.is_empty() {
             return;
         }
         let Some(pinyin) = pinyin.filter(|p| !p.trim().is_empty()) else {
             return;
         };
-        let count = self.history_count(word);
-        if count < self.config.auto_learn_threshold.max(1) {
-            return;
+        let threshold = f64::from(self.config.auto_learn_threshold.max(1));
+        let heat = self.history_heat(word, at_ms);
+        // 给同一轮连续选择保留千分之一的序列化精度；不把半次热度进位。
+        if self.confirm_pending(word, pinyin, at_ms, false) || heat + 0.001 >= threshold {
+            self.add_learned_word(word, pinyin, heat.max(threshold));
         }
-        self.add_learned_word(word, pinyin, count);
     }
 
-    /// 学到的词收进用户词库。count 是选用次数，决定频次。
-    fn add_learned_word(&self, word: &str, pinyin: &str, count: u32) {
+    /// 学到的词收进用户词库。热度决定频次，不降低已显式设定的词频。
+    fn add_learned_word(&self, word: &str, pinyin: &str, heat: f64) {
         // 候选带的拼音已经是全拼（双拼也翻好了）；以前的前端会传双拼键位串（如 "vsgo"），
         // 那样的要先展开，否则用户词会带着一串无效音节存进去，永远也打不出来。
         let pinyin = if self.config.shuangpin && !word.chars().any(|c| c.is_ascii_alphabetic())
@@ -292,19 +316,19 @@ impl Engine {
             return;
         }
         // 频次随选用次数增长但有上限，避免用户词压过通用高频词
-        let freq = (1000.0 * f64::from(count)).min(50_000.0);
-        let _ = self.lexicon.add(&pinyin, word, freq);
+        let freq = (1000.0 * heat).min(50_000.0);
+        let before = self.lexicon.user_word(word);
+        if before.as_ref().is_some_and(|(_, existing)| *existing >= freq) { return; }
+        if self.lexicon.add(&pinyin, word, freq).is_ok() {
+            if let Some(after) = self.lexicon.user_word(word) {
+                self.note_learning(learn::Change::UserWord(word.into(), before, after));
+            }
+        }
     }
 
-    /// 用户分几次选出来、拼成的一个词（最多 [`COMPOSED_WORD_MAX_CHARS`] 个字）（「霜」「频」「阁」→ 霜频阁）：记一次选词，
-    /// 并且马上收进用户词库，不用等选够 [`EngineConfig::auto_learn_threshold`] 次。
-    ///
-    /// 用户特意一段一段挑出来的，就是想要这个词；主流输入法造词也是选一次就记住。
-    /// 一次就打出来的整句不走这里，还是按次数学，免得随手打的句子都进词库。
-    /// 反馈见 https://x.com/so1v3/status/2120415675969896729
+    /// 第一次分段拼成短词只候选收录，30 天内用同一码再拼成或直接选中才正式收录。
     pub fn record_composed_word(&self, word: &str, pinyin: &str) {
         let word = &self.lexicon_form(word);
-        // 超过四个字的多半是先选句首词、再选剩下的长句，不是要造的词：照常按次数学
         let chars = word.chars().count();
         let mixed_short_word = word.chars().any(|c| c.is_ascii_alphabetic()) && chars <= MIXED_WORD_MAX_CHARS
             && word.chars().filter(|c| crate::autospace::is_han(*c)).count() <= COMPOSED_WORD_MAX_CHARS;
@@ -312,15 +336,37 @@ impl Engine {
             self.record_selection_with_pinyin(word, Some(pinyin));
             return;
         }
-        self.record_selection(word);
+        let at_ms = now_ms();
+        self.record_selection_at(word, at_ms);
         if !self.config.auto_learn || word.is_empty() || pinyin.trim().is_empty() {
             return;
         }
-        // 至少给到「选够次数」那一档的频次，下次一打就排前面
-        let count = self
-            .history_count(word)
-            .max(self.config.auto_learn_threshold.max(1));
-        self.add_learned_word(word, pinyin, count);
+        if self.confirm_pending(word, pinyin, at_ms, true) || self.lexicon.user_word(word).is_some() {
+            let heat = self.history_heat(word, at_ms).max(f64::from(self.config.auto_learn_threshold.max(1)));
+            self.add_learned_word(word, pinyin, heat);
+        }
+    }
+
+    fn confirm_pending(&self, word: &str, code: &str, at_ms: u64, compose: bool) -> bool {
+        let code = code.trim().to_ascii_lowercase();
+        let Ok(mut words) = self.pending_words.write() else { return false; };
+        let before = words.get(word).cloned();
+        let confirmed = before.as_ref().is_some_and(|record| record.pinyin == code
+            && at_ms.saturating_sub(record.first_ms) <= learn::NEW_WORD_TTL_MS);
+        if confirmed {
+            words.remove(word);
+            self.note_learning(learn::Change::Pending(word.into(), before, None));
+        } else if compose {
+            if words.len() >= learn::MAX_HISTORY_WORDS {
+                words.retain(|_, record| at_ms.saturating_sub(record.first_ms) <= learn::NEW_WORD_TTL_MS);
+            }
+            if words.len() < learn::MAX_HISTORY_WORDS {
+                let after = learn::NewWord { pinyin: code, first_ms: at_ms };
+                words.insert(word.into(), after.clone());
+                self.note_learning(learn::Change::Pending(word.into(), before, Some(after)));
+            }
+        }
+        confirmed
     }
 
     /// 带时间戳的选词记录（方便测试）。
@@ -332,14 +378,10 @@ impl Engine {
         }
         let word = &self.lexicon_form(word);
         if let Ok(mut history) = self.history.write() {
-            let entry = history.entry(word.to_string()).or_insert(HistoryEntry {
-                count: 0,
-                last_used_ms: at_ms,
-            });
-            // 先按时间衰减再加 1：很久以前用得多的词不会一直顶着
-            let kept = crate::learn::decayed(*entry, at_ms).round() as u32;
-            entry.count = kept.saturating_add(1);
-            entry.last_used_ms = at_ms;
+            let before = history.get(word).copied();
+            let after = learn::bumped(before, at_ms);
+            history.insert(word.to_owned(), after);
+            self.note_learning(learn::Change::Word(word.to_owned(), before, after));
         }
         // 这个候选是哪几个词拼的（整句「我发给你」= 我 | 发给 | 你）
         let words: Vec<String> = self
@@ -352,12 +394,11 @@ impl Engine {
         let start = self.start_word();
         let mut need_prune = false;
         if let Ok(mut pairs) = self.pairs.write() {
-            if let Some(prev) = &start {
-                pairs.learn(prev, &words[0], at_ms);
-            }
-            for pair in words.windows(2) {
-                pairs.learn(&pair[0], &pair[1], at_ms);
-            }
+            let mut bump = |prev, next| {
+                if let Some(change) = pairs.bump(prev, next, at_ms) { self.note_learning(change); }
+            };
+            if let Some(prev) = &start { bump(prev, &words[0]); }
+            for pair in words.windows(2) { bump(&pair[0], &pair[1]); }
             need_prune = pairs.len() > crate::learn::MAX_USER_PAIRS;
         }
         if !need_prune {
@@ -372,10 +413,7 @@ impl Engine {
                 crate::learn::prune_learning(&mut history, &mut pairs);
             }
         }
-        if let (Ok(mut last), Some(tail)) = (self.last_word.write(), words.last()) {
-            last.clear();
-            last.push_str(tail);
-        }
+        if let Some(tail) = words.last() { self.record_last_word(tail); }
     }
 
     /// 光标前的最后一个词：上一次选的词，而且光标前的文本正好以它结尾
@@ -435,7 +473,9 @@ impl Engine {
             .pairs
             .read()
             .map_err(|_| anyhow::anyhow!("pairs lock poisoned"))?;
-        crate::learn::save_history(path, &history, &pairs)
+        let pending = self.pending_words.read().map_err(|_| anyhow::anyhow!("pending words lock poisoned"))?;
+        learn::write_atomic(path.as_ref(), &learn::history_text(&history, &pairs, &pending))?;
+        Ok(())
     }
 
     /// 读回 [`Engine::save_history`] 存的输入习惯，返回条数。
@@ -448,14 +488,20 @@ impl Engine {
             .pairs
             .write()
             .map_err(|_| anyhow::anyhow!("pairs lock poisoned"))?;
-        crate::learn::load_history(path, &mut history, &mut pairs)
+        let mut pending = self.pending_words.write().map_err(|_| anyhow::anyhow!("pending words lock poisoned"))?;
+        learn::load_history(path, &mut history, &mut pairs, &mut pending)
+    }
+
+    fn history_heat(&self, word: &str, at_ms: u64) -> f64 {
+        self.history.read().ok().and_then(|h| h.get(word).copied())
+            .map_or(0.0, |e| learn::decayed(e, at_ms))
     }
 
     pub fn history_count(&self, word: &str) -> u32 {
         self.history
             .read()
             .ok()
-            .and_then(|h| h.get(word).map(|e| e.count))
+            .and_then(|h| h.get(word).map(|e| e.count.round() as u32))
             .unwrap_or(0)
     }
 
@@ -496,6 +542,10 @@ impl Engine {
 
     pub fn set_typo_correction(&mut self, on: bool) {
         self.config.typo_correction = on;
+    }
+
+    pub fn set_typo_kinds(&mut self, kinds: u8) {
+        self.config.typo_kinds = kinds & crate::graph::typo::ALL;
     }
 
     /// 是否也出 CJK 扩展 B 区及以后的单字（默认不出，常见字体显示不了；通用规范汉字表里的照常）。
@@ -669,6 +719,10 @@ impl Engine {
         if let Ok(mut pairs) = self.pairs.write() {
             forgot |= pairs.remove_word(word) > 0;
         }
+        if let Ok(mut pending) = self.pending_words.write() {
+            forgot |= pending.remove(word).is_some();
+        }
+        self.clear_learning_journal();
         // 下一次上屏别再拿刚忘掉的词接搭配
         if let Ok(mut last) = self.last_word.write() {
             if *last == word {
@@ -681,6 +735,8 @@ impl Engine {
     /// 忘掉学到的全部东西：用户词库、选词热度和搭配（自定义词不动）。
     pub fn clear_learned(&self) {
         self.lexicon.clear();
+        if let Ok(mut pending) = self.pending_words.write() { pending.clear(); }
+        self.clear_learning_journal();
         if let Ok(mut history) = self.history.write() {
             history.clear();
         }
@@ -743,7 +799,7 @@ impl Engine {
         let mut result = if self.config.shuangpin {
             self.shuangpin_candidates(raw, at_ms)?
         } else {
-            self.pinyin_candidates(raw, None, at_ms)?
+            self.pinyin_candidates(raw, None, true, at_ms)?
         };
         self.prepend_custom_codes(raw, at_ms, &mut result);
         if let Ok(mut last) = self.last_words.write() {
@@ -811,7 +867,8 @@ impl Engine {
     fn shuangpin_candidates(&self, raw: &str, at_ms: u64) -> Result<Vec<Candidate>> {
         let display = raw.trim();
         let leading = raw.len() - raw.trim_start().len();
-        let variants = crate::shuangpin::decode(self.config.shuangpin_scheme, display);
+        let scheme = self.config.shuangpin_scheme;
+        let variants = crate::shuangpin::decode(scheme, display);
         let Some(first) = variants.first() else {
             // 翻不了（不是双拼）：只给原始串
             let mut result = Vec::new();
@@ -821,7 +878,9 @@ impl Engine {
             }
             return Ok(result);
         };
-        let mut result = self.pinyin_candidates(&first.pinyin, Some(display), at_ms)?;
+        // 双拼配齐的音节不是全拼前缀；只给未配齐的最后一键补全。
+        let completion = display.bytes().filter(|b| scheme.is_key(b.to_ascii_lowercase())).count() % 2 == 1;
+        let mut result = self.pinyin_candidates(&first.pinyin, Some(display), completion, at_ms)?;
         result.retain_mut(|c| {
             let used = if is_raw_candidate(c) {
                 display.len()
@@ -835,26 +894,21 @@ impl Engine {
             };
             used > 0
         });
-        // 有重码时，其他读法的整句候选补在后面
-        let max = self.config.max_candidates.max(1);
+        // 重码读法一起比较整句分数，不让第一种切法的长尾吃掉后续读法。
+        let mut extra = Vec::new();
         for other in variants.iter().skip(1) {
-            for mut c in self.query_plain(&other.pinyin.to_ascii_lowercase(), at_ms)? {
-                if result.len() >= max {
-                    break;
-                }
-                if result.iter().any(|r| r.text == c.text) {
-                    continue;
-                }
-                if self.config.traditional {
-                    if let Ok(conv) = self.converter.read() {
-                        if !conv.is_empty() {
-                            c.text = conv.convert(&c.text);
-                        }
-                    }
-                }
+            for mut c in self.query_plain(&other.pinyin.to_ascii_lowercase(), completion, at_ms)? {
+                c.text = self.shown_text(&c.text);
                 c.consumed = raw.len();
-                result.push(c);
+                extra.push(c);
             }
+        }
+        if !extra.is_empty() {
+            result.extend(extra);
+            result = dedupe_by_text(result);
+            result.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.text.cmp(&b.text)));
+            self.promote_custom(&mut result);
+            result.truncate(self.config.max_candidates.max(1));
         }
         Ok(result)
     }
@@ -864,11 +918,12 @@ impl Engine {
         &self,
         raw: &str,
         raw_display: Option<&str>,
+        completion: bool,
         at_ms: u64,
     ) -> Result<Vec<Candidate>> {
         let display = raw.trim();
         let normalized = display.to_ascii_lowercase();
-        let mut result = self.query_plain(&normalized, at_ms)?;
+        let mut result = self.query_plain(&normalized, completion, at_ms)?;
 
         protect_exact_input(&mut result);
         promote_picked(&mut result);
@@ -909,7 +964,7 @@ impl Engine {
             compose_candidates(&mut result, prefix, self.config.max_candidates.max(1));
         }
         if self.config.more_candidates {
-            self.append_more_candidates(raw, display, &normalized, &mut result)?;
+            self.append_more_candidates(raw, display, &normalized, completion, &mut result)?;
         }
         // 双拼每个音节两个键，没有 yuan / yu'an 这种切法歧义
         if raw_display.is_none() {
@@ -929,7 +984,7 @@ impl Engine {
             return Ok(Vec::new());
         }
         let typo = self.config.typo_correction && !self.config.shuangpin;
-        let full = SyllableGraph::build(
+        let full = SyllableGraph::build_with_typos(
             &parsed,
             GraphOptions {
                 mode: GraphMode::Full,
@@ -937,6 +992,7 @@ impl Engine {
                 typo,
                 completion: false,
             },
+            self.config.typo_kinds,
         );
         let graph = if full.has_exact_path() || !self.config.jianpin_fallback {
             full
@@ -1001,6 +1057,7 @@ impl Engine {
         raw: &str,
         display: &str,
         normalized: &str,
+        completion: bool,
         result: &mut Vec<Candidate>,
     ) -> Result<()> {
         let max = self.config.max_candidates.max(1);
@@ -1014,15 +1071,7 @@ impl Engine {
             return Ok(());
         }
         let typo = self.config.typo_correction && !self.config.shuangpin;
-        let full = SyllableGraph::build(
-            &parsed,
-            GraphOptions {
-                mode: GraphMode::Full,
-                allow_erhua: true,
-                typo,
-                completion: true,
-            },
-        );
+        let full = self.full_input_graph(&parsed, typo, completion);
         let graph = if full.has_exact_path() || !self.config.jianpin_fallback {
             full
         } else {
@@ -1088,14 +1137,13 @@ impl Engine {
         } else {
             None
         };
-        // 词在前、单字在后；换一种切法才对得上的句首词（houxuanci 的「后续」）夹在中间
-        let (chars, words): (Vec<_>, Vec<_>) =
-            heads.into_iter().partition(|c| c.text.chars().count() == 1);
-        for mut candidate in whole
-            .into_iter()
-            .chain(words)
-            .chain(other_splits)
-            .chain(chars)
+        // 首音节常用字不要被几百个替代切分的生僻词压到长尾之后。
+        let single = |c: &Candidate| c.text.chars().count() == 1;
+        let (chars, words): (Vec<_>, Vec<_>) = heads.into_iter().partition(single);
+        let (common, rare): (Vec<_>, Vec<_>) = chars.into_iter().partition(|c| c.words[0].freq >= 1.0);
+        let (other_chars, other_words): (Vec<_>, Vec<_>) = other_splits.into_iter().partition(single);
+        for mut candidate in whole.into_iter().chain(words).chain(common)
+            .chain(other_words).chain(rare).chain(other_chars)
         {
             if result.len() >= max {
                 break;
@@ -1267,34 +1315,31 @@ impl Engine {
     ///
     /// 模糊音视图里精确读音和模糊读音都有（模糊词扣 `fuzzy_penalty`），一次搜索就够了，
     /// 两种读音的词按各自的分数排在一起。
-    fn query_plain(&self, normalized: &str, at_ms: u64) -> Result<Vec<Candidate>> {
-        self.run_query(normalized, at_ms, self.config.fuzzy)
+    fn query_plain(&self, normalized: &str, completion: bool, at_ms: u64) -> Result<Vec<Candidate>> {
+        self.run_query(normalized, completion, at_ms, self.config.fuzzy)
+    }
+
+    fn full_input_graph(&self, input: &crate::syllable::ParsedInput, typo: bool, completion: bool) -> SyllableGraph {
+        SyllableGraph::build_with_typos(input, GraphOptions { mode: GraphMode::Full, allow_erhua: true, typo, completion }, self.config.typo_kinds)
     }
 
     /// 跑一次查询；fuzzy=true 时精确读音和模糊音读音的词一起搜。
     ///
     /// 末音节补全（zhongg -> 中国、zhonggu -> 中国）和纠错都做成了音节图里的边，
     /// 一次搜索就能同时给出精确、补全、纠错三类候选。
-    fn run_query(&self, normalized: &str, at_ms: u64, fuzzy: bool) -> Result<Vec<Candidate>> {
+    fn run_query(&self, normalized: &str, completion: bool, at_ms: u64, fuzzy: bool) -> Result<Vec<Candidate>> {
         let parsed = parse(normalized)?;
         if parsed.is_empty() {
             return Ok(Vec::new());
         }
         let typo = self.config.typo_correction && !self.config.shuangpin;
-        let full = SyllableGraph::build(
-            &parsed,
-            GraphOptions {
-                mode: GraphMode::Full,
-                allow_erhua: true,
-                typo,
-                completion: true,
-            },
-        );
+        let full = self.full_input_graph(&parsed, typo, completion);
         // 不靠补全、纠错就能完整解析：直接用全拼。
         // 但能切成音节不等于词库里有词：hm、hng 这类叹词音节词库不收，以前只给出原样的 hm，
         // 打 hm（后面、好吗）一个中文候选都没有。一个认识的词都凑不出来就接着试简拼。
         if full.has_exact_path() {
             let mut found = self.query_once(&full, at_ms, fuzzy)?;
+            self.keep_exact_syllable(&full, &mut found, at_ms, fuzzy)?;
             if !fuzzy && self.config.fuzzy_fallback && !self.config.shuangpin {
                 self.fuzzy_fallback(&full, &mut found);
             }
@@ -1326,6 +1371,30 @@ impl Engine {
         });
         result.truncate(self.config.max_candidates.max(1));
         Ok(result)
+    }
+
+    /// 当补全耗尽束搜索名额时，单独补回打全的常用单字（WowType 59b3c91）。
+    fn keep_exact_syllable(&self, graph: &SyllableGraph, found: &mut Vec<Candidate>, at_ms: u64, fuzzy: bool) -> Result<()> {
+        let one = graph.edges_from(0).iter().any(|edge| edge.end == graph.len() && !edge.typo
+            && edge.completion == 0 && matches!(edge.kind, EdgeKind::Full { erhua: false, .. }));
+        let exact = |c: &Candidate| c.features.typo_count == 0.0 && c.features.prefix_completion == 0.0
+            && c.words.len() == 1 && c.words[0].known && !c.pinyin.contains(' ');
+        if !one || found.iter().any(exact) { return Ok(()); }
+        let graph = SyllableGraph::build(graph.input(), GraphOptions {
+            mode: GraphMode::Full, allow_erhua: false, typo: false, completion: false,
+        });
+        let mut extra: Vec<_> = self.query_once(&graph, at_ms, fuzzy)?.into_iter()
+            .filter(|c| exact(c) && c.words[0].freq >= 1.0 && !found.iter().any(|item| item.text == c.text))
+            .collect();
+        if let Some(top) = found.first().map(|c| c.score) {
+            let count = extra.len();
+            for (i, candidate) in extra.iter_mut().enumerate() {
+                candidate.score = top + 1e-3 * (count - i) as f64;
+            }
+        }
+        found.splice(0..0, extra);
+        found.truncate(self.config.max_candidates.max(1));
+        Ok(())
     }
 
     /// 模糊音关着时的兜底：精确读音的第一名偏弱（几个词硬凑的、纠错或补全出来的），
@@ -1486,7 +1555,13 @@ impl Engine {
         };
         let mut order: Vec<usize> = (0..paths.len()).collect();
         order.sort_by(|&a, &b| paths[b].score.total_cmp(&paths[a].score));
-        let context = model.context_tokens(&self.context());
+        let preceding = self.context();
+        // 无上文的短词保留词频排序，避免逐键跑神经模型。
+        if preceding.trim().is_empty() && paths.first().is_none_or(|path|
+            path.words.iter().map(|word| word.syllable_count).sum::<usize>() < 5) {
+            return out;
+        }
+        let context = model.context_tokens(&preceding);
         let scored: Vec<(usize, f64)> = order
             .iter()
             .take(limit)
@@ -1606,7 +1681,7 @@ impl Engine {
                     (Some(a), _) => a,
                     (None, Some(b)) => b,
                     (None, None) => HistoryEntry {
-                        count: 0,
+                        count: 0.0,
                         last_used_ms: at_ms,
                     },
                 };
@@ -1963,40 +2038,34 @@ fn pin_single_initial(input: &str, candidates: &mut Vec<Candidate>) {
 
 fn promote_picked(candidates: &mut Vec<Candidate>) {
     let picked = |c: &Candidate| {
-        c.features.history_use_count > 0.0
+        c.features.history_use_count >= learn::MIN_PICK_HEAT as f32
             && c.features.typo_count == 0.0
             && c.features.prefix_completion == 0.0
             && c.features.full_jianpin == 0.0
     };
-    let Some(best) = candidates
-        .iter()
-        .enumerate()
-        .filter(|(_, c)| picked(c))
-        .max_by(|a, b| {
-            a.1.features
-                .history_use_count
-                .total_cmp(&b.1.features.history_use_count)
-                .then_with(|| b.0.cmp(&a.0))
-        })
-        .map(|(i, _)| i)
-    else {
-        return;
+    let strongest = |single: bool| {
+        let mut indices: Vec<_> = candidates.iter().enumerate()
+            .filter(|(_, c)| picked(c) && (c.text.chars().count() == 1) == single)
+            .map(|(index, _)| index).collect();
+        indices.sort_by(|&a, &b| candidates[b].features.history_use_count
+            .total_cmp(&candidates[a].features.history_use_count).then(a.cmp(&b)));
+        indices
     };
-    let single = candidates[best].text.chars().count() <= 1;
-    let target = if single { 1 } else { 0 };
-    if best <= target {
-        return;
-    }
-    // 排在目标位置之前的候选被选得更多，就不动它
-    if candidates[..best]
-        .iter()
-        .take(target + 1)
-        .any(|c| c.features.history_use_count >= candidates[best].features.history_use_count)
-    {
-        return;
-    }
-    let c = candidates.remove(best);
-    candidates.insert(target, c);
+    let word = strongest(false).first().copied().filter(|&i| i != 0
+        && candidates[i].features.history_use_count > candidates[0].features.history_use_count);
+    let mut singles = strongest(true);
+    // 候选首位不被单字提权替换；其后最多提升三个足够热的单字。
+    singles.retain(|&index| index != 0 || word.is_some());
+    singles.truncate(3);
+    if word.is_none() && singles.is_empty() { return; }
+    let mut order = Vec::with_capacity(candidates.len());
+    order.push(word.unwrap_or(0));
+    order.extend(singles);
+    let mut taken = vec![false; candidates.len()];
+    for &index in &order { taken[index] = true; }
+    order.extend((0..candidates.len()).filter(|&index| !taken[index]));
+    let mut old: Vec<_> = std::mem::take(candidates).into_iter().map(Some).collect();
+    candidates.extend(order.into_iter().map(|index| old[index].take().unwrap()));
     for i in 1..candidates.len() {
         if candidates[i].score >= candidates[i - 1].score {
             candidates[i].score = candidates[i - 1].score - 1e-3;
@@ -2083,7 +2152,8 @@ fn splits_into_syllables(letters: &str) -> bool {
     ok[0] = true;
     for end in 1..=letters.len() {
         for len in 1..=6.min(end) {
-            if ok[end - len] && is_valid(&letters[end - len..end]) {
+            let syllable = &letters[end - len..end];
+            if ok[end - len] && !matches!(syllable, "ng" | "hm" | "hng") && is_valid(syllable) {
                 ok[end] = true;
                 break;
             }
@@ -2772,6 +2842,20 @@ mod tests {
             .find(|c| c.text == "我今天晚上要")
             .unwrap_or_else(|| panic!("{:?}", list.iter().map(|c| &c.text).collect::<Vec<_>>()));
         assert_eq!(head.consumed, "wojintianwanshangyao".len());
+    }
+
+    #[test]
+    fn complete_syllable_survives_crowded_completions() {
+        let mut tsv = String::from("lia\t俩\t99\nlia\t倆\t0.5\nli a\t理啊\t50\n");
+        for (i, character) in ('\u{4e00}'..).take(60).enumerate() {
+            let syllable = ["lian", "liang", "liao"][i % 3];
+            tsv.push_str(&format!("{syllable}\t{character}\t{}\n", 100_000 - i * 1000));
+        }
+        let lexicon = Arc::new(MemoryLexicon::from_tsv_str(&tsv).unwrap());
+        let mut engine = Engine::new(lexicon, Arc::new(BigramLm::default()));
+        engine.set_max_candidates(300);
+        let candidates = engine.input("lia");
+        assert_eq!(candidates.first().map(|c| c.text.as_str()), Some("俩"));
     }
 
     #[test]
@@ -3679,7 +3763,7 @@ mod tests {
     }
 
     #[test]
-    fn composed_word_is_learned_on_first_use() {
+    fn composed_word_is_learned_on_second_use() {
         let lexicon: Arc<dyn Lexicon> = Arc::new(
             MemoryLexicon::from_tsv_str(
                 "shuang\t双\t10000\nshuang\t霜\t500\npin\t拼\t8000\npin\t频\t500\n\
@@ -3691,7 +3775,8 @@ mod tests {
         let e = Engine::new(lexicon, lm);
         assert!(!e.input("shuangpinge").iter().any(|c| c.text == "霜频阁"));
 
-        // 分三次选出来的词，用一次就记住、排第一
+        e.record_composed_word("霜频阁", "shuang pin ge");
+        assert!(e.user_words().is_empty());
         e.record_composed_word("霜频阁", "shuang pin ge");
         assert_eq!(e.user_words().len(), 1);
         assert_eq!(e.input("shuangpinge")[0].text, "霜频阁");

@@ -24,11 +24,15 @@ type settings struct {
 	configSaveTail <-chan struct{}
 	configRevision uint64
 	// 选文件、存文件、打开文件夹（测试里换掉）。
-	openFile   func(title string) string
-	openTable  func(title string) string
-	saveFile   func(title, name string) string
-	openFolder func(path string)
-	openURL    func(url string) error
+	openFile                                          func(title string) string
+	openTable                                         func(title string) string
+	openModel                                         func(title string) string
+	defaultTip                                        func(change bool) (bool, error)
+	defaultTipBusy, defaultTipKnown, defaultTipActive bool
+	modelBusy, confirmModelReset                      bool
+	saveFile                                          func(title, name string) string
+	openFolder                                        func(path string)
+	openURL                                           func(url string) error
 	// 安装目录里的资源（图标），测试里为空。
 	resources string
 	// 托盘图标开关改了（托盘程序跟着建或拿掉图标）。
@@ -50,12 +54,16 @@ type settings struct {
 	locatedHandle                ui.Handle
 
 	// 字体列表（第一次打开候选窗页时取）。
-	fonts []string
+	fonts            []string
+	shuangpinExample string
 
-	dicts   []Dictionary
-	phrases []QuickPhrase
-	common  []string
-	words   []UserWord
+	dicts                        []Dictionary
+	phrases                      []QuickPhrase
+	common                       []string
+	words                        []UserWord
+	stats                        map[string]typingDay
+	statsBusy, confirmStatsClear bool
+	statsError                   string
 
 	// 最近一次从服务端发现的可选窗口。
 	apps                                     []AppWindow
@@ -139,6 +147,7 @@ func (s *settings) background(work func() func()) {
 
 // refresh 重新读状态、设置、词库和快捷短语。
 func (s *settings) refresh() {
+	s.refreshDefaultTip(false)
 	revision := s.configRevision
 	s.background(func() func() {
 		status, err := s.backend.Call(op("status"))
@@ -157,6 +166,7 @@ func (s *settings) refresh() {
 			}
 			if cerr == nil && config.Config != nil && revision == s.configRevision {
 				s.config = *config.Config
+				s.shuangpinExample = config.ShuangpinExample
 				s.loaded = true
 			}
 			s.dicts = dicts.Dictionaries
@@ -199,6 +209,7 @@ func (s *settings) saveConfig() {
 			}
 			if resp.Config != nil {
 				s.config = *resp.Config
+				s.shuangpinExample = resp.ShuangpinExample
 			}
 			if s.onAutomaticUpdate != nil {
 				s.onAutomaticUpdate(s.config.AutoUpdate)
@@ -224,6 +235,7 @@ func (s *settings) run(req Request) {
 			}
 			if config.Config != nil {
 				s.config = *config.Config
+				s.shuangpinExample = config.ShuangpinExample
 			}
 		}
 	})

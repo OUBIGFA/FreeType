@@ -42,6 +42,15 @@ impl Default for GraphOptions {
     }
 }
 
+/// 独立的全拼错因。旧的 `GraphOptions::typo` 仍可一次打开全部规则。
+pub mod typo {
+    pub const SWAP: u8 = 1;
+    pub const NEIGHBOR: u8 = 2;
+    pub const MISSING: u8 = 4;
+    pub const EXTRA: u8 = 8;
+    pub const ALL: u8 = SWAP | NEIGHBOR | MISSING | EXTRA;
+}
+
 /// 一条边。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Edge {
@@ -143,6 +152,10 @@ impl SyllableGraph {
 
     /// 用已解析的输入建图。
     pub fn build(input: &ParsedInput, options: GraphOptions) -> Self {
+        Self::build_with_typos(input, options, typo::ALL)
+    }
+
+    pub fn build_with_typos(input: &ParsedInput, options: GraphOptions, kinds: u8) -> Self {
         let n = input.len();
         let mut edges = vec![Vec::new(); n + 1];
 
@@ -152,8 +165,8 @@ impl SyllableGraph {
         if matches!(options.mode, GraphMode::Jianpin | GraphMode::Mixed) {
             build_jianpin_edges(input, &mut edges);
         }
-        if options.typo && matches!(options.mode, GraphMode::Full | GraphMode::Mixed) {
-            build_typo_edges(input, &mut edges);
+        if options.typo && kinds != 0 && matches!(options.mode, GraphMode::Full | GraphMode::Mixed) {
+            build_typo_edges(input, &mut edges, kinds);
         }
         if options.completion && matches!(options.mode, GraphMode::Full | GraphMode::Mixed) {
             build_completion_edges(input, &mut edges);
@@ -352,7 +365,7 @@ fn syllable_of(bytes: &[u8]) -> Option<Syllable> {
 /// - 多按：多出来的那个键和前后某个键相同或相邻（haoo / haio -> hao）
 /// - 漏按：补一个字母（zhon -> zhong 由补全负责，这里管中间漏的：zhng -> zhong）
 /// - 跨音节对调：nhiao -> ni hao（Pair 边）
-fn build_typo_edges(input: &ParsedInput, edges: &mut [Vec<Edge>]) {
+fn build_typo_edges(input: &ParsedInput, edges: &mut [Vec<Edge>], kinds: u8) {
     let n = input.len();
     let letters = &input.letters;
     let mut buf: Vec<u8> = Vec::with_capacity(MAX_SYLLABLE_LEN + 1);
@@ -371,7 +384,7 @@ fn build_typo_edges(input: &ParsedInput, edges: &mut [Vec<Edge>]) {
             let text = &letters[start..end];
             let len = text.len();
 
-            if len <= MAX_SYLLABLE_LEN {
+            if len <= MAX_SYLLABLE_LEN && kinds & typo::NEIGHBOR != 0 {
                 // 替换
                 for i in 0..len {
                     for &c in keyboard_neighbors(text[i]) {
@@ -383,6 +396,8 @@ fn build_typo_edges(input: &ParsedInput, edges: &mut [Vec<Edge>]) {
                         }
                     }
                 }
+            }
+            if len <= MAX_SYLLABLE_LEN && kinds & typo::SWAP != 0 {
                 // 音节内对调
                 for i in 0..len.saturating_sub(1) {
                     if text[i] == text[i + 1] {
@@ -401,7 +416,7 @@ fn build_typo_edges(input: &ParsedInput, edges: &mut [Vec<Edge>]) {
             }
 
             // 多按一个键：只删和左右邻居相同或相邻的键，避免把正常字母当成多余
-            if len >= 2 {
+            if len >= 2 && kinds & typo::EXTRA != 0 {
                 for i in 0..len {
                     let c = text[i];
                     let left = (i > 0).then(|| text[i - 1]);
@@ -426,7 +441,7 @@ fn build_typo_edges(input: &ParsedInput, edges: &mut [Vec<Edge>]) {
             }
 
             // 漏按一个键：只补在音节中间（末尾漏的交给补全，开头漏的歧义太大）
-            if (2..MAX_SYLLABLE_LEN).contains(&len) {
+            if kinds & typo::MISSING != 0 && (2..MAX_SYLLABLE_LEN).contains(&len) {
                 for i in 1..len {
                     for c in b'a'..=b'z' {
                         buf.clear();
@@ -442,6 +457,7 @@ fn build_typo_edges(input: &ParsedInput, edges: &mut [Vec<Edge>]) {
         }
     }
 
+    if kinds & typo::SWAP == 0 { return; }
     // 跨音节对调：交换 k 与 k+1 后，在两者之间切开得到两个音节
     for k in 0..n.saturating_sub(1) {
         if letters[k] == letters[k + 1] || input.forced_between(k, k + 2) {
@@ -713,6 +729,18 @@ mod tests {
         assert!(has_typo_path("nhiao", &["ni", "hao"]), "跨音节对调");
         assert!(has_typo_path("haoo", &["hao"]), "多按");
         assert!(has_typo_path("zhng", &["zhong"]), "漏按");
+    }
+
+    #[test]
+    fn typo_kinds_are_independent() {
+        for (input, expected) in [("sahng", typo::SWAP), ("shabg", typo::NEIGHBOR), ("shng", typo::MISSING), ("sjhang", typo::EXTRA)] {
+            let parsed = parse(input).unwrap();
+            for kind in [typo::SWAP, typo::NEIGHBOR, typo::MISSING, typo::EXTRA] {
+                let graph = SyllableGraph::build_with_typos(&parsed, GraphOptions { typo: true, ..GraphOptions::default() }, kind);
+                let found = graph.edges_from(0).iter().any(|edge| edge.end == parsed.len() && edge.typo && edge.display() == "shang");
+                assert_eq!(found, expected == kind, "{input}, {kind}");
+            }
+        }
     }
 
     #[test]

@@ -11,13 +11,13 @@
 //!
 //! 都存在 `history.tsv`（和用户词库放一起），重启输入法不会丢。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 
 use anyhow::{Context, Result};
 
 use crate::lm::LanguageModel;
-use crate::HistoryEntry;
+use crate::{Engine, HistoryEntry};
 
 /// 两份学习数据都先完整写入并刷盘，再替换旧文件；临时文件独占创建，避免误覆盖。
 pub(crate) fn write_atomic(path: &Path, data: &str) -> std::io::Result<()> {
@@ -57,9 +57,136 @@ pub const MAX_HISTORY_WORDS: usize = 20_000;
 /// 上下文二元搭配上限：超出时按当前衰减热度与最近使用时间淘汰冷门搭配。
 pub const MAX_USER_PAIRS: usize = 50_000;
 
-/// 衰减淘汰阈值：`0.5^6 = 1/64`（仅选过 1 次且超过 6 个半衰期即 180 天未再使用的记录，
-/// 衰减后热度低于此值，加分接近 0 且再次选中时保留次数已四舍五入为 0，存盘与导出时予以清理）。
-pub const MIN_KEEP_HEAT: f64 = 1.0 / 64.0;
+/// 只选过一次的词，30 天后不再享受「选过的提前」待遇。
+pub const MIN_PICK_HEAT: f64 = 0.5;
+/// 五个半衰期以后，无近期使用的记录不写入文件。
+pub const MIN_KEEP_HEAT: f64 = 1.0 / 32.0;
+pub const NEW_WORD_TTL_MS: u64 = HALF_LIFE_MS as u64;
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct NewWord {
+    pub pinyin: String,
+    pub first_ms: u64,
+}
+
+/// 保存改动前后的值；撤销只还原仍是 after 的记录，不覆盖其他会话的新选择。
+pub(crate) enum Change {
+    Word(String, Option<HistoryEntry>, HistoryEntry),
+    Pair(String, String, Option<HistoryEntry>, HistoryEntry),
+    UserWord(String, Option<(String, f64)>, (String, f64)),
+    Pending(String, Option<NewWord>, Option<NewWord>),
+    Last(String, String),
+}
+
+#[derive(Default)]
+pub(crate) struct Journal {
+    first: u64,
+    changes: VecDeque<Option<Change>>,
+}
+
+impl Journal {
+    pub fn mark(&self) -> u64 { self.first + self.changes.len() as u64 }
+
+    pub fn push(&mut self, change: Change) {
+        self.changes.push_back(Some(change));
+        if self.changes.len() > 1024 {
+            self.changes.pop_front();
+            self.first += 1;
+        }
+    }
+
+    pub fn take(&mut self, start: u64, end: u64) -> Vec<Change> {
+        if start < self.first { return Vec::new(); }
+        (start..end.min(self.mark())).rev().filter_map(|seq| self.changes[(seq - self.first) as usize].take()).collect()
+    }
+
+    pub fn clear(&mut self) {
+        self.first = self.mark();
+        self.changes.clear();
+    }
+}
+
+/// 可跨线程保存的一份学习快照。序列化、裁剪和写盘都可以移出按键线程。
+pub struct LearningSnapshot {
+    user_words: Vec<(String, String, f64)>,
+    words: HashMap<String, HistoryEntry>,
+    pairs: UserPairs,
+    pending: HashMap<String, NewWord>,
+}
+
+impl LearningSnapshot {
+    pub fn save(self, dict: &Path, history: &Path) -> Result<()> {
+        write_atomic(dict, &crate::lexicon::user_dict_text(&self.user_words))
+            .context("保存学习词条")?;
+        write_atomic(history, &history_text(&self.words, &self.pairs, &self.pending))
+            .context("保存输入习惯")?;
+        Ok(())
+    }
+}
+
+impl Engine {
+    pub fn learning_snapshot(&self) -> LearningSnapshot {
+        LearningSnapshot {
+            user_words: self.lexicon.words(),
+            words: self.history.read().unwrap().clone(),
+            pairs: self.pairs.read().unwrap().clone(),
+            pending: self.pending_words.read().unwrap().clone(),
+        }
+    }
+
+    /// 换主词库时接续还没达到二次确认的词；它们不属于可同步的正式用户词条。
+    pub fn inherit_pending_words(&self, current: &Engine) {
+        *self.pending_words.write().unwrap() = current.pending_words.read().unwrap().clone();
+    }
+
+    pub(crate) fn learn_mark(&self) -> u64 {
+        self.learning_journal.lock().unwrap().mark()
+    }
+
+    pub(crate) fn note_learning(&self, change: Change) {
+        self.learning_journal.lock().unwrap().push(change);
+    }
+
+    pub(crate) fn clear_learning_journal(&self) {
+        self.learning_journal.lock().unwrap().clear();
+    }
+
+    pub(crate) fn record_last_word(&self, word: &str) {
+        if let Ok(mut slot) = self.last_word.write() {
+            if *slot != word {
+                let before = std::mem::replace(&mut *slot, word.to_owned());
+                self.note_learning(Change::Last(before, word.to_owned()));
+            }
+        }
+    }
+
+    /// Undo exactly this session's learning, not intervening writes from another session.
+    pub(crate) fn undo_learning(&self, start: u64, end: u64) -> bool {
+        let changes = self.learning_journal.lock().unwrap().take(start, end);
+        let mut changed = false;
+        for change in changes {
+            changed |= match change {
+                Change::Word(word, before, after) => restore_entry(&mut self.history.write().unwrap(), word, before, Some(after)),
+                Change::Pair(prev, word, before, after) => self.pairs.write().unwrap().restore(prev, word, before, after),
+                Change::UserWord(word, before, after) => self.lexicon.restore_word(&word, before, after),
+                Change::Pending(word, before, after) => restore_entry(&mut self.pending_words.write().unwrap(), word, before, after),
+                Change::Last(before, after) => {
+                    let mut current = self.last_word.write().unwrap();
+                    if *current != after { continue; }
+                    *current = before;
+                    true
+                }
+            };
+        }
+        changed
+    }
+}
+
+fn restore_entry<T: PartialEq>(entries: &mut HashMap<String, T>, key: String, before: Option<T>, after: Option<T>) -> bool {
+    if entries.get(&key) != after.as_ref() { return false; }
+    if let Some(before) = before { entries.insert(key, before); } else { entries.remove(&key); }
+    true
+}
 
 /// 区分真实 Unix 毫秒时间戳（2001-09-09 之后）与单测合成小整数时间戳，
 /// 避免测试混用 `now_ms()` 与常量时间戳时把合成时间误判为几十年前的过期记录。
@@ -75,7 +202,12 @@ pub const PAIR_BONUS_CAP: f64 = 6.0;
 /// 按半衰期衰减后的次数。
 pub fn decayed(entry: HistoryEntry, at_ms: u64) -> f64 {
     let age = at_ms.saturating_sub(entry.last_used_ms) as f64;
-    f64::from(entry.count) * 0.5f64.powf(age / HALF_LIFE_MS)
+    entry.count * 0.5f64.powf(age / HALF_LIFE_MS)
+}
+
+/// 热度保留小数，避免半次再次使用时被永久进位成一次。
+pub(crate) fn bumped(before: Option<HistoryEntry>, at_ms: u64) -> HistoryEntry {
+    HistoryEntry { count: before.map_or(0.0, |entry| decayed(entry, at_ms)) + 1.0, last_used_ms: at_ms }
 }
 
 fn clean_token(s: &str) -> bool {
@@ -99,7 +231,7 @@ fn reference_clocks(
             max_synth = max_synth.max(ts);
         }
     }
-    (max_real, max_synth)
+    (max_real.max(crate::now_ms()), max_synth)
 }
 
 fn entry_heat(entry: HistoryEntry, max_real: u64, max_synth: u64) -> f64 {
@@ -136,7 +268,7 @@ fn pruned_with_limits(
         .iter()
         .filter(|(w, e)| {
             clean_token(w)
-                && e.count > 0
+                && e.count > 0.0
                 && entry_heat(**e, max_real, max_synth) >= MIN_KEEP_HEAT
         })
         .map(|(w, e)| (w.clone(), *e))
@@ -146,7 +278,7 @@ fn pruned_with_limits(
             entry_heat(*eb, max_real, max_synth)
                 .total_cmp(&entry_heat(*ea, max_real, max_synth))
                 .then_with(|| eb.last_used_ms.cmp(&ea.last_used_ms))
-                .then_with(|| eb.count.cmp(&ea.count))
+                .then_with(|| eb.count.total_cmp(&ea.count))
                 .then_with(|| wa.cmp(wb))
         });
         kept_words.truncate(max_words);
@@ -158,7 +290,7 @@ fn pruned_with_limits(
         .filter(|(p, c, e)| {
             clean_token(p)
                 && clean_token(c)
-                && e.count > 0
+                && e.count > 0.0
                 && entry_heat(*e, max_real, max_synth) >= MIN_KEEP_HEAT
         })
         .map(|(p, c, e)| (p.to_string(), c.to_string(), e))
@@ -168,7 +300,7 @@ fn pruned_with_limits(
             entry_heat(*eb, max_real, max_synth)
                 .total_cmp(&entry_heat(*ea, max_real, max_synth))
                 .then_with(|| eb.last_used_ms.cmp(&ea.last_used_ms))
-                .then_with(|| eb.count.cmp(&ea.count))
+                .then_with(|| eb.count.total_cmp(&ea.count))
                 .then_with(|| (pa, ca).cmp(&(pb, cb)))
         });
         kept_pairs.truncate(max_pairs);
@@ -196,22 +328,26 @@ pub struct UserPairs {
 
 impl UserPairs {
     pub fn learn(&mut self, prev: &str, cur: &str, at_ms: u64) {
-        if prev.is_empty() || cur.is_empty() {
-            return;
+        self.bump(prev, cur, at_ms);
+    }
+
+    pub(crate) fn bump(&mut self, prev: &str, cur: &str, at_ms: u64) -> Option<Change> {
+        if prev.is_empty() || cur.is_empty() { return None; }
+        let before = self.get(prev, cur);
+        let after = bumped(before, at_ms);
+        self.insert(prev.to_owned(), cur.to_owned(), after);
+        Some(Change::Pair(prev.to_owned(), cur.to_owned(), before, after))
+    }
+
+    pub(crate) fn restore(&mut self, prev: String, cur: String, before: Option<HistoryEntry>, after: HistoryEntry) -> bool {
+        if self.get(&prev, &cur) != Some(after) { return false; }
+        if let Some(entry) = before {
+            self.insert(prev, cur, entry);
+        } else if let std::collections::hash_map::Entry::Occupied(mut words) = self.map.entry(prev) {
+            words.get_mut().remove(&cur);
+            if words.get().is_empty() { words.remove(); }
         }
-        let entry = self
-            .map
-            .entry(prev.to_string())
-            .or_default()
-            .entry(cur.to_string())
-            .or_insert(HistoryEntry {
-                count: 0,
-                last_used_ms: at_ms,
-            });
-        // 次数先按时间衰减再加 1，这样很久以前用过很多次的搭配不会一直顶着
-        let kept = decayed(*entry, at_ms).round() as u32;
-        entry.count = kept.saturating_add(1);
-        entry.last_used_ms = at_ms;
+        true
     }
 
     pub fn get(&self, prev: &str, cur: &str) -> Option<HistoryEntry> {
@@ -303,50 +439,65 @@ impl LanguageModel for LearnedLm<'_> {
 /// ```text
 /// w <词> <次数> <上次使用，epoch 毫秒>
 /// p <前一个词> <后一个词> <次数> <上次使用>
+/// n <待确认新词> <编码> <第一次拼成的时间>
 /// ```
-pub fn save_history<P: AsRef<Path>>(
-    path: P,
+pub(crate) fn history_text(
     words: &HashMap<String, HistoryEntry>,
     pairs: &UserPairs,
-) -> Result<()> {
-    let path = path.as_ref();
+    pending: &HashMap<String, NewWord>,
+) -> String {
     let mut out = String::from("# wowtype 用户输入习惯 v1\n");
     let (words, pairs) = pruned_history_and_pairs(words, pairs);
     for (word, entry) in words {
         out.push_str(&format!(
             "w\t{word}\t{}\t{}\n",
-            entry.count, entry.last_used_ms
+            heat_text(entry.count), entry.last_used_ms
         ));
     }
     for (prev, cur, entry) in pairs {
         out.push_str(&format!(
             "p\t{prev}\t{cur}\t{}\t{}\n",
-            entry.count, entry.last_used_ms
+            heat_text(entry.count), entry.last_used_ms
         ));
     }
-    write_atomic(path, &out).with_context(|| format!("保存 {}", path.display()))?;
-    Ok(())
+    let now_ms = crate::now_ms();
+    let mut pending: Vec<_> = pending.iter().filter(|(word, record)| {
+        clean_token(word) && clean_token(&record.pinyin)
+            && now_ms.saturating_sub(record.first_ms) <= NEW_WORD_TTL_MS
+    }).collect();
+    pending.sort_unstable_by_key(|(word, _)| *word);
+    for (word, record) in pending {
+        out.push_str(&format!("n\t{word}\t{}\t{}\n", record.pinyin, record.first_ms));
+    }
+    out
 }
 
-/// 读回 [`save_history`] 写的文件，返回读到的条数。坏行跳过，读完后执行衰减裁剪与容量上限整理。
-pub fn load_history<P: AsRef<Path>>(
+fn heat_text(heat: f64) -> String {
+    format!("{heat:.3}").trim_end_matches('0').trim_end_matches('.').to_owned()
+}
+
+/// 读回输入习惯。允许旧整数热度和新版小数；整份文件无法识别时通知调用方留底。
+pub(crate) fn load_history<P: AsRef<Path>>(
     path: P,
     words: &mut HashMap<String, HistoryEntry>,
     pairs: &mut UserPairs,
+    pending: &mut HashMap<String, NewWord>,
 ) -> Result<usize> {
     let path = path.as_ref();
     let text = std::fs::read_to_string(path).with_context(|| format!("读取 {}", path.display()))?;
     let mut loaded = 0usize;
+    let now_ms = crate::now_ms();
+    let mut non_empty = false;
     for line in text.lines() {
         if line.starts_with('#') || line.trim().is_empty() {
             continue;
         }
+        non_empty = true;
         let parts: Vec<&str> = line.split('\t').collect();
         let entry = |count: &str, last: &str| -> Option<HistoryEntry> {
-            Some(HistoryEntry {
-                count: count.parse().ok()?,
-                last_used_ms: last.parse().ok()?,
-            })
+            let count: f64 = count.parse().ok()?;
+            if !count.is_finite() || !(0.0..=f64::from(u32::MAX)).contains(&count) { return None; }
+            Some(HistoryEntry { count, last_used_ms: last.parse().ok()? })
         };
         match parts.as_slice() {
             ["w", word, count, last] if !word.is_empty() => {
@@ -361,9 +512,18 @@ pub fn load_history<P: AsRef<Path>>(
                     loaded += 1;
                 }
             }
+            ["n", word, pinyin, timestamp] if clean_token(word) && clean_token(pinyin) => {
+                if let Ok(first_ms) = timestamp.parse() {
+                    if pending.len() < MAX_HISTORY_WORDS && now_ms.saturating_sub(first_ms) <= NEW_WORD_TTL_MS {
+                        pending.insert((*word).into(), NewWord { pinyin: (*pinyin).into(), first_ms });
+                    }
+                    loaded += 1;
+                }
+            }
             _ => {}
         }
     }
+    anyhow::ensure!(!non_empty || loaded > 0, "没有可识别的学习记录");
     prune_learning(words, pairs);
     Ok(loaded)
 }
@@ -376,7 +536,7 @@ mod tests {
     #[test]
     fn heat_decays_with_half_life() {
         let e = HistoryEntry {
-            count: 4,
+            count: 4.0,
             last_used_ms: 0,
         };
         assert!((decayed(e, 0) - 4.0).abs() < 1e-9);
@@ -409,19 +569,23 @@ mod tests {
         words.insert(
             "种地".to_string(),
             HistoryEntry {
-                count: 3,
+                count: 3.125,
                 last_used_ms: 42,
             },
         );
         let mut pairs = UserPairs::default();
         pairs.learn("发", "给", 7);
-        save_history(&path, &words, &pairs).unwrap();
+        let at_ms = crate::now_ms();
+        let mut pending: HashMap<String, NewWord> = [("霜频阁".into(), NewWord { pinyin: "shuang pin ge".into(), first_ms: at_ms })].into();
+        write_atomic(&path, &history_text(&words, &pairs, &pending)).unwrap();
 
         let mut w2 = HashMap::new();
         let mut p2 = UserPairs::default();
-        assert_eq!(load_history(&path, &mut w2, &mut p2).unwrap(), 2);
-        assert_eq!(w2["种地"].count, 3);
-        assert_eq!(p2.get("发", "给").unwrap().count, 1);
+        let mut n2 = HashMap::new();
+        assert_eq!(load_history(&path, &mut w2, &mut p2, &mut n2).unwrap(), 3);
+        assert_eq!(w2["种地"].count, 3.125);
+        assert_eq!(p2.get("发", "给").unwrap().count, 1.0);
+        assert_eq!(n2, std::mem::take(&mut pending));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -433,28 +597,28 @@ mod tests {
         words.insert(
             "过期偶发词".to_string(),
             HistoryEntry {
-                count: 1,
+                count: 1.0,
                 last_used_ms: stale,
             },
         );
         words.insert(
             "高频旧词".to_string(),
             HistoryEntry {
-                count: 10,
+                count: 10.0,
                 last_used_ms: stale,
             },
         );
         words.insert(
             "新词A".to_string(),
             HistoryEntry {
-                count: 1,
+                count: 1.0,
                 last_used_ms: now,
             },
         );
         words.insert(
             "新词B".to_string(),
             HistoryEntry {
-                count: 3,
+                count: 3.0,
                 last_used_ms: now,
             },
         );
@@ -464,7 +628,7 @@ mod tests {
             "旧".to_string(),
             "搭配".to_string(),
             HistoryEntry {
-                count: 1,
+                count: 1.0,
                 last_used_ms: stale,
             },
         );
@@ -472,7 +636,7 @@ mod tests {
             "常".to_string(),
             "用".to_string(),
             HistoryEntry {
-                count: 4,
+                count: 4.0,
                 last_used_ms: now,
             },
         );
@@ -480,7 +644,7 @@ mod tests {
             "次".to_string(),
             "新".to_string(),
             HistoryEntry {
-                count: 1,
+                count: 1.0,
                 last_used_ms: now,
             },
         );

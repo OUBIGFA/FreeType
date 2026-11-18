@@ -9,9 +9,15 @@ fn valid_word(word: &str) -> bool {
     !word.trim().is_empty() && !word.contains(['\t', '\r', '\n'])
 }
 
+fn heat_value(heat: f64) -> Value {
+    let heat = (heat * 1000.0).round() / 1000.0;
+    if heat.fract() == 0.0 { json!(heat as u64) } else { json!(heat) }
+}
+
 fn newer(incoming: HistoryEntry, current: Option<HistoryEntry>) -> bool {
     current.map_or(true, |current| {
-        (incoming.last_used_ms, incoming.count) > (current.last_used_ms, current.count)
+        incoming.last_used_ms > current.last_used_ms
+            || (incoming.last_used_ms == current.last_used_ms && incoming.count > current.count)
     })
 }
 
@@ -33,11 +39,11 @@ impl Engine {
             crate::learn::pruned_history_and_pairs(&history, &pairs);
         let history: Vec<_> = pruned_history
             .into_iter()
-            .map(|(word, entry)| (word, entry.count, entry.last_used_ms))
+            .map(|(word, entry)| (word, heat_value(entry.count), entry.last_used_ms))
             .collect();
         let pairs: Vec<_> = pruned_pairs
             .into_iter()
-            .map(|(previous, word, entry)| (previous, word, entry.count, entry.last_used_ms))
+            .map(|(previous, word, entry)| (previous, word, heat_value(entry.count), entry.last_used_ms))
             .collect();
         Ok(serde_json::to_string(&json!({
             "format": "freetype-learning",
@@ -55,20 +61,21 @@ impl Engine {
         ensure!(data["version"] == 1, "不支持这个学习备份版本");
         let words: Vec<(String, String, f64)> = serde_json::from_value(data["words"].take())
             .context("学习备份中的词条格式不正确")?;
-        let entries: Vec<(String, u32, u64)> = serde_json::from_value(data["history"].take())
+        let entries: Vec<(String, f64, u64)> = serde_json::from_value(data["history"].take())
             .context("学习备份中的使用记录格式不正确")?;
-        let pairs: Vec<(String, String, u32, u64)> = serde_json::from_value(data["pairs"].take())
+        let pairs: Vec<(String, String, f64, u64)> = serde_json::from_value(data["pairs"].take())
             .context("学习备份中的搭配格式不正确")?;
         ensure!(
             words.iter().all(|(pinyin, word, _)| valid_word(pinyin) && valid_word(word)),
             "词条不能为空，也不能包含换行或制表符"
         );
         ensure!(
-            entries.iter().all(|(word, _, _)| valid_word(word)),
+            entries.iter().all(|(word, count, _)| valid_word(word) && (0.0..=f64::from(u32::MAX)).contains(count)),
             "使用记录中的词不正确"
         );
         ensure!(
-            pairs.iter().all(|(previous, word, _, _)| valid_word(previous) && valid_word(word)),
+            pairs.iter().all(|(previous, word, count, _)| valid_word(previous) && valid_word(word)
+                && (0.0..=f64::from(u32::MAX)).contains(count)),
             "搭配中的词不正确"
         );
 
@@ -97,6 +104,7 @@ impl Engine {
             }
         }
         crate::learn::prune_learning(&mut history, &mut current_pairs);
+        if changed > 0 { self.clear_learning_journal(); }
         Ok(changed)
     }
 }

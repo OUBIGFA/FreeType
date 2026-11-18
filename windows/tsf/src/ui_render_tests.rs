@@ -35,7 +35,8 @@ fn candidate_text_palette_is_readable_in_both_appearances() {
                 ("text", palette.text, palette.background),
             ] {
                 let ratio = contrast(text, background);
-                assert!(ratio >= 4.5, "{style} light={light} {name}: {ratio:.2}:1");
+                let minimum = if style == "green" && name == "selected" { 9.5 } else { 4.5 };
+                assert!(ratio >= minimum, "{style} light={light} {name}: {ratio:.2}:1");
             }
         }
     }
@@ -103,6 +104,9 @@ fn rendered(view: View, scale: f32) -> (Layout, Vec<u8>) {
             hovered: None,
             pressed: None,
             long_fired: false,
+            wheel_delta: 0,
+            painted_revision: 0,
+            anchor: None,
         };
         draw(dc, &data).unwrap();
         assert!(GdiFlush().as_bool());
@@ -446,7 +450,7 @@ fn candidate_window_updates_clicks_and_hides_on_a_private_desktop() {
         SendMessageW(window.hwnd, WM_LBUTTONDOWN, Some(WPARAM(0)), Some(point));
         SendMessageW(window.hwnd, WM_LBUTTONUP, Some(WPARAM(0)), Some(point));
     }
-    assert!(matches!(clicks.borrow().as_slice(), [Click::Select(1)]));
+    assert!(matches!(clicks.borrow().as_slice(), [Click::Candidate { action: CandidateAction::Select { index: 1 }, .. }]));
     window.update(&Frame::default(), None);
     assert!(!window.visible());
     set_click_handler(None);

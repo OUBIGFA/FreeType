@@ -20,13 +20,15 @@ use std::cell::RefCell;
 use std::mem::ManuallyDrop;
 use std::rc::{Rc, Weak};
 
-use freetype_protocol::{Command, Frame, Key, Mode, Request};
+use freetype_protocol::{Command, Frame, Key, Mode, PairEdit, Request};
+use unicode_segmentation::UnicodeSegmentation;
 use windows::core::{implement, IUnknownImpl, Interface, Ref, Result, BOOL, GUID};
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::MapWindowPoints;
 use windows::Win32::System::SystemInformation::GetTickCount64;
 use windows::Win32::System::Threading::GetCurrentThreadId;
-use windows::Win32::System::Variant::{VARIANT, VT_I4};
+use windows::Win32::System::Com::CoTaskMemFree;
+use windows::Win32::System::Variant::{VariantClear, VARIANT, VT_I4, VT_UNKNOWN};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, GetKeyState, GetKeyboardState, SendInput, ToUnicode, INPUT, INPUT_0, INPUT_KEYBOARD,
     KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, VK_LEFT,
@@ -38,6 +40,8 @@ use windows::Win32::UI::TextServices::{
     ITfTextInputProcessorEx, ITfTextInputProcessorEx_Impl, ITfTextInputProcessor_Impl, ITfTextLayoutSink,
     ITfTextLayoutSink_Impl, ITfThreadMgr, ITfThreadMgrEventSink, ITfThreadMgrEventSink_Impl, ITfContextView,
     TfLayoutCode, GUID_COMPARTMENT_EMPTYCONTEXT, GUID_COMPARTMENT_KEYBOARD_DISABLED,
+    GUID_PROP_INPUTSCOPE, ITfInputScope, IS_PASSWORD, IS_NUMERIC_PASSWORD, IS_NUMERIC_PIN,
+    IS_ALPHANUMERIC_PIN, IS_ALPHANUMERIC_PIN_SET,
     GUID_COMPARTMENT_KEYBOARD_OPENCLOSE, INSERT_TEXT_AT_SELECTION_FLAGS, TF_AE_NONE, TF_ANCHOR_END,
     TF_ANCHOR_START, TF_DEFAULT_SELECTION, TF_ES_ASYNCDONTCARE, TF_ES_READ, TF_ES_READWRITE, TF_ES_SYNC,
     TF_IAS_QUERYONLY, TF_SELECTION, TF_SELECTIONSTYLE,
@@ -53,8 +57,26 @@ use crate::langbar::{self, ButtonClick, ButtonHandle};
 use crate::ui::{self, CandidateWindow, Click};
 use crate::DllRef;
 
+#[path = "pair.rs"]
+mod pair;
+
 /// 光标前读多少个字。
 const BEFORE_CHARS: i32 = 20;
+
+struct CommitWatch {
+    context: ITfContext,
+    before: String,
+    shortened: String,
+    armed: bool,
+}
+
+struct SpaceWatch {
+    context: ITfContext,
+    revision: u64,
+    expected: String,
+    pressed_ms: u64,
+    released: bool,
+}
 
 struct State {
     /// 激活代次：停用后排队中的编辑会话不能继续操作文档或报告旧焦点。
@@ -73,6 +95,12 @@ struct State {
     shift: ShiftTap,
     /// 成对标点上屏后还没挪的光标（等用户松开 Shift）。
     caret_move: Option<keys::CaretMove>,
+    sensitive: bool,
+    undo: Option<CommitWatch>,
+    predict_double_space: bool,
+    space: Option<SpaceWatch>,
+    pairs: Vec<pair::Pair>,
+    pair_enabled: bool,
     window: Option<CandidateWindow>,
     caret: Option<RECT>,
     /// 上一次拿到的光标位置（应用一时给不出位置时用）。
@@ -124,6 +152,12 @@ impl TextService {
                 client: Client::new(),
                 shift: ShiftTap::default(),
                 caret_move: None,
+                sensitive: false,
+                undo: None,
+                predict_double_space: false,
+                space: None,
+                pairs: Vec::new(),
+                pair_enabled: false,
                 window: None,
                 caret: None,
                 last_caret: None,
@@ -304,6 +338,78 @@ fn disabled(context: Option<&ITfContext>) -> bool {
         || compartment_value(&mgr, &GUID_COMPARTMENT_EMPTYCONTEXT).is_some_and(|v| v != 0)
 }
 
+/// 输入范围由宿主声明；读取密码、数字密码及各类 PIN，只读取范围，不读取文字。
+fn sensitive_scope(context: &ITfContext, ec: u32) -> bool {
+    unsafe {
+        let Some(selection) = selection_range(context, ec) else { return false; };
+        let Ok(property) = context.GetProperty(&GUID_PROP_INPUTSCOPE) else { return false; };
+        let Ok(mut value) = property.GetValue(ec, &selection) else { return false; };
+        let inner = &*value.Anonymous.Anonymous;
+        let scopes = if inner.vt == VT_UNKNOWN {
+            inner.Anonymous.punkVal.as_ref().and_then(|value| value.cast::<ITfInputScope>().ok())
+        } else { None };
+        let _ = VariantClear(&mut value);
+        let Some(scopes) = scopes else { return false; };
+        let mut data = std::ptr::null_mut();
+        let mut count = 0;
+        if scopes.GetInputScopes(&mut data, &mut count).is_err() || data.is_null() { return false; }
+        let sensitive = std::slice::from_raw_parts(data, count as usize).iter().any(|scope|
+            matches!(*scope, IS_PASSWORD | IS_NUMERIC_PASSWORD | IS_NUMERIC_PIN | IS_ALPHANUMERIC_PIN | IS_ALPHANUMERIC_PIN_SET));
+        CoTaskMemFree(Some(data.cast()));
+        sensitive
+    }
+}
+
+fn set_sensitive(state: &Rc<RefCell<State>>, active: bool) {
+    if std::mem::replace(&mut state.borrow_mut().sensitive, active) == active { return; }
+    if let Some(frame) = call(state, &Request::SensitiveFocus { active }) {
+        note_frame(state, &frame);
+    }
+    if active {
+        let mut state = state.borrow_mut();
+        state.undo = None;
+        state.space = None;
+        state.pairs.clear();
+        if let Some(window) = &state.window { window.hide(); }
+    }
+}
+
+fn check_sensitive(state: &Rc<RefCell<State>>, context: Option<&ITfContext>) -> bool {
+    if disabled(context) {
+        set_sensitive(state, true);
+        return true;
+    }
+    if let Some(context) = context {
+        let client_id = state.borrow().client_id;
+        let (flag, input) = (Rc::new(std::cell::Cell::new(None)), context.clone());
+        let out = flag.clone();
+        edit_with(context, client_id, TF_ES_SYNC | TF_ES_READ, move |ec| {
+            out.set(Some(sensitive_scope(&input, ec)));
+            Ok(())
+        });
+        if let Some(active) = flag.get() { set_sensitive(state, active); }
+    }
+    state.borrow().sensitive
+}
+
+fn replace_verified_space(state: &Rc<RefCell<State>>, context: &ITfContext, ec: u32, text: &[u16]) -> Result<ITfRange> {
+    let watch = state.borrow_mut().space.take();
+    let failed = || windows::core::Error::from_hresult(windows::Win32::Foundation::E_FAIL);
+    let watch = watch.filter(|watch| same_object(&watch.context, context)).ok_or_else(failed)?;
+    let selection = selection_range(context, ec).ok_or_else(failed)?;
+    unsafe {
+        if !selection.IsEmpty(ec)?.as_bool() || !before_text(context, ec).is_some_and(|before| before.ends_with(&watch.expected)) {
+            return Err(failed());
+        }
+        let mut moved = 0;
+        selection.ShiftStart(ec, -1, &mut moved, std::ptr::null())?;
+        if moved != -1 { return Err(failed()); }
+        selection.SetText(ec, 0, text)?;
+        selection.Collapse(ec, TF_ANCHOR_END)?;
+    }
+    Ok(selection)
+}
+
 /// 把系统的「键盘打开」设成打开（中英文由 FreeType 自己管）。
 fn set_keyboard_open(thread_mgr: &ITfThreadMgr, client_id: u32) {
     let Ok(mgr) = thread_mgr.cast::<ITfCompartmentMgr>() else {
@@ -367,7 +473,9 @@ fn apply_document(state: &Rc<RefCell<State>>, context: &ITfContext, frame: &Fram
         unsafe {
             if let Some(text) = &frame.commit {
                 let text = wide(text);
-                let range = if let Some(comp) = composition.take() {
+                let range = if frame.replace_space {
+                    replace_verified_space(state, context, ec, &text)?
+                } else if let Some(comp) = composition.take() {
                     let range = comp.GetRange()?;
                     range.SetText(ec, 0, &text)?;
                     range.Collapse(ec, TF_ANCHOR_END)?;
@@ -380,6 +488,23 @@ fn apply_document(state: &Rc<RefCell<State>>, context: &ITfContext, frame: &Fram
                     range
                 };
                 set_selection(context, ec, &range)?;
+                if frame.caret_back == 1 && frame.pair_enabled {
+                    if let Some(pair) = frame.commit.as_ref().and_then(|text| pair::Pair::after_commit(context, &range, ec, text)) {
+                        let mut s = state.borrow_mut();
+                        if s.pairs.len() == 16 { s.pairs.remove(0); }
+                        s.pairs.push(pair);
+                    }
+                }
+                // Record a short, transient suffix only after TSF accepted the commit.
+                if frame.undo_learning && frame.caret_back == 0 {
+                    let watch = before_text(context, ec).and_then(|before| {
+                        let (start, _) = before.grapheme_indices(true).next_back()?;
+                        (start > 0).then(|| CommitWatch {
+                            context: context.clone(), shortened: before[..start].to_owned(), before, armed: false,
+                        })
+                    });
+                    state.borrow_mut().undo = watch;
+                }
             }
             if !frame.preedit.is_empty() {
                 let comp = match composition.take() {
@@ -392,11 +517,12 @@ fn apply_document(state: &Rc<RefCell<State>>, context: &ITfContext, frame: &Fram
                     }
                 };
                 let range = comp.GetRange()?;
-                range.SetText(ec, 0, &wide(&frame.preedit))?;
+                let preedit = frame.inline_preedit.as_deref().unwrap_or(&frame.preedit);
+                range.SetText(ec, 0, &wide(preedit))?;
                 let caret = range.Clone()?;
                 caret.Collapse(ec, TF_ANCHOR_START)?;
                 let mut moved = 0;
-                let shift = frame.preedit_cursor as i32;
+                let shift = if frame.inline_preedit.is_some() { frame.inline_cursor } else { frame.preedit_cursor } as i32;
                 caret.ShiftEnd(ec, shift, &mut moved, std::ptr::null())?;
                 caret.ShiftStart(ec, shift, &mut moved, std::ptr::null())?;
                 set_selection(context, ec, &caret)?;
@@ -409,6 +535,10 @@ fn apply_document(state: &Rc<RefCell<State>>, context: &ITfContext, frame: &Fram
                 let range = comp.GetRange()?;
                 range.SetText(ec, 0, &[])?;
                 comp.EndComposition(ec)?;
+            }
+            if let Some(action) = frame.pair_edit {
+                let pair = state.borrow_mut().pairs.pop();
+                if let Some(pair) = pair { pair.apply(context, ec, action)?; }
             }
             Ok(if wants_window { selection_rect(context, ec) } else { None })
         }
@@ -435,6 +565,10 @@ fn note_frame(state: &Rc<RefCell<State>>, frame: &Frame) {
     note_preview(state, frame);
     let mut s = state.borrow_mut();
     s.predicting = frame.predict && !frame.candidates.is_empty();
+    s.predict_double_space = s.predicting && frame.predict_double_space;
+    if !s.predict_double_space && !frame.replace_space { s.space = None; }
+    s.pair_enabled = frame.pair_enabled;
+    if !frame.pair_enabled { s.pairs.clear(); }
     s.busy = !s.predicting && (!frame.preedit.is_empty() || !frame.candidates.is_empty() || frame.title.is_some());
 }
 
@@ -498,7 +632,14 @@ fn apply(state: &Rc<RefCell<State>>, context: Option<&ITfContext>, frame: Frame,
     let shared = Rc::new(frame);
     if sync {
         let (state2, context2, frame2) = (state.clone(), context.clone(), shared.clone());
-        edit(context, client_id, true, move |ec| apply_document(&state2, &context2, &frame2, ec));
+        edit(context, client_id, true, move |ec| {
+            let result = apply_document(&state2, &context2, &frame2, ec);
+            if let Err(error) = &result {
+                crate::log::write("更新文档失败", &error.to_string());
+                if frame2.undo_learning { let _ = call(&state2, &Request::UndoCommitLearning); }
+            }
+            result
+        });
         show_window(state, &shared);
         caret_back(state, &shared);
     } else {
@@ -600,6 +741,93 @@ fn read_before(state: &Rc<RefCell<State>>, context: &ITfContext) -> Option<Strin
     text
 }
 
+fn watch_backspace(state: &Rc<RefCell<State>>, context: Option<&ITfContext>, vk: u16) {
+    if vk != 0x08 || moment().other_modifiers || unsafe { GetAsyncKeyState(0x10) } < 0 || composing(state) {
+        state.borrow_mut().undo = None;
+        return;
+    }
+    let Some(context) = context else { return; };
+    let before = {
+        let state = state.borrow();
+        let Some(watch) = state.undo.as_ref().filter(|watch| same_object(&watch.context, context)) else { return; };
+        watch.before.clone()
+    };
+    let valid = read_before(state, context).as_deref() == Some(before.as_str());
+    let mut state = state.borrow_mut();
+    if valid {
+        if let Some(watch) = state.undo.as_mut() { watch.armed = true; }
+    } else {
+        state.undo = None;
+    }
+}
+
+fn confirm_backspace(state: &Rc<RefCell<State>>, context: Option<&ITfContext>) {
+    let Some(context) = context.filter(|context| !disabled(Some(context))) else { return; };
+    let expected = {
+        let state = state.borrow();
+        let Some(watch) = state.undo.as_ref().filter(|watch| watch.armed && same_object(&watch.context, context)) else { return; };
+        watch.shortened.clone()
+    };
+    if read_before(state, context).is_some_and(|before| before.ends_with(&expected)) {
+        state.borrow_mut().undo = None;
+        let _ = call(state, &Request::UndoCommitLearning);
+    }
+}
+
+fn verified_pair_key(state: &Rc<RefCell<State>>, context: Option<&ITfContext>, key: Key) -> Option<PairEdit> {
+    let context = context?;
+    let (action, composition, client_id) = {
+        let s = state.borrow();
+        if !s.pair_enabled || (s.busy && s.composition.is_none()) { return None; }
+        let action = s.pairs.last()?.for_key(key, s.composition.is_some())?;
+        (action, s.composition.clone(), s.client_id)
+    };
+    let accepted = Rc::new(std::cell::Cell::new(false));
+    let (out, state, doc) = (accepted.clone(), state.clone(), context.clone());
+    edit_with(context, client_id, TF_ES_SYNC | TF_ES_READ, move |ec| {
+        let caret = if let Some(comp) = composition {
+            unsafe { comp.GetRange().and_then(|range| { range.Collapse(ec, TF_ANCHOR_END)?; Ok(range) }).ok() }
+        } else { selection_range(&doc, ec) };
+        let state = state.borrow();
+        if let (Some(caret), Some(last)) = (caret, state.pairs.last()) {
+            out.set(last.permits(&doc, ec, &caret, action));
+        }
+        Ok(())
+    });
+    accepted.get().then_some(action)
+}
+
+/// Preview and real key-down both see the same frame. Only a release between them can arm a second tap.
+fn detect_double_space(state: &Rc<RefCell<State>>, context: Option<&ITfContext>, key: Key, lparam: LPARAM) -> Key {
+    use freetype_protocol::{keysym, modifier};
+    let revision = shown_revision(state);
+    let Some(context) = context else { return key; };
+    if key.keysym != 0x20 || key.modifiers & (modifier::SHIFT | modifier::CTRL | modifier::ALT | modifier::SUPER) != 0
+        || lparam.0 & (1 << 30) != 0 || revision == 0 || !state.borrow().predict_double_space {
+        return key;
+    }
+    let ms = now_ms();
+    let wait = u64::from(unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime() }).clamp(200, 700);
+    {
+        let held = state.borrow();
+        if held.space.as_ref().is_some_and(|watch| !watch.released && watch.revision == revision) {
+            return key;
+        }
+    }
+    let Some(before) = read_before(state, context) else { return key; };
+    let mut state = state.borrow_mut();
+    if state.space.as_ref().is_some_and(|watch| watch.released && watch.revision == revision
+        && ms.saturating_sub(watch.pressed_ms) <= wait && same_object(&watch.context, context)
+        && before.ends_with(&watch.expected)) {
+        return Key { keysym: keysym::SPACE_DOUBLE, ..key };
+    }
+    // Compare a suffix that stays inside the TSF read limit even after one extra character.
+    let start = before.char_indices().rev().nth(7).map_or(0, |(i, _)| i);
+    let expected = format!("{} ", &before[start..]);
+    state.space = Some(SpaceWatch { context: context.clone(), revision, expected, pressed_ms: ms, released: false });
+    key
+}
+
 /// 虚拟键翻成键码；翻不出来（非 ASCII 字符、功能键）返回 None。
 fn translate(wparam: WPARAM, lparam: LPARAM, test: bool) -> Option<Key> {
     let vk = wparam.0 as u16;
@@ -628,6 +856,10 @@ fn translate(wparam: WPARAM, lparam: LPARAM, test: bool) -> Option<Key> {
 
 fn call(state: &Rc<RefCell<State>>, request: &Request) -> Option<Frame> {
     state.borrow_mut().client.call(request)?.frame
+}
+
+fn shown_revision(state: &Rc<RefCell<State>>) -> u64 {
+    state.borrow().window.as_ref().map_or(0, CandidateWindow::painted_revision)
 }
 
 fn composing(state: &Rc<RefCell<State>>) -> bool {
@@ -661,9 +893,8 @@ fn on_click(state: &Weak<RefCell<State>>, click: Click) {
         return;
     };
     let request = match click {
-        Click::Select(index) => Request::Select { index },
-        Click::Page(next) => Request::Page { next },
-        Click::Forget(index) => Request::Forget { index },
+        Click::Candidate { revision, action } => Request::CandidateAction { revision, action },
+        Click::PinChoices { .. } => return,
         Click::Dismiss => Request::Reset { commit: false },
         Click::Settings => Request::Command {
             command: Command::OpenSettings,
@@ -782,7 +1013,10 @@ fn on_focus(state: &Rc<RefCell<State>>, focus: Option<&ITfDocumentMgr>) {
     {
         let mut s = state.borrow_mut();
         s.shift.cancel();
+        s.space = None;
+        s.pairs.clear();
         s.caret_move = None;
+        s.undo = None;
         s.last_caret = None;
         if let Some(window) = &s.window {
             window.hide();
@@ -805,6 +1039,7 @@ fn on_focus(state: &Rc<RefCell<State>>, focus: Option<&ITfDocumentMgr>) {
         set_keyboard_open(thread_mgr, client_id);
     }
     if disabled(Some(&context)) {
+        set_sensitive(state, true);
         return;
     }
     // 读光标前的字和光标位置要编辑会话；这里不能同步要，异步做完再告诉服务进程
@@ -812,6 +1047,10 @@ fn on_focus(state: &Rc<RefCell<State>>, focus: Option<&ITfDocumentMgr>) {
     let generation = state.borrow().generation;
     edit_with(&context, client_id, TF_ES_ASYNCDONTCARE | TF_ES_READ, move |ec| {
         if state2.borrow().generation != generation { return Ok(()); }
+        if !state2.borrow().context.as_ref().is_some_and(|current| same_object(current, &context2)) { return Ok(()); }
+        let sensitive = sensitive_scope(&context2, ec);
+        set_sensitive(&state2, sensitive);
+        if sensitive { return Ok(()); }
         let before = before_text(&context2, ec);
         let caret = selection_rect(&context2, ec);
         // 大写锁定可能在别的窗口里开关过：先对齐，下面拿到的中英文状态才是对的
@@ -926,6 +1165,7 @@ fn note_key_down(state: &Rc<RefCell<State>>, wparam: WPARAM, lparam: LPARAM) {
     let repeat = lparam.0 & (1 << 30) != 0;
     let mut s = state.borrow_mut();
     s.shift.key_down(vk, moment(), repeat);
+    if vk != 0x20 || repeat { s.space = None; }
     if !keys::is_modifier(vk) {
         s.caret_move = None;
     }
@@ -942,10 +1182,12 @@ fn note_key_down(state: &Rc<RefCell<State>>, wparam: WPARAM, lparam: LPARAM) {
 ///
 /// 成对标点还等着挪光标的话，修饰键一松开就去挪（见 [`caret_tick`]）。
 fn key_released(state: &Rc<RefCell<State>>, context: Option<&ITfContext>, wparam: WPARAM, lparam: LPARAM) {
-    if own_input() {
-        return;
-    }
+    if own_input() { return; }
     let vk = wparam.0 as u16;
+    if vk == 0x20 {
+        if let Some(watch) = state.borrow_mut().space.as_mut() { watch.released = true; }
+    }
+    if vk == 0x08 { confirm_backspace(state, context); }
     if keys::is_modifier(vk) && state.borrow().caret_move.is_some() {
         caret_tick(state);
     }
@@ -953,9 +1195,11 @@ fn key_released(state: &Rc<RefCell<State>>, context: Option<&ITfContext>, wparam
         caps_changed(state, context);
         return;
     }
-    if !state.borrow_mut().shift.key_up(vk, moment()) || disabled(context) {
+    let shift = state.borrow_mut().shift.key_up(vk, moment());
+    if !shift || check_sensitive(state, context) {
         return;
     }
+    state.borrow_mut().undo = None;
     let scan = ((lparam.0 >> 16) & 0xff) as u32;
     let request = Request::ToggleMode {
         shift: Some(keys::shift_side(vk, scan).name().to_string()),
@@ -992,14 +1236,18 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         if vk == keys::VK_CAPITAL {
             caps_changed(&self.state, pic.as_ref());
         }
-        if keys::is_modifier(vk) || disabled(pic.as_ref()) {
+        if keys::is_modifier(vk) || check_sensitive(&self.state, pic.as_ref()) {
             return Ok(false.into());
         }
+        watch_backspace(&self.state, pic.as_ref(), vk);
         let Some(key) = translate(wparam, lparam, true) else {
             // 组字时不认识的键也吃掉，免得漏给应用
             return Ok(composing(&self.state).into());
         };
-        let frame = call(&self.state, &Request::Key { key, before: None });
+        if verified_pair_key(&self.state, pic.as_ref(), key).is_some() { return Ok(true.into()); }
+        let key = detect_double_space(&self.state, pic.as_ref(), key, lparam);
+        let revision = shown_revision(&self.state);
+        let frame = call(&self.state, &Request::PhysicalKey { key, before: None, scan: 0, shown_revision: Some(revision) });
         if let Some(frame) = &frame {
             note_preview(&self.state, frame);
         }
@@ -1015,9 +1263,10 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         if vk == keys::VK_CAPITAL {
             caps_changed(&self.state, pic.as_ref());
         }
-        if keys::is_modifier(vk) || disabled(pic.as_ref()) {
+        if keys::is_modifier(vk) || check_sensitive(&self.state, pic.as_ref()) {
             return Ok(false.into());
         }
+        watch_backspace(&self.state, pic.as_ref(), vk);
         let context = pic.ok()?.clone();
         self.state.borrow_mut().context = Some(context.clone());
         let Some(key) = translate(wparam, lparam, false) else {
@@ -1030,8 +1279,20 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
             let s = self.state.borrow();
             !composing(&self.state) && (s.mode == Mode::Chinese || s.want_before)
         };
-        let before = if wants_before { read_before(&self.state, &context) } else { None };
-        let frame = match call(&self.state, &Request::Key { key, before }) {
+        if let Some(action) = verified_pair_key(&self.state, Some(&context), key) {
+            if let Some(mut frame) = call(&self.state, &Request::ClosePair) {
+                frame.pair_edit = Some(action);
+                apply(&self.state, Some(&context), frame, true);
+                return Ok(true.into());
+            }
+        }
+        let key = detect_double_space(&self.state, Some(&context), key, lparam);
+        let before = if wants_before && key.keysym != freetype_protocol::keysym::SPACE_DOUBLE {
+            read_before(&self.state, &context)
+        } else { None };
+        let scan = ((lparam.0 >> 16) & 0x1ff) as u16;
+        let revision = shown_revision(&self.state);
+        let frame = match call(&self.state, &Request::PhysicalKey { key, before, scan, shown_revision: Some(revision) }) {
             Some(frame) => frame,
             None => {
                 // 服务进程没了：结束编辑区，键交给应用

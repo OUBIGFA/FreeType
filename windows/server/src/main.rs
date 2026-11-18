@@ -79,6 +79,7 @@ mod app {
         let marker = args.iter().position(|arg| arg == "--marker")
             .and_then(|index| args.get(index + 1)).map(PathBuf::from);
         match args.first().map(String::as_str) {
+            Some("--serve") => return serve(),
             Some("--register-tsf") => {
                 let bin = args
                     .get(1)
@@ -99,13 +100,15 @@ mod app {
             Some("--start-and-check") => return report(setup::start_and_check(), "启动并核对新版服务"),
             Some("--stop") => {
                 let result = pipe_path().and_then(|name| {
-                    pipe::request(&name, &Request::Shutdown)
-                        .map(|_| ())
-                        .map_err(|e| e.to_string())
+                    match pipe::request(&name, &Request::Shutdown) {
+                        Ok(reply) if reply.ok => Ok(()),
+                        Ok(reply) => Err(reply.error.unwrap_or_else(|| "服务未完成保存".into())),
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                        Err(error) => Err(error.to_string()),
+                    }
                 });
-                // 没在跑也算成功：安装器在升级前调用，不该因此失败
-                let _ = result;
-                return 0;
+                if result.is_ok() { stop_watchdog(); }
+                return report(result, "停止服务");
             }
             Some(other) if other.starts_with("--") => {
                 log(&format!("不认识的参数 {other}"));
@@ -113,7 +116,49 @@ mod app {
             }
             _ => {}
         }
-        serve()
+        if instance_suffix().is_empty() { supervise() } else { serve() }
+    }
+
+    fn stop_watchdog() {
+        use windows::Win32::Foundation::CloseHandle;
+        use windows::Win32::System::Threading::{OpenEventW, SetEvent, EVENT_MODIFY_STATE};
+        let name = windows::core::HSTRING::from(format!(r"Local\FreeType.StopWatchdog{}", instance_suffix()));
+        unsafe {
+            if let Ok(event) = OpenEventW(EVENT_MODIFY_STATE, false, &name) {
+                let _ = SetEvent(event);
+                let _ = CloseHandle(event);
+            }
+        }
+    }
+
+    fn supervise() -> i32 {
+        use std::os::windows::process::CommandExt;
+        use std::time::Instant;
+        if !pipe::single_watchdog() { return 0; }
+        let exe = match std::env::current_exe() { Ok(exe) => exe, Err(error) => return report(Err(error.to_string()), "定位服务") };
+        use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+        use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
+        let name = windows::core::HSTRING::from(format!(r"Local\FreeType.StopWatchdog{}", instance_suffix()));
+        let stop = match unsafe { CreateEventW(None, true, false, &name) } {
+            Ok(event) => event,
+            Err(error) => return report(Err(error.to_string()), "创建服务停机事件"),
+        };
+        let mut delay = 1u64;
+        loop {
+            if unsafe { WaitForSingleObject(stop, 0) } == WAIT_OBJECT_0 { break; }
+            let started = Instant::now();
+            let status = std::process::Command::new(&exe).arg("--serve").creation_flags(0x08000000).status();
+            match status {
+                Ok(exit) if exit.success() => break, // 正常退出/升级后不要再拉起。
+                Ok(exit) => log(&format!("服务意外退出：{exit}")),
+                Err(error) => log(&format!("无法启动服务：{error}")),
+            }
+            if started.elapsed() >= Duration::from_secs(120) { delay = 1; }
+            if unsafe { WaitForSingleObject(stop, (delay * 1000) as u32) } == WAIT_OBJECT_0 { break; }
+            delay = (delay * 2).min(60);
+        }
+        unsafe { let _ = CloseHandle(stop); }
+        0
     }
 
     fn serve() -> i32 {
@@ -194,6 +239,10 @@ mod app {
                         BarEvent::ToggleTraditional => Request::Command {
                             command: Command::ToggleTraditional,
                         },
+                        BarEvent::EmojiPanel => {
+                            desktop::open_emoji_panel();
+                            continue;
+                        }
                         BarEvent::OpenSettings => Request::Command { command: Command::OpenSettings },
                         BarEvent::HideBar => Request::Command {
                             command: Command::ToggleStatusBar,
@@ -211,6 +260,7 @@ mod app {
                 Ok(Event::Pipe(Message::Request(id, request, reply))) => {
                     let shutdown = request == Request::Shutdown;
                     let response = host.handle(id, request);
+                    let should_exit = shutdown && response.ok;
                     let _ = reply.send(response);
                     if let Some(lexicon) = host.take_lexicon_change() {
                         generation += 1;
@@ -219,7 +269,7 @@ mod app {
                         );
                         spawn_loader(events.clone(), generation, lexicon);
                     }
-                    if shutdown {
+                    if should_exit {
                         host.save_if_dirty();
                         log("收到退出请求");
                         // 让管道线程把应答写出去

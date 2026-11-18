@@ -111,15 +111,21 @@ fn client_can_manage(pipe: HANDLE, owner: &str) -> io::Result<bool> {
 
 fn input_request(request: &Request) -> bool {
     matches!(request,
-        Request::Hello { .. } | Request::Key { .. } | Request::Select { .. } | Request::Page { .. }
+        Request::Hello { .. } | Request::Key { .. } | Request::PhysicalKey { .. }
+        | Request::CandidateAction { .. } | Request::ClosePair | Request::SensitiveFocus { .. }
+        | Request::UndoCommitLearning | Request::Select { .. } | Request::Page { .. }
         | Request::Forget { .. } | Request::Reset { .. } | Request::Focus { .. }
         | Request::ToggleMode { .. } | Request::Command { .. } | Request::CapsLock { .. } | Request::Status)
 }
 
 /// 同一登录会话里只跑一个服务进程。返回 false 表示已经有一个了。
-pub fn single_instance() -> bool {
+pub fn single_instance() -> bool { single_process("Server") }
+
+pub fn single_watchdog() -> bool { single_process("Watchdog") }
+
+fn single_process(role: &str) -> bool {
     unsafe {
-        let name = format!(r"Local\FreeType.Server{}", crate::instance_suffix());
+        let name = format!(r"Local\FreeType.{role}{}", crate::instance_suffix());
         match CreateMutexW(None, true, &HSTRING::from(name)) {
             // 句柄故意不关：进程退出时系统收回
             Ok(_) => GetLastError() != ERROR_ALREADY_EXISTS,
@@ -295,7 +301,15 @@ pub fn request_with_server(name: &str, request: &Request) -> io::Result<(Respons
             OPEN_EXISTING,
             FILE_FLAGS_AND_ATTRIBUTES(0),
             None,
-        )?
+        ).map_err(|error| {
+            // windows-result converts HRESULT directly to an I/O code. Preserve the
+            // missing-pipe case so stopping an already stopped service is idempotent.
+            if error.code() == windows::core::HRESULT::from_win32(2) {
+                io::Error::from(io::ErrorKind::NotFound)
+            } else {
+                io::Error::from(error)
+            }
+        })?
     };
     struct Handle(HANDLE);
     impl Drop for Handle {

@@ -2,12 +2,16 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -34,6 +38,7 @@ type updates struct {
 	updater            *selfupdate.Updater
 	mu                 sync.Mutex
 	operation          sync.Mutex
+	restoreOnce        sync.Once
 	state              updateState
 	release            *selfupdate.Release
 	automatic          bool
@@ -64,17 +69,30 @@ func newUpdates(dataDir, current string, client *http.Client, apiBase string) (*
 		directory: filepath.Join(dataDir, "updates"), current: current, source: source, updater: updater,
 		state: updateState{Message: "点击“检查更新”查看可用版本"}, launch: launchUpdateInstaller,
 	}
-	if pending, err := manager.readPending(); err == nil {
-		manager.state.Version = pending.Version
-		if err := manager.verifyPending(); err == nil {
-			manager.state.Ready, manager.state.Message = true, "更新已下载，可立即更新；开启自动更新后，下次启动时安装"
-		} else {
-			manager.state.Message = "已下载的更新未通过校验，请重新检查并下载"
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		manager.state.Message = "无法读取待更新记录，请重新检查并下载"
-	}
 	return manager, nil
+}
+
+// 在后台恢复下载，避免启动托盘和设置窗口时同步读取整份安装器。
+func (manager *updates) restorePending() {
+	manager.restoreOnce.Do(func() {
+		pending, err := manager.readPending()
+		if errors.Is(err, os.ErrNotExist) {
+			return
+		}
+		if err != nil {
+			manager.change(func(s *updateState) { s.Message = "无法读取待更新记录，请重新检查并下载" })
+			return
+		}
+		err = manager.verifyInstaller(pending)
+		manager.change(func(s *updateState) {
+			s.Version, s.Ready = pending.Version, err == nil
+			if s.Ready {
+				s.Message = "更新已下载，可立即更新；开启自动更新后，下次启动时安装"
+			} else {
+				s.Message = "已下载的更新未通过校验，请重新检查并下载"
+			}
+		})
+	})
 }
 
 func (manager *updates) installerPath() string {
@@ -114,6 +132,7 @@ func (manager *updates) begin(message string) bool {
 }
 
 func (manager *updates) check(ctx context.Context) error {
+	manager.restorePending()
 	manager.operation.Lock()
 	defer manager.operation.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -227,12 +246,18 @@ func (manager *updates) readPending() (pending pendingUpdate, err error) {
 	if err != nil {
 		return pending, err
 	}
-	if err = json.Unmarshal(data, &pending); err != nil {
+	// Only the two-field stable format can be reused without checking GitHub.
+	var fields map[string]string
+	if err = json.Unmarshal(data, &fields); err != nil {
 		return pending, err
 	}
+	if len(fields) != 2 {
+		return pending, errors.New("待更新记录格式无效")
+	}
+	pending = pendingUpdate{Version: fields["version"], SHA256: fields["sha256"]}
 	version, err := semver.StrictNewVersion(pending.Version)
-	if err != nil {
-		return pending, err
+	if err != nil || version.Prerelease() != "" || version.Metadata() != "" {
+		return pending, errors.New("待更新版本格式无效")
 	}
 	current, _ := semver.NewVersion(manager.current)
 	// NSIS keeps this record if it copied the new app but TSF registration
@@ -251,11 +276,23 @@ func (manager *updates) verifyPending() error {
 	if err != nil {
 		return err
 	}
-	data, err := os.ReadFile(manager.installerPath())
+	return manager.verifyInstaller(pending)
+}
+
+func (manager *updates) verifyInstaller(pending pendingUpdate) error {
+	file, err := os.Open(manager.installerPath())
 	if err != nil {
 		return err
 	}
-	return (&selfupdate.SHAValidator{}).Validate("FreeType-Update-Setup.exe", data, []byte(pending.SHA256))
+	defer file.Close()
+	digest := sha256.New()
+	if _, err := io.Copy(digest, file); err != nil {
+		return err
+	}
+	if !strings.EqualFold(hex.EncodeToString(digest.Sum(nil)), pending.SHA256) {
+		return errors.New("安装器 SHA-256 与下载记录不符")
+	}
+	return nil
 }
 
 func (manager *updates) install(directory string) error {
@@ -335,6 +372,7 @@ func (manager *updates) automaticCheck(generation uint64) {
 func (manager *updates) close() { manager.setAutomatic(false) }
 
 func (manager *updates) updateNow(directory string) error {
+	manager.restorePending()
 	if !manager.snapshot().Ready {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 		defer cancel()

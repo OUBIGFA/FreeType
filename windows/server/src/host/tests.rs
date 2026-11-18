@@ -318,7 +318,9 @@ fn test_then_real_key_uses_one_result() {
         )
         .frame
         .unwrap();
-    assert_eq!(real, tested);
+    assert_eq!(tested.page_revision, 0, "按键预判不能发布候选页");
+    assert_ne!(real.page_revision, 0);
+    assert_eq!(Frame { page_revision: 0, ..real }, tested);
     assert_eq!(press(&mut host, 'i' as u32).candidates[0], "你");
     cleanup(&host);
 }
@@ -1404,6 +1406,24 @@ fn settings_backup_rejects_invalid_records_before_changing_any_data() {
 }
 
 #[test]
+fn restoring_learning_drains_the_previous_background_save() {
+    let mut host = learning_host("restore-pending-save");
+    let backup = host.data_dir().join("saved.json");
+    assert!(host.handle(1, learning_request("export_settings", &backup)).ok);
+    let path = host.store.user_dict_path();
+    let old_path = path.clone();
+    host.saver.enqueue("learning", Box::new(move || {
+        // 模拟被磁盘延迟的旧快照。恢复必须在该写入结束后才替换文件。
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        std::fs::write(old_path, "old snapshot").map_err(|error| error.to_string())
+    })).unwrap();
+    assert!(host.handle(1, learning_request("import_settings", &backup)).ok);
+    host.saver.result(true).unwrap();
+    assert_ne!(std::fs::read_to_string(path).unwrap(), "old snapshot");
+    cleanup(&host);
+}
+
+#[test]
 fn settings_backup_io_failures_preserve_current_profile() {
     let mut host = learning_host("settings-io");
     let path = host.data_dir().join("all.json");
@@ -1478,11 +1498,14 @@ fn mixed_learning_is_visible_and_restored_by_all_settings_backup() {
     let engine = Engine::new(std::sync::Arc::new(lexicon), std::sync::Arc::new(wowtype_core::BigramLm::default()));
     engine.load_english_str("tag\n");
     source.install_engine(Ok(engine));
-    let frame = typing(&mut source, "datag");
-    let index = frame.candidates.iter().position(|word| word == "打").unwrap();
-    let frame = source.handle(1, Request::Select { index }).frame.unwrap();
-    let index = frame.candidates.iter().position(|word| word == "tag").unwrap();
-    assert_eq!(source.handle(1, Request::Select { index }).frame.unwrap().commit.as_deref(), Some("打 tag"));
+    for trial in 1..=2 {
+        let frame = typing(&mut source, "datag");
+        let index = frame.candidates.iter().position(|word| word == "打").unwrap();
+        let frame = source.handle(1, Request::Select { index }).frame.unwrap();
+        let index = frame.candidates.iter().position(|word| word == "tag").unwrap();
+        assert_eq!(source.handle(1, Request::Select { index }).frame.unwrap().commit.as_deref().map(str::trim_start), Some("打 tag"));
+        assert_eq!(source.user_words().iter().any(|word| word.word == "打tag"), trial == 2);
+    }
     let listed = serde_json::to_value(source.handle(1, Request::ListUserWords)).unwrap();
     let word = listed["user_words"].as_array().unwrap().iter().find(|word| word["word"] == "打tag").unwrap();
     assert_eq!(word["display"], "打 tag", "设置列表应显示实际的混输格式，同时保留删除用的词条标识");
@@ -1495,6 +1518,22 @@ fn mixed_learning_is_visible_and_restored_by_all_settings_backup() {
     assert_eq!(press(&mut target, 0x20).commit.as_deref(), Some("打 tag"));
     cleanup(&source);
     cleanup(&target);
+}
+
+#[test]
+fn chinese_enter_learns_raw_letters_and_confirmed_delete_undoes_only_last_use() {
+    let mut host = learning_host("raw-enter");
+    for _ in 0..3 {
+        typing(&mut host, "apimode");
+        let frame = press(&mut host, keysym::RETURN);
+        assert_eq!(frame.commit.as_deref(), Some("apimode"));
+        assert!(frame.undo_learning);
+    }
+    assert!(host.user_words().iter().any(|word| word.word == "apimode"));
+    assert!(host.handle(1, Request::UndoCommitLearning).ok);
+    assert_eq!(host.engine.as_ref().unwrap().history_count("apimode"), 2);
+    assert!(!host.user_words().iter().any(|word| word.word == "apimode"));
+    cleanup(&host);
 }
 
 #[test]
@@ -2066,7 +2105,11 @@ fn prediction_is_off_by_default() {
 #[test]
 fn prediction_follows_a_commit_and_chains_with_digits_space_and_mouse() {
     let mut host = predict_host("predict-chain");
-    configure(&mut host, |c| c.predict_next = true);
+    configure(&mut host, |c| {
+        c.predict_next = true;
+        c.predict_digits = true;
+        c.predict_double_space = false;
+    });
     let frame = commit_today(&mut host);
     assert_eq!(frame.commit.as_deref(), Some("今天"));
     assert!(frame.predict && frame.preedit.is_empty() && !frame.forgettable);
@@ -2089,6 +2132,65 @@ fn prediction_follows_a_commit_and_chains_with_digits_space_and_mouse() {
 }
 
 #[test]
+fn prediction_double_space_is_enabled_by_default_and_selects_highlight() {
+    let mut host = predict_host("predict-double-space");
+    configure(&mut host, |config| config.predict_next = true);
+    let start = commit_today(&mut host);
+    assert!(start.predict_double_space);
+    let single = press(&mut host, 0x20);
+    assert!(!single.handled && single.commit.is_none() && single.predict);
+    assert_eq!(single.page_revision, start.page_revision);
+    let moved = press(&mut host, keysym::RIGHT);
+    let selected = moved.candidates[moved.cursor.unwrap()].clone();
+    let result = press(&mut host, keysym::SPACE_DOUBLE);
+    assert_eq!(result.commit.as_deref(), Some(selected.as_str()));
+    assert!(result.replace_space);
+    cleanup(&host);
+}
+
+#[test]
+fn legacy_prediction_shortcut_is_ignored_and_not_saved() {
+    let mut host = predict_host("predict-legacy-shortcut");
+    let path = host.data_dir().join("config.json");
+    std::fs::create_dir_all(host.data_dir()).unwrap();
+    for (shortcut, sym, mods) in [
+        ("alt", 0x11_0000, 0), // 旧版 TSF 发送的 Alt 松开键码
+        ("ctrl+j", u32::from(b'j'), modifier::CTRL),
+        ("f9", keysym::F1 + 8, 0),
+    ] {
+        let legacy = serde_json::json!({ "predict_next": true, "predict_shortcut": shortcut });
+        std::fs::write(&path, legacy.to_string()).unwrap();
+        let config = host.store.load_config();
+        let result = host.handle(1, Request::SetConfig { config });
+        assert!(result.ok, "{:?}", result.error);
+        assert!(commit_today(&mut host).predict, "旧设置仍可开启联想");
+        let frame = key_with(&mut host, 1, sym, mods);
+        assert!(!frame.handled && frame.commit.is_none(), "{shortcut} 不再选词");
+        let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(saved.get("predict_shortcut").is_none(), "重存时不再写入旧设置");
+    }
+    cleanup(&host);
+}
+
+#[test]
+fn stale_candidate_action_does_not_select_and_fixed_slot_survives_reload() {
+    let mut host = predict_host("fixed-candidate");
+    host.engine.as_ref().unwrap().add_user_word("jin tian", "今填", 1000.0).unwrap();
+    let frame = typing(&mut host, "jintian");
+    let index = frame.candidates.iter().position(|word| word == "今填").unwrap();
+    let pinned = host.handle(1, Request::CandidateAction { revision: frame.page_revision, action: CandidateAction::Pin { index, place: 1 } }).frame.unwrap();
+    assert_eq!(pinned.candidates[0], "今填");
+    assert_eq!(pinned.pin_slots[0], Some(1));
+    let stale = host.handle(1, Request::CandidateAction { revision: frame.page_revision, action: CandidateAction::Select { index: 0 } }).frame.unwrap();
+    assert!(stale.commit.is_none());
+    let pins = read_pins(&host.data_dir().join("candidate-pins.json")).unwrap();
+    assert_eq!(pins["quanpin:jintian"][&1], "jin tian\t今填");
+    let unpin = host.handle(1, Request::CandidateAction { revision: stale.page_revision, action: CandidateAction::Pin { index: 0, place: 0 } }).frame.unwrap();
+    assert_ne!(unpin.candidates[0], "今填");
+    cleanup(&host);
+}
+
+#[test]
 fn prediction_steps_aside_for_other_keys() {
     let mut host = predict_host("predict-keys");
     configure(&mut host, |c| c.predict_next = true);
@@ -2103,10 +2205,13 @@ fn prediction_steps_aside_for_other_keys() {
     let frame = press(&mut host, keysym::ESCAPE);
     assert!(frame.handled && frame.candidates.is_empty());
     assert!(!press(&mut host, keysym::ESCAPE).handled, "收起以后 Esc 归应用");
-    // 超出个数的数字：照常打出来（中文后面自动加了空格），不选词
-    assert!(commit_today(&mut host).predict);
-    let frame = press(&mut host, '9' as u32);
-    assert_eq!(frame.commit.as_deref(), Some(" 9"));
+    // 默认不让数字键选词：即使数字对应现有联想项，也照常输入。
+    let suggestions = commit_today(&mut host);
+    assert!(suggestions.predict);
+    assert_eq!(suggestions.labels.len(), suggestions.candidates.len());
+    assert!(suggestions.labels.iter().all(String::is_empty));
+    let frame = press(&mut host, '1' as u32);
+    assert_eq!(frame.commit.as_deref(), Some(" 1"));
     assert!(frame.candidates.is_empty());
     // 退格、上下方向键、回车：交给应用，联想收起
     for sym in [keysym::BACKSPACE, keysym::UP, keysym::DOWN, keysym::RETURN] {
@@ -2119,6 +2224,13 @@ fn prediction_steps_aside_for_other_keys() {
     assert!(commit_today(&mut host).predict);
     let frame = press(&mut host, ',' as u32);
     assert_eq!(frame.commit.as_deref(), Some("，"));
+    assert!(frame.candidates.is_empty());
+    // 即使开启数字选词，超出候选数量的数字仍照常输入。
+    configure(&mut host, |c| c.predict_digits = true);
+    let suggestions = commit_today(&mut host);
+    assert!(suggestions.predict && suggestions.candidates.len() < 9);
+    let frame = press(&mut host, '9' as u32);
+    assert_eq!(frame.commit.as_deref(), Some(" 9"));
     assert!(frame.candidates.is_empty());
     cleanup(&host);
 }
@@ -2147,6 +2259,7 @@ fn prediction_arrows_move_highlight_and_space_commits_the_selection() {
         let mut host = predict_host(&format!("predict-arrows-{horizontal}"));
         configure(&mut host, |c| {
             c.predict_next = true;
+            c.predict_double_space = false;
             c.horizontal = horizontal;
             c.arrow_keys = "caret".into();
         });
@@ -2219,7 +2332,10 @@ fn prediction_arrows_work_independently_of_digit_and_space_switches() {
 #[test]
 fn prediction_arrow_previews_do_not_move_the_live_selection() {
     let mut host = predict_host("predict-arrows-preview");
-    configure(&mut host, |c| c.predict_next = true);
+    configure(&mut host, |c| {
+        c.predict_next = true;
+        c.predict_double_space = false;
+    });
     commit_today(&mut host);
     let preview = Key { keysym: keysym::RIGHT, test: true, ..Key::default() };
     for _ in 0..2 {
@@ -2239,7 +2355,10 @@ fn prediction_arrow_previews_do_not_move_the_live_selection() {
 #[test]
 fn prediction_is_dropped_when_caret_focus_or_mode_changes() {
     let mut host = predict_host("predict-drop");
-    configure(&mut host, |c| c.predict_next = true);
+    configure(&mut host, |c| {
+        c.predict_next = true;
+        c.predict_digits = true;
+    });
     // 光标挪走了（DLL 带来的光标前的字变了）
     assert!(commit_today(&mut host).predict);
     let key = Key { keysym: '1' as u32, ..Key::default() };
@@ -2263,7 +2382,10 @@ fn prediction_is_dropped_when_caret_focus_or_mode_changes() {
 #[test]
 fn chosen_predictions_are_learned_once_and_rank_first_later() {
     let mut host = predict_host("predict-learn");
-    configure(&mut host, |c| c.predict_next = true);
+    configure(&mut host, |c| {
+        c.predict_next = true;
+        c.predict_digits = true;
+    });
     assert_eq!(commit_today(&mut host).candidates[1], "天气");
     // 预判（OnTestKeyDown）不学习
     let learned = host.engine.as_ref().unwrap().export_learning().unwrap();

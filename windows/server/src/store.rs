@@ -71,6 +71,10 @@ fn report(added: usize, errors: &[LineError]) -> ImportReport {
 
 /// 写到临时文件再改名，写一半断电不会留下坏文件。
 pub(crate) fn write_atomic(path: &Path, data: &str) -> io::Result<()> {
+    write_atomic_bytes(path, data.as_bytes())
+}
+
+pub(crate) fn write_atomic_bytes(path: &Path, data: &[u8]) -> io::Result<()> {
     static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
     let filename = path.file_name().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "缺少文件名"))?;
     if let Some(parent) = path.parent() {
@@ -89,7 +93,7 @@ pub(crate) fn write_atomic(path: &Path, data: &str) -> io::Result<()> {
             Err(error) => return Err(error),
         }
     };
-    let result = file.write_all(data.as_bytes()).and_then(|()| file.sync_all());
+    let result = file.write_all(data).and_then(|()| file.sync_all());
     drop(file);
     let result = result.and_then(|()| fs::rename(&tmp, path));
     if let Err(error) = result {
@@ -160,7 +164,12 @@ impl Store {
     }
 
     pub fn save_config(&self, config: &Config) -> io::Result<()> {
-        let text = serde_json::to_string_pretty(config).map_err(io::Error::other)?;
+        // 缺省项由 Config::default 补齐，让新版本的默认值能自然生效。
+        let mut values = serde_json::to_value(config).map_err(io::Error::other)?;
+        let defaults = serde_json::to_value(Config::default()).map_err(io::Error::other)?;
+        values.as_object_mut().expect("Config is a JSON object")
+            .retain(|key, value| defaults.get(key) != Some(value));
+        let text = serde_json::to_string_pretty(&values).map_err(io::Error::other)?;
         write_atomic(&self.config_path(), &(text + "\n"))
     }
 
@@ -423,7 +432,9 @@ mod tests {
         let mut config = Config::default();
         config.page_size = 9;
         store.save_config(&config).unwrap();
-        assert_eq!(store.load_config().page_size, 9);
+        assert_eq!(store.load_config(), config);
+        let raw: serde_json::Value = serde_json::from_str(&fs::read_to_string(store.config_path()).unwrap()).unwrap();
+        assert_eq!(raw, serde_json::json!({"page_size": 9}));
         let _ = fs::remove_dir_all(store.dir());
     }
 

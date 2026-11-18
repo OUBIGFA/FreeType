@@ -53,6 +53,14 @@ func (a *app) openSettings() {
 	s.onTray = a.showTray
 	s.openFolder = func(path string) { _ = exec.Command("explorer.exe", path).Start() }
 	s.openURL = mygo.Shell.OpenExternal
+	s.defaultTip = windowsDefaultTip
+	s.openModel = func(title string) string {
+		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: a.win, Title: title})
+		if err != nil || len(paths) == 0 {
+			return ""
+		}
+		return paths[0]
+	}
 	if a.updates != nil {
 		s.updateStatus = a.updates.snapshot()
 		s.onAutomaticUpdate = a.updates.setAutomatic
@@ -221,6 +229,9 @@ func main() {
 			if err := ensureServer(a.client, a.resources, 10*time.Second); err != nil {
 				log.Println(err)
 				return
+			}
+			if a.updates != nil {
+				a.updates.restorePending()
 			}
 			// 同步跟随应用存活，关闭设置窗口也继续；目录以服务实际使用的位置为准。
 			if status, err := a.client.Call(op("status")); err == nil && status.Status != nil {

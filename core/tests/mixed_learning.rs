@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use wowtype_core::session::{Key, Session};
+use wowtype_core::session::{keysym, Key, Session};
 use wowtype_core::{BigramLm, Engine, MemoryLexicon};
 
 fn new_engine() -> Engine {
@@ -54,8 +54,51 @@ fn directory(name: &str) -> PathBuf {
 }
 
 #[test]
+fn enter_commits_raw_letters_and_still_learns_them() {
+    let engine = new_engine();
+    let mut session = Session::with_engine(&engine);
+    for count in 1..=engine.config().auto_learn_threshold {
+        for ch in "apimode".chars() { session.key(&Key::char(ch)); }
+        assert_eq!(session.key(&Key::press(keysym::RETURN)).commit.as_deref(), Some("apimode"));
+        assert_eq!(engine.history_count("apimode"), count);
+    }
+    assert!(engine.user_words().iter().any(|(code, word, _)| code == "apimode" && word == "apimode"));
+}
+
+#[test]
+fn undo_learning_preserves_intervening_choices_and_drops_abandoned_picks() {
+    let engine = new_engine();
+    let mut session = Session::with_engine(&engine);
+    for ch in "datag".chars() { session.key(&Key::char(ch)); }
+    let head = session.candidates().iter().position(|item| item.text == "打").unwrap();
+    assert!(session.choose(head).commit.is_none());
+    assert_eq!(engine.history_count("打"), 1);
+    session.key(&Key::press(keysym::BACKSPACE));
+    assert_eq!(engine.history_count("打"), 0);
+    session.reset(false);
+    for ch in "apimode".chars() { session.key(&Key::char(ch)); }
+    assert_eq!(session.key(&Key::press(keysym::RETURN)).commit.as_deref(), Some("apimode"));
+    engine.record_selection("你好");
+    assert!(session.undo_commit_learning());
+    assert_eq!(engine.history_count("apimode"), 0);
+    assert_eq!(engine.history_count("你好"), 1);
+}
+
+#[test]
+fn explicitly_sensitive_session_does_not_learn_raw_letters() {
+    let engine = new_engine();
+    let mut session = Session::with_engine(&engine);
+    session.set_no_learn(true);
+    for ch in "apimode".chars() { session.key(&Key::char(ch)); }
+    assert_eq!(session.key(&Key::press(keysym::RETURN)).commit.as_deref(), Some("apimode"));
+    assert_eq!(engine.history_count("apimode"), 0);
+}
+
+#[test]
 fn segmented_mixed_word_is_learned_under_the_complete_input() {
     let engine = new_engine();
+    choose_mixed(&engine);
+    assert!(engine.user_words().is_empty());
     choose_mixed(&engine);
     assert!(
         engine
@@ -76,7 +119,7 @@ fn segmented_mixed_word_is_learned_under_the_complete_input() {
             .any(|candidate| candidate.text == "打tag"),
         "不能错误地只绑定中文部分"
     );
-    assert_eq!(engine.history_count("打tag"), 1);
+    assert_eq!(engine.history_count("打tag"), 2);
 }
 
 #[test]
@@ -89,6 +132,7 @@ fn english_words_and_longer_mixed_words_use_the_real_user_dictionary() {
         .user_words()
         .iter()
         .any(|(input, word, _)| input == "tag" && word == "tag"));
+    engine.record_composed_word("安装FreeType", "an zhuang freetype");
     engine.record_composed_word("安装FreeType", "an zhuang freetype");
     assert!(
         engine
@@ -150,11 +194,14 @@ fn mixed_words_history_and_pairs_survive_restart_and_backup() {
     let restarted = new_engine();
     restarted.load_user_dict(&words).unwrap();
     restarted.load_history(&history).unwrap();
+    assert!(restarted.user_words().is_empty());
+    // The first use must survive restart to confirm the same code on the next use.
+    choose_mixed(&restarted);
     assert_eq!(restarted.input("datag")[0].text, "打tag");
-    assert_eq!(restarted.history_count("打tag"), 1);
+    assert_eq!(restarted.history_count("打tag"), 2);
     assert!(restarted.pair_count() > 0);
     let restored = new_engine();
-    let exported = source.export_learning().unwrap();
+    let exported = restarted.export_learning().unwrap();
     assert_eq!(
         exported.lines().count(),
         1,
@@ -164,8 +211,8 @@ fn mixed_words_history_and_pairs_survive_restart_and_backup() {
         .import_learning(&exported)
         .unwrap();
     assert_eq!(restored.input("datag")[0].text, "打tag");
-    assert_eq!(restored.history_count("tag"), 1);
-    assert_eq!(restored.history_count("打tag"), 1);
+    assert_eq!(restored.history_count("tag"), 2);
+    assert_eq!(restored.history_count("打tag"), 2);
     assert!(restored.forget_word("打tag"));
     assert!(!restored
         .input("datag")

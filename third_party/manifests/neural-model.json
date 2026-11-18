@@ -1,0 +1,14 @@
+{
+  "name": "WowType NNLM",
+  "revision": "a757e8f4ac0cd07908de5692e7d489353db1c4a4",
+  "version": "2026.11.17.0",
+  "url": "https://github.com/Gloridust/WowType/releases/download/nnlm-2026.11.17/nnlm.bin.xz",
+  "archiveSha256": "40b802a205fb753ae4061f72fb67c1f9777a2bf0d45a12f7f85cc26fb252eb32",
+  "sha256": "d50289dfd10c8a4a0da49fc412bdc61a37c6f63ef1a1cbec4bdb74bf5bb7b52b",
+  "bytes": 8640942,
+  "license": "CC BY-SA 4.0",
+  "trainingData": [
+    "LCCC (Tsinghua University CoAI, MIT): https://huggingface.co/datasets/thu-coai/lccc",
+    "Chinese Wikipedia (20231101.zh, CC BY-SA 4.0): https://huggingface.co/datasets/wikimedia/wikipedia"
+  ]
+}

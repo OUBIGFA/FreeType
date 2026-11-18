@@ -146,6 +146,7 @@ foreach ($name in 'lexicon.tsv', 'words.lm', 'english.txt', 'LICENSE', 'SOURCE.t
     }
 }
 Invoke-Native python @('-X', 'utf8', 'tools/make_default_data.py', '--check')
+Invoke-Native python @('-X', 'utf8', 'tools/prepare_neural_model.py')
 $GoVersion = (& go version)
 if ($GoVersion -notmatch '^go version go1\.27\.4 windows/amd64$') { throw "Go 1.27.4 windows/amd64 is required, found: $GoVersion" }
 $GoMod = Get-Content -Raw (Join-Path $AppDir 'go.mod')
@@ -184,6 +185,7 @@ if (-not $SkipTests) {
     Step 'Running tests'
     Invoke-Native python @('-X', 'utf8', '-m', 'unittest', 'discover', '-s', 'tests/repository', '-v')
     Invoke-Native python @('-X', 'utf8', '-m', 'unittest', 'discover', '-s', 'tests/data', '-v')
+    $env:FREETYPE_TEST_NNLM = (Join-Path $Data 'nnlm.bin')
     Invoke-Native cargo @('test', '--locked', '-p', 'wowtype-core', '--no-default-features')
     Invoke-Native cargo @('test', '--locked', '-p', 'freetype-protocol', '-p', 'freetype-server', '-p', 'freetype-tsf')
     Invoke-Native go @('vet', './...') $AppDir
@@ -209,7 +211,18 @@ Copy-Item 'target\i686-pc-windows-msvc\release\freetype_tsf.dll' (Join-Path $Bin
 foreach ($name in 'lexicon.tsv', 'words.lm', 'english.txt', 'LICENSE', 'SOURCE.txt', 'VERSION', 'MANIFEST.json', 'WANXIANG-LICENSE-SCOPE.md', 'WANXIANG-NOTICE.md') {
     Copy-Item (Join-Path $Data $name) (Join-Path $Resources 'data')
 }
-Copy-Item 'core\data\s2t.tsv' (Join-Path $Resources 'data')
+Copy-Item (Join-Path $Data 'nnlm.bin'), 'third_party\manifests\neural-model.json', 'core\data\s2t.tsv' (Join-Path $Resources 'data')
+# Record the packaged inputs without modifying the upstream binary models.
+$StagedData = Join-Path $Resources 'data'
+$DefaultDataVersion = (Get-Content -Raw (Join-Path $Data 'VERSION')).Trim()
+$NeuralDataVersion = (Get-Content -Raw (Join-Path $StagedData 'neural-model.json') | ConvertFrom-Json).version
+$DataVersions = [ordered]@{ 'lexicon.tsv' = $DefaultDataVersion; 'english.txt' = $DefaultDataVersion;
+    'words.lm' = '2026.11.09'; 'nnlm.bin' = $NeuralDataVersion; 's2t.tsv' = '1.4.1' }
+$DataFiles = [ordered]@{}
+foreach ($entry in $DataVersions.GetEnumerator()) {
+    $DataFiles[$entry.Key] = [ordered]@{ version = $entry.Value; sha256 = Sha256 (Join-Path $StagedData $entry.Key) }
+}
+Write-Utf8 (Join-Path $StagedData 'DATA-MANIFEST') (([ordered]@{ format = 1; files = $DataFiles } | ConvertTo-Json -Depth 4) + "`n")
 
 Step 'Collecting third-party notices and corresponding source'
 Invoke-Native python @('-X', 'utf8', 'tools/make_third_party_notices.py', '--out', (Join-Path $Resources 'third-party'))
@@ -255,6 +268,11 @@ foreach ($Artifact in $ArtifactPaths.GetEnumerator()) {
         originalFilename = $Metadata.OriginalFilename
     }
 }
+$PackagedDataManifest = Join-Path $Stage 'data\DATA-MANIFEST'
+foreach ($entry in $DataVersions.GetEnumerator()) {
+    if ((Sha256 (Join-Path $Stage "data\$($entry.Key)")) -ne $DataFiles[$entry.Key].sha256) { throw "Staged data hash mismatch: $($entry.Key)" }
+}
+if ((Sha256 $PackagedDataManifest) -ne (Sha256 (Join-Path $StagedData 'DATA-MANIFEST'))) { throw 'Staged data manifest mismatch' }
 $NoticeDirectory = Join-Path $Stage 'third-party'
 $NoticeManifestPath = Join-Path $NoticeDirectory 'manifest.json'
 $NoticeManifest = Get-Content -Raw -Encoding UTF8 $NoticeManifestPath | ConvertFrom-Json
@@ -336,10 +354,12 @@ $Info = [ordered]@{
         frostCommit    = $DataManifest.sources[0].revision
         wanxiangCommit = $DataManifest.sources[1].revision
         manifestSha256 = Sha256 (Join-Path $Data 'MANIFEST.json')
+        packagedManifestSha256 = Sha256 $PackagedDataManifest
         counts         = $DataManifest.counts
         dataVersion    = (Get-Content -Raw (Join-Path $Data 'VERSION')).Trim()
         lexiconSha256  = Sha256 (Join-Path $Data 'lexicon.tsv')
         wordsLmSha256  = Sha256 (Join-Path $Data 'words.lm')
+        nnlmSha256     = Sha256 (Join-Path $Data 'nnlm.bin')
         englishSha256  = Sha256 (Join-Path $Data 'english.txt')
     }
 }
