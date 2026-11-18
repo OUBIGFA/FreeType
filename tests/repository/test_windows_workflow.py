@@ -20,8 +20,7 @@ class WindowsWorkflowTests(unittest.TestCase):
 
     def test_build_is_explicit_and_read_only(self):
         self.assertIn("workflow_dispatch:", self.workflow)
-        self.assertIn("- '0.1.0'", self.workflow)
-        self.assertIn("- 'freetype-*'", self.workflow)
+        self.assertNotIn("push:", self.workflow)
         self.assertIn("runs-on: windows-2025", self.workflow)
         self.assertIn("contents: read", self.workflow)
         self.assertIn("persist-credentials: false", self.workflow)

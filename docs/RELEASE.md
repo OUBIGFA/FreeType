@@ -14,8 +14,8 @@
 - 日常代码任务仍按固定测试安装器约定交付：版本 `0.0.1`，路径 `output/release/FreeType-0.0.1-Setup.exe`，同时更新校验文件与构建记录，再提交并普通推送 `origin/main`。这不自动授权公开发布。
 - 正式版本与固定测试版本使用同一构建入口的不同参数及输出位置。正式版本通过临时构建配置注入，应用显示版本、安装器版本和 Release 版本一致；不修改已经打 tag 的源码，不把旧固定测试包改名上传。
 - 已实现入口：`windows/build.ps1 -Version X.Y.Z` 构建本地候选；`-Version X.Y.Z -ReleaseTag <已批准标签>` 仅接受该标签的干净检出且强制运行测试。输出分别为 `output/candidates/X.Y.Z/` 和 `output/releases/X.Y.Z/`。脚本不会创建标签、Release 或上传安装器。
-- 线上入口为 `.github/workflows/windows-build.yml`（FreeType Windows installer）。手动运行指定版本时只构建候选；推送 `0.1.0` 或 `freetype-X.Y.Z` 标签时调用同一脚本的精确标签模式。工作流在 Windows Server 2025 上准备项目内固定工具链、重建公开词库并运行全部测试。
-- 线上任务只读仓库，不创建 Release。其 CI Artifact 仅保存对应安装器、SHA-256 文件和 `build-info.json`，用于下载后核对；GitHub Release 的公开附件仍只有安装器。
+- 正式发布默认在本地通过 `-Version X.Y.Z -ReleaseTag <已批准标签>` 直接构建与验证，核对通过后直接上传本地安装器到 GitHub Release，不再等待或下载线上构建产物。
+- 保留 `.github/workflows/windows-build.yml`（FreeType Windows installer）的手动 `workflow_dispatch` 入口作可选参考构建，推送标签不再自动触发线上安装器构建；工作流只读仓库、不创建 Release。
 
 ## 1. 先提供对话中的 Release 草稿
 
@@ -60,24 +60,23 @@ FreeType X.Y.Z：<一句话说明本版主要变化>。
 3. 核对工作区、暂存差异、跟踪清单及全部远端 heads/tags。确认目标提交已在 `origin/main`，新标签在本地和远端都未占用，没有凭据、机器路径、私人词库、学习记录或发布产物混入 Git。
 4. 核清引擎、依赖、词库及模型的许可依据。按 [随包总声明](../third_party/NOTICE.md) 检查 `THIRD-PARTY-NOTICES.txt`、`third-party/manifest.json`、许可原文及对应源码；复核 GPL 数据原始声明和转换输入的提供方式。只有 manifest 中的许可名称不代替缺失的许可证文本或授权依据；预发布也不能绕过许可检查。
 5. 固定本次 Rust、Go、mygo、NSIS 版本及公开数据输入的修订和摘要。按固定修订重建或下载，不使用浮动 `latest`，不依赖本机未登记的 `.local/` 内容。
-6. 确认正式版本构建参数和发布工作流已经实现且验证可用。先用不发布模式试跑；缺少这些能力时停在打 tag 之前，不用文档中的目标流程冒充已有能力。
-7. 运行 `python -X utf8 tools/check_repo.py`、`python -X utf8 -m unittest discover -s tests/repository -v`，并按统一构建入口完成受影响测试及必要构建。正式发布不得使用 `-SkipTests`。
+6. 确认正式版本构建参数已经实现且可用；需要时先用 `-Version X.Y.Z` 构建本地候选试跑。
+7. 运行 `python -X utf8 tools/check_repo.py`、`python -X utf8 -m unittest discover -s tests/repository -v`，并按统一构建入口完成全部测试与构建。正式发布不得使用 `-SkipTests`。
 
 ## 3. 打 tag、构建并生成 GitHub 草稿
 
-1. 对已确认且已检查的提交创建草稿中指定的 annotated tag，本次为 `0.1.0`。标签说明使用简短中文摘要，详细变化放在 Release 正文。
+1. 对已确认且已检查的提交创建草稿中指定的 annotated tag（例如 `freetype-0.1.3`）。标签说明使用简短中文摘要，详细变化放在 Release 正文。
 2. 只向 `origin` 推送本次指定标签。不得使用 `git push --tags`，不得覆盖标签、强制推送或顺带创建分支。
-3. 发布工作流只匹配 FreeType 发布标签。从该标签指向的提交开始，在干净 Windows 环境中检查仓库、运行 Rust/Go 测试，再构建应用、x64/x86 DLL 和安装器。不能用另一次分支构建结果代替。
-4. 运行 `powershell -File windows/build.ps1 -Version X.Y.Z -ReleaseTag <已批准标签>`，通过临时构建配置生成 `FreeType-X.Y.Z-Setup.exe`、SHA-256 和构建记录。核对实际源码提交、源码树、版本与数据摘要，不把提交前的包标成另一个提交的产物。
-5. 只有构建和产物检查通过，才创建 GitHub Draft Release。使用已确认的标题与正文，附件采用精确白名单且只包含本次安装器；缺失文件或名称不匹配时失败，不使用通配符上传整个输出目录。
+3. 从该标签的干净检出在本地运行 `powershell -File windows/build.ps1 -Version X.Y.Z -ReleaseTag <已批准标签>`，完成全部仓库、数据、Rust/Go 与安装器准备测试，通过临时构建配置生成 `output/releases/X.Y.Z/FreeType-X.Y.Z-Setup.exe`、`.sha256` 和 `build-info.json`。不得用其他提交、固定测试包或未核对产物代替。
+4. 核对 `build-info.json` 中的实际源码提交、源码树、应用与安装器版本资源、许可清单及 SHA-256 摘要，全部匹配后再进入上传步骤。
+5. 只有构建和产物检查通过，才创建 GitHub Draft Release。使用已确认的标题与正文，附件采用精确白名单且只包含本次本地构建的 `FreeType-X.Y.Z-Setup.exe`；缺失文件或名称不匹配时失败，不使用通配符上传整个输出目录。
 
 ## 4. 发布并复核
 
-1. 核对远端标签实际指向的提交、CI 运行的源码提交、构建记录及安装器版本。应用显示版本、安装器版本、标签中的版本和 Release 版本必须相同。
-2. 获取这一次 CI 安装器，核对其 SHA-256 与构建记录一致。附件使用本次标签构建的产物。
-3. 核对 GitHub 草稿正文、发布类型和附件，确认与用户批准内容一致。有实质变化时回到对话草稿确认步骤；没有变化时不重复询问。
-4. 在本次确认范围内发布 Release。复核其不是 Draft、Pre-release 状态符合确认结果、标题和正文正确、附件只有 `FreeType-X.Y.Z-Setup.exe`，附件摘要与本次核对的安装器一致。
-5. 向用户交付 Release 链接、版本、标签、源码提交、安装器 SHA-256 和实际验证结果。不为修改 Release 正文额外提交源码，不把计划或工具返回成功当成发布完成。
+1. 核对远端标签实际指向的提交、本地构建记录中的源码提交、版本资源及安装器 SHA-256。应用显示版本、安装器版本、标签中的版本和 Release 版本必须相同。
+2. 核对 GitHub 草稿正文、发布类型和已上传附件，确认与用户批准内容及本地安装器 SHA-256 一致。有实质变化时回到对话草稿确认步骤；没有变化时不重复询问。
+3. 在本次确认范围内发布 Release。复核其不是 Draft、Pre-release 状态符合确认结果、标题和正文正确、附件只有 `FreeType-X.Y.Z-Setup.exe`，且远端附件摘要与本地核对的安装器一致。
+4. 向用户交付 Release 链接、版本、标签、源码提交、安装器 SHA-256 和实际验证结果。不为修改 Release 正文额外提交源码，不把计划或工具返回成功当成发布完成。
 
 ## 失败处理与能力边界
 
@@ -85,12 +84,7 @@ FreeType X.Y.Z：<一句话说明本版主要变化>。
 - 纯构建环境故障可以对同一标签重跑；需要修改源码时使用新版本，并重新提供 Release 草稿。默认不移动、删除或复用已有标签，不替换已公开安装器。
 - 本流程的确认不授权新分支、强制推送、改写历史、修改其他仓库或操作用户已安装的应用。
 
-## 首次发布尚未满足的条件
+## 许可与随包核对边界
 
-2026-11-14 复核后的剩余条件：
-
-- 本地测试包已接入许可原文、对应源码、声明清单和五个文件的版本资源检查，但这不表示下面的发布条件已满足。
-- WowType 固定修订的 README 明确提供双许可，已选择 Apache-2.0 并保留标准全文与授权证据。默认数据对应源码、模型署名、Unicode CLDR 声明和其他随包义务已纳入收集与校验。该结论限于本次 Windows 包，不扩张到未打包的上游资源；仍须核对最终包的清单与摘要。
-- `windows/build.ps1` 和线上 Windows 安装器工作流已有独立版本与精确标签构建入口。线上入口仍须先运行不发布预演，并核对本次标签实际运行的产物；不得把本地候选、手动分支构建或仓库检查 CI 冒充标签构建产物。不能用固定测试包改名代替正式版本。
-
-可以先提供标注上述待办的 Release 草稿供审阅，但条件解除且当前草稿获确认前，不创建发布标签或远端 Release。
+- WowType 固定修订的 README 明确提供双许可，已选择 Apache-2.0 并保留标准全文与授权证据。默认数据对应源码、模型署名、Unicode CLDR 声明和其他随包义务已纳入收集与校验。该结论限于本次 Windows 包，不扩张到未打包的上游资源；每次发布仍须核对最终 `build-info.json` 中的清单与摘要，确认 `unresolved` 为空。
+- 2026-11-18 起改为本地通过 `windows/build.ps1 -Version X.Y.Z -ReleaseTag <已批准标签>` 构建并直接上传 Release 附件，不再等待或下载线上构建产物；不得用固定测试包（`0.0.1`）改名代替正式版本。

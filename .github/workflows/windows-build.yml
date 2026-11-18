@@ -8,10 +8,6 @@ on:
         required: true
         default: '0.1.0'
         type: string
-  push:
-    tags:
-      - '0.1.0'
-      - 'freetype-*'
 
 permissions:
   contents: read
