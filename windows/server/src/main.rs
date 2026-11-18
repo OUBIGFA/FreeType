@@ -79,6 +79,15 @@ mod app {
         let marker = args.iter().position(|arg| arg == "--marker")
             .and_then(|index| args.get(index + 1)).map(PathBuf::from);
         match args.first().map(String::as_str) {
+            Some("--compile-lexicon") => {
+                let result = match args.as_slice() {
+                    [_, source, target] => wowtype_core::lexicon::MappedLexicon::compile(
+                        std::path::Path::new(source), std::path::Path::new(target)).map_err(|e| format!("{e:#}")),
+                    _ => Err("需要源词库和输出索引两个路径".into()),
+                };
+                if let Err(error) = result { eprintln!("{error}"); return 1; }
+                return 0;
+            }
             Some("--serve") => return serve(),
             Some("--register-tsf") => {
                 let bin = args

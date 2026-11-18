@@ -1,5 +1,5 @@
 {
-  "lockSha256": "53bd9faa2c0dab3835ba08b093660805ca75febea442f69252ec3e35e3938ec1",
+  "lockSha256": "ad6e819e58808b1446ee7c2eefabcb8471887314d656ec4f767374f4e61cb013",
   "packages": [
     {
       "name": "aho-corasick",
@@ -102,6 +102,11 @@
       "checksum": "873dab07c8f743075e57f524c583985fbaf745602acbe916a01539364369a779"
     },
     {
+      "name": "crc32fast",
+      "version": "1.5.5",
+      "checksum": "2b929dd2a135771f40afabd1073f85eed59c800b7c61901e5c254270497dad64"
+    },
+    {
       "name": "dasp_sample",
       "version": "0.11.0",
       "checksum": "0c87e182de0887fd5361989c677c4e8f5000cd9491d6d563161a8f3a5519fc7f"
@@ -145,6 +150,11 @@
       "name": "freetype-tsf",
       "version": "0.0.1",
       "checksum": ""
+    },
+    {
+      "name": "fst",
+      "version": "0.4.7",
+      "checksum": "7ab85b9b05e3978cc9a9cf8fea7f01b494e1a09ed3037e16ba39edc7a29eb61a"
     },
     {
       "name": "futures-core",
@@ -255,6 +265,11 @@
       "name": "memchr",
       "version": "2.8.3",
       "checksum": "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
+    },
+    {
+      "name": "memmap2",
+      "version": "0.9.12",
+      "checksum": "6b0ca1155a9ecc25aa12e8313a119f32edf0255fea2f44839c4ac0a12b2ac157"
     },
     {
       "name": "minimal-lexical",

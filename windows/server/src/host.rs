@@ -153,14 +153,22 @@ pub fn lexicon_path(resources: &Path, configured: &str) -> PathBuf {
 /// 载入引擎（慢：几秒），在后台线程里调。`lexicon` 是设置里的词库路径（空串用默认的）。
 pub fn load_engine(resources: &Path, store_dir: &Path, lexicon: &str) -> Result<Engine, String> {
     let lexicon_path = lexicon_path(resources, lexicon);
-    let lexicon = wowtype_core::MemoryLexicon::from_tsv_path_cached(&lexicon_path)
-        .map_err(|e| format!("词库载入失败（{}）：{e:#}", lexicon_path.display()))?;
+    let index = resources.join("lexicon.ftd");
+    let lexicon: std::sync::Arc<dyn wowtype_core::Lexicon> =
+        if lexicon_path == resources.join("lexicon.tsv") && index.exists() {
+            std::sync::Arc::new(wowtype_core::lexicon::MappedLexicon::open(&lexicon_path, &index)
+                .map_err(|e| format!("默认词库索引载入失败（{}）：{e:#}", index.display()))?)
+        } else {
+            // Existing TSV-only installations and user-selected dictionaries remain readable.
+            std::sync::Arc::new(wowtype_core::MemoryLexicon::from_tsv_path_cached(&lexicon_path)
+                .map_err(|e| format!("词库载入失败（{}）：{e:#}", lexicon_path.display()))?)
+        };
     let lm: std::sync::Arc<dyn wowtype_core::LanguageModel> =
         match wowtype_core::lm::load_lm(resources.join("words.lm")) {
             Ok(lm) => lm,
             Err(_) => std::sync::Arc::new(wowtype_core::BigramLm::default()),
         };
-    let engine = Engine::new(std::sync::Arc::new(lexicon), lm);
+    let engine = Engine::new(lexicon, lm);
     // 模糊音和默认开启的纠错兜底都使用此索引。必须在后台载入阶段建好，
     // 否则 ready 后的首次按键仍会遍历整份词库，可能超过 TSF 的 1.5 秒等待上限。
     engine.prepare_fuzzy();

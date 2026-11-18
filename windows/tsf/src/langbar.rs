@@ -19,7 +19,7 @@ use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_R
 use windows::Win32::UI::TextServices::{
     ITfLangBarItem, ITfLangBarItemButton, ITfLangBarItemButton_Impl, ITfLangBarItemSink, ITfLangBarItem_Impl,
     ITfMenu, ITfSource, ITfSource_Impl, TfLBIClick, GUID_LBI_INPUTMODE, TF_LANGBARITEMINFO, TF_LBI_CLK_LEFT,
-    TF_LBI_ICON, TF_LBI_STYLE_BTN_BUTTON, TF_LBI_STYLE_SHOWNINTRAY, TF_LBI_TEXT, TF_LBI_TOOLTIP,
+    TF_LBI_CLK_RIGHT, TF_LBI_ICON, TF_LBI_STYLE_BTN_BUTTON, TF_LBI_STYLE_SHOWNINTRAY, TF_LBI_TEXT, TF_LBI_TOOLTIP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateIconIndirect, GetSystemMetrics, HICON, ICONINFO, SM_CXSMICON,
@@ -238,7 +238,7 @@ impl ITfLangBarItemButton_Impl for ModeButton_Impl {
         if let Some(handler) = handler {
             if click == TF_LBI_CLK_LEFT {
                 handler(ButtonClick::Toggle);
-            } else {
+            } else if click == TF_LBI_CLK_RIGHT {
                 handler(ButtonClick::Menu(pt.x, pt.y));
             }
         }

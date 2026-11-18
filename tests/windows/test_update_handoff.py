@@ -224,11 +224,17 @@ class UpdateHandoffTests(ServerFixture, unittest.TestCase):
 
     def test_ready_server_does_not_build_fuzzy_index_on_first_input(self):
         # The small handoff fixture hides the cost of a lazy index over the full
-        # shipped dictionary. Use both a fresh snapshot and a cached restart.
+        # shipped dictionary. Test both legacy TSV loading and the packaged index.
+        packaged = Path(os.environ.get("FREETYPE_TEST_RESOURCES", ROOT / ".local/data"))
         for name in ("lexicon.tsv", "words.lm", "english.txt"):
-            shutil.copyfile(ROOT / ".local/data" / name, self.resources / name)
+            shutil.copyfile(packaged / name, self.resources / name)
         timings = []
-        for fuzzy, code, expected in [(True, "nihao", "你好"), (False, "yingai", "应该")]:
+        variants = [(True, "nihao", "你好"), (False, "yingai", "应该")]
+        if (packaged / "lexicon.ftd").exists():
+            variants += variants
+        for variant, (fuzzy, code, expected) in enumerate(variants):
+            if variant == 2:
+                shutil.copyfile(packaged / "lexicon.ftd", self.resources / "lexicon.ftd")
             (self.data / "config.json").write_text(
                 json.dumps({"fuzzy": fuzzy, "predict_next": True}), encoding="utf-8")
             server = self.launch(self.server)

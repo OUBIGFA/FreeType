@@ -47,11 +47,20 @@ fn word_key(word: &str) -> u64 {
     hasher.finish()
 }
 
+impl crate::lexicon::PredictionIndex for HashMap<u64, f32> {
+    fn log_frequency(&self, word: &str) -> Option<f32> {
+        self.get(&word_key(word)).copied()
+    }
+}
+
 impl Engine {
-    /// 词 → ln 词频。第一次联想时建（五六十万词，实测约 0.25 秒），之后一直用。
+    /// 词 → ln 词频。静态词库直接使用编译索引；内存词库只在第一次联想时建表。
     ///
     /// 只存词的哈希：存整个词要多占二三十 MB；两个词哈希相同只会让其中一个的词频不准。
-    fn word_prior(&self) -> &HashMap<u64, f32> {
+    fn word_prior(&self) -> &dyn crate::lexicon::PredictionIndex {
+        if let Some(prior) = self.base_lexicon.prediction_index() {
+            return prior;
+        }
         self.word_prior.get_or_init(|| {
             let mut prior: HashMap<u64, f32> = HashMap::with_capacity(self.base_lexicon.len());
             self.base_lexicon.for_each_word(&mut |word, freq| {
@@ -116,7 +125,7 @@ impl Engine {
             if habit.is_none() && lift <= 0.0 {
                 return;
             }
-            let known = prior.get(&word_key(word)).map(|p| f64::from(*p));
+            let known = prior.log_frequency(word).map(f64::from);
             let ln_freq = match (habit, known) {
                 (_, Some(known)) => known,
                 (Some(_), None) => UNKNOWN_FREQ.ln(),
@@ -150,7 +159,7 @@ impl Engine {
         // 模型里没有的搭配：只有用户的习惯
         for (word, (bonus, seen)) in &habits {
             if !seen {
-                let ln_freq = prior.get(&word_key(word)).map_or(UNKNOWN_FREQ.ln(), |p| f64::from(*p));
+                let ln_freq = prior.log_frequency(word).map_or(UNKNOWN_FREQ.ln(), f64::from);
                 top.push((if model.is_some() { 100.0 + bonus } else { ln_freq + bonus }, (*word).to_string()));
             }
         }

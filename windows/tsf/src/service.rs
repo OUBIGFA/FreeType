@@ -48,7 +48,7 @@ use windows::Win32::UI::TextServices::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, DestroyMenu, GetGUIThreadInfo, GetMessageExtraInfo, GetWindowRect,
-    SetForegroundWindow, TrackPopupMenu, GUITHREADINFO, MF_SEPARATOR, MF_STRING, TPM_RETURNCMD, TPM_RIGHTBUTTON,
+    EndMenu, PostMessageW, TrackPopupMenu, GUITHREADINFO, MF_SEPARATOR, MF_STRING, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON,
 };
 
 use crate::client::Client;
@@ -106,6 +106,7 @@ struct State {
     /// 上一次拿到的光标位置（应用一时给不出位置时用）。
     last_caret: Option<RECT>,
     button: Option<ButtonHandle>,
+    language_menu: MenuState,
     mode: Mode,
     /// 上一次报给服务进程的大写锁定状态（变了才再报）。
     caps: bool,
@@ -115,6 +116,14 @@ struct State {
     busy: bool,
     /// 候选窗里是上屏联想：不算在组字（照常读光标前的字，不认的键交给应用）。
     predicting: bool,
+}
+
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
+enum MenuState {
+    #[default]
+    Closed,
+    Queued,
+    Open,
 }
 
 #[implement(
@@ -134,7 +143,7 @@ impl TextService {
     /// 组字、候选选择和补全光标移动全部结束后才允许交接实现。
     pub(crate) fn can_reload(&self) -> bool {
         let s = self.state.borrow();
-        s.composition.is_none() && !s.busy && s.caret_move.is_none()
+        s.composition.is_none() && !s.busy && s.caret_move.is_none() && s.language_menu == MenuState::Closed
     }
 
     pub fn new(instance: HINSTANCE) -> Self {
@@ -162,6 +171,7 @@ impl TextService {
                 caret: None,
                 last_caret: None,
                 button: None,
+                language_menu: MenuState::Closed,
                 mode: Mode::Chinese,
                 caps: false,
                 want_before: false,
@@ -893,6 +903,28 @@ fn on_click(state: &Weak<RefCell<State>>, click: Click) {
         return;
     };
     let request = match click {
+        Click::LanguageMenu(x, y) => {
+            let (context, generation) = {
+                let mut s = state.borrow_mut();
+                if s.language_menu != MenuState::Queued { return; }
+                s.language_menu = MenuState::Open;
+                (s.context.clone(), s.generation)
+            };
+            // Like Weasel, anchor the native menu to the focused document. Its lifetime
+            // is independent of the candidate and hint windows and their hide timers.
+            let owner = unsafe {
+                context.and_then(|c| c.GetActiveView().and_then(|v| v.GetWnd()).ok())
+                    .filter(|w| !w.is_invalid())
+                    .unwrap_or_else(|| windows::Win32::UI::Input::KeyboardAndMouse::GetFocus())
+            };
+            let _dll = DllRef::new();
+            let selected = button_menu(owner, x, y);
+            let mut s = state.borrow_mut();
+            if s.generation != generation { return; }
+            s.language_menu = MenuState::Closed;
+            let Some(request) = selected else { return; };
+            request
+        }
         Click::Candidate { revision, action } => Request::CandidateAction { revision, action },
         Click::PinChoices { .. } => return,
         Click::Dismiss => Request::Reset { commit: false },
@@ -903,7 +935,7 @@ fn on_click(state: &Weak<RefCell<State>>, click: Click) {
     let Some(frame) = call(&state, &request) else {
         return;
     };
-    if click == Click::Settings {
+    if matches!(request, Request::Command { command: Command::OpenSettings }) {
         return;
     }
     let context = state.borrow().context.clone();
@@ -917,24 +949,30 @@ fn on_button(state: &Weak<RefCell<State>>, click: ButtonClick) {
     };
     let request = match click {
         ButtonClick::Toggle => Request::ToggleMode { shift: None },
-        ButtonClick::Menu(x, y) => match button_menu(&state, x, y) {
-            Some(request) => request,
-            None => return,
-        },
+        ButtonClick::Menu(x, y) => {
+            // Return to the language bar immediately. Coalesce clicks even while
+            // Windows dispatches messages inside TrackPopupMenu.
+            let mut s = state.borrow_mut();
+            if s.language_menu == MenuState::Closed {
+                if let Some(window) = &s.window {
+                    if unsafe { PostMessageW(Some(window.hwnd()), ui::WM_LANGUAGE_MENU,
+                        WPARAM(x as usize), LPARAM(y as isize)) }.is_ok() {
+                        s.language_menu = MenuState::Queued;
+                    }
+                }
+            }
+            return;
+        }
     };
-    let settings = matches!(request, Request::Command { command: Command::OpenSettings });
     let Some(frame) = call(&state, &request) else {
         return;
     };
-    if settings {
-        return;
-    }
     let context = state.borrow().context.clone();
     apply(&state, context.as_ref(), frame, false);
 }
 
-fn button_menu(state: &Rc<RefCell<State>>, x: i32, y: i32) -> Option<Request> {
-    let owner: HWND = state.borrow().window.as_ref().map(|w| w.hwnd())?;
+fn button_menu(owner: HWND, x: i32, y: i32) -> Option<Request> {
+    use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, WS_EX_TOOLWINDOW, WS_POPUP};
     unsafe {
         let menu = CreatePopupMenu().ok()?;
         let items: [(u32, &str); 5] = [
@@ -949,9 +987,18 @@ fn button_menu(state: &Rc<RefCell<State>>, x: i32, y: i32) -> Option<Request> {
         }
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
         let _ = AppendMenuW(menu, MF_STRING, 6, windows::core::w!("FreeType 设置"));
-        let _ = SetForegroundWindow(owner);
-        let cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, x, y, None, owner, None);
+        // The shell can deliver the click without a focused edit control. A separate
+        // owner in that case survives every hide/update of the candidate window.
+        let temporary = if owner.is_invalid() {
+            CreateWindowExW(WS_EX_TOOLWINDOW, windows::core::w!("STATIC"), None, WS_POPUP,
+                x, y, 0, 0, None, None, None, None).ok()
+        } else { None };
+        let owner = temporary.unwrap_or(owner);
+        let cmd = if owner.is_invalid() { BOOL(0) } else {
+            TrackPopupMenu(menu, TPM_NONOTIFY | TPM_RETURNCMD | TPM_RIGHTBUTTON, x, y, None, owner, None)
+        };
         let _ = DestroyMenu(menu);
+        if let Some(hwnd) = temporary { let _ = DestroyWindow(hwnd); }
         let command = match cmd.0 {
             1 => return Some(Request::ToggleMode { shift: None }),
             2 => Command::TogglePunct,
@@ -1077,6 +1124,8 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
     }
 
     fn Deactivate(&self) -> Result<()> {
+        let menu = std::mem::take(&mut self.state.borrow_mut().language_menu);
+        if menu == MenuState::Open { unsafe { let _ = EndMenu(); } }
         ui::set_click_handler(None);
         ui::set_caret_handler(None);
         unwatch_layout(&self.state);

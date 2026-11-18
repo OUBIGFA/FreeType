@@ -2,6 +2,7 @@
 
 import os
 import json
+import subprocess
 import time
 import unittest
 from pathlib import Path
@@ -42,6 +43,25 @@ class InputPerformanceTests(ServerFixture, unittest.TestCase):
         elapsed = time.perf_counter() - started
         self.assertEqual(len(self.call(connection, "list_user_words")["user_words"]), 2500)
         self.assertLess(elapsed, 2, f"Loading 2500 learned words took {elapsed:.2f} seconds")
+
+    def test_shipped_dictionary_resident_memory(self):
+        # Exercise the packaged resources and actual server, including both language models.
+        root = Path(__file__).resolve().parents[2]
+        self.env["FREETYPE_RESOURCE_DIR"] = os.environ.get("FREETYPE_TEST_RESOURCES", str(root / ".local/data"))
+        (self.data / "config.json").write_text("{}", encoding="utf-8")
+        server, connection = self.ready()
+        for _ in range(10):
+            self.call(connection, "focus", active=True, before="")
+            for code, expected in [("nihao", "你好"), ("zhongguo", "中国"), ("yingai", "应该"), ("shijie", "世界")]:
+                self.call(connection, "reset", commit=False)
+                for char in code:
+                    frame = self.call(connection, "key", key={"keysym": ord(char), "modifiers": 0, "test": False})["frame"]
+                self.assertEqual(frame["candidates"][0], expected)
+                self.call(connection, "key", key={"keysym": 32, "modifiers": 0, "test": False})
+        counters = subprocess.check_output(["powershell", "-NoProfile", "-Command",
+            f"Get-Process -Id {server.pid} | Select-Object WorkingSet64,PrivateMemorySize64 | ConvertTo-Json"])
+        for name, size in json.loads(counters).items():
+            self.assertLess(size / 2**20, 256, f"{name} for the full dictionary: {size / 2**20:.0f} MiB")
 
     def test_learning_does_not_rebuild_imported_dictionary(self):
         _, connection = self.ready()

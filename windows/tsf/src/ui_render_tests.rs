@@ -5,7 +5,7 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::StationsAndDesktops::{
     CloseDesktop, CreateDesktopW, GetThreadDesktop, SetThreadDesktop, DESKTOP_CONTROL_FLAGS,
-    DESKTOP_CREATEWINDOW, DESKTOP_READOBJECTS, DESKTOP_WRITEOBJECTS, HDESK,
+    DESKTOP_CREATEMENU, DESKTOP_CREATEWINDOW, DESKTOP_READOBJECTS, DESKTOP_WRITEOBJECTS, HDESK,
 };
 use windows::Win32::System::Threading::GetCurrentThreadId;
 
@@ -42,13 +42,13 @@ fn candidate_text_palette_is_readable_in_both_appearances() {
     }
 }
 
-struct PrivateDesktop {
+pub(crate) struct PrivateDesktop {
     previous: HDESK,
     desktop: HDESK,
 }
 
 impl PrivateDesktop {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         unsafe {
             let tid = GetCurrentThreadId();
             let previous = GetThreadDesktop(tid).unwrap();
@@ -58,7 +58,7 @@ impl PrivateDesktop {
                 PCWSTR::null(),
                 None,
                 DESKTOP_CONTROL_FLAGS(0),
-                DESKTOP_CREATEWINDOW.0 | DESKTOP_READOBJECTS.0 | DESKTOP_WRITEOBJECTS.0,
+                DESKTOP_CREATEMENU.0 | DESKTOP_CREATEWINDOW.0 | DESKTOP_READOBJECTS.0 | DESKTOP_WRITEOBJECTS.0,
                 None,
             )
             .expect("必须能建立独立桌面，不能退回用户桌面测试");

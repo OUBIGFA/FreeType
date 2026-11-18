@@ -46,6 +46,7 @@ const CARET_TIMER: usize = 3;
 const CARET_RETRY_MS: u32 = 15;
 /// 发给自己的消息：回到应用的消息循环以后，叫文本服务去挪光标（见 [`set_caret_handler`]）。
 const WM_CARET_TICK: u32 = WM_APP + 1;
+pub(crate) const WM_LANGUAGE_MENU: u32 = WM_APP + 2;
 const HINT_MS: u32 = 1000;
 /// 上屏联想显示着没人选：过这么久自己收起（见 [`Click::Dismiss`]）。
 const PREDICT_TIMER: usize = 4;
@@ -58,6 +59,7 @@ const WM_MOUSELEAVE: u32 = 0x02a3;
 /// 候选窗上的点击（交给文本服务处理）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Click {
+    LanguageMenu(i32, i32),
     Candidate { action: CandidateAction, revision: u64 },
     /// 展开固定排位子菜单，带原候选页的绘制编号。
     PinChoices { owner: HWND, index: usize, revision: u64 },
@@ -68,7 +70,7 @@ pub enum Click {
 
 thread_local! {
     /// 点击交给文本服务处理（每个线程一个文本服务）。
-    static HANDLER: RefCell<Option<Box<dyn Fn(Click)>>> = const { RefCell::new(None) };
+    static HANDLER: RefCell<Option<std::rc::Rc<dyn Fn(Click)>>> = const { RefCell::new(None) };
     /// 这个线程的右键 / 长按菜单窗口。
     static MENU: RefCell<Option<HWND>> = const { RefCell::new(None) };
     /// 文本服务挪光标的处理函数：返回 true 表示还没挪成，过一会儿再叫一次。
@@ -76,7 +78,7 @@ thread_local! {
 }
 
 pub fn set_click_handler(handler: Option<Box<dyn Fn(Click)>>) {
-    HANDLER.with(|h| *h.borrow_mut() = handler);
+    HANDLER.with(|h| *h.borrow_mut() = handler.map(std::rc::Rc::from));
 }
 
 /// 候选窗是这个线程里输入法自己的窗口，文本服务借它「回到消息循环以后再做」和定时重试
@@ -101,11 +103,10 @@ fn dispatch(click: Click) {
         open_pin_choices(owner, index, revision);
         return;
     }
-    HANDLER.with(|h| {
-        if let Some(handler) = h.borrow().as_ref() {
-            handler(click);
-        }
-    });
+    // A native menu pumps messages. TSF can detach the service during a click.
+    if let Some(handler) = HANDLER.with(|h| h.borrow().clone()) {
+        handler(click);
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -598,6 +599,10 @@ fn wheel_pages_accumulate_and_cancel() {
 
 unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
+        WM_LANGUAGE_MENU => {
+            dispatch(Click::LanguageMenu(wparam.0 as i32, lparam.0 as i32));
+            LRESULT(0)
+        }
         WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
         WM_PAINT => {
             if let Some(data) = data_of(hwnd) {
@@ -1295,4 +1300,4 @@ mod tests {
 
 #[cfg(test)]
 #[path = "ui_render_tests.rs"]
-mod render_tests;
+pub(crate) mod render_tests;

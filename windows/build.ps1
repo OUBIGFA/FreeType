@@ -78,6 +78,19 @@ function Invoke-Native {
     }
 }
 
+function Compile-Lexicon([string]$Executable, [string]$Source, [string]$Target) {
+    # Windows PowerShell can split paths containing spaces when invoking a GUI-subsystem
+    # executable with &, so pass quoted arguments through an explicit process object.
+    $Arguments = @('--compile-lexicon', ('"{0}"' -f $Source), ('"{0}"' -f $Target))
+    $Process = Start-Process -FilePath $Executable -ArgumentList $Arguments -Wait -PassThru -NoNewWindow
+    if ($Process.ExitCode -ne 0) {
+        throw "$Executable --compile-lexicon failed with exit code $($Process.ExitCode)"
+    }
+    if (-not (Test-Path -LiteralPath $Target -PathType Leaf)) {
+        throw "Lexicon compiler exited successfully but did not create $Target"
+    }
+}
+
 function Write-Utf8([string]$Path, [string]$Text) {
     [IO.File]::WriteAllText($Path, $Text, (New-Object Text.UTF8Encoding $false))
 }
@@ -214,9 +227,10 @@ foreach ($name in 'lexicon.tsv', 'words.lm', 'english.txt', 'LICENSE', 'SOURCE.t
 Copy-Item (Join-Path $Data 'nnlm.bin'), 'third_party\manifests\neural-model.json', 'core\data\s2t.tsv' (Join-Path $Resources 'data')
 # Record the packaged inputs without modifying the upstream binary models.
 $StagedData = Join-Path $Resources 'data'
+Compile-Lexicon (Join-Path $Bin 'FreeTypeServer.exe') (Join-Path $StagedData 'lexicon.tsv') (Join-Path $StagedData 'lexicon.ftd')
 $DefaultDataVersion = (Get-Content -Raw (Join-Path $Data 'VERSION')).Trim()
 $NeuralDataVersion = (Get-Content -Raw (Join-Path $StagedData 'neural-model.json') | ConvertFrom-Json).version
-$DataVersions = [ordered]@{ 'lexicon.tsv' = $DefaultDataVersion; 'english.txt' = $DefaultDataVersion;
+$DataVersions = [ordered]@{ 'lexicon.tsv' = $DefaultDataVersion; 'lexicon.ftd' = $DefaultDataVersion; 'english.txt' = $DefaultDataVersion;
     'words.lm' = '2026.11.09'; 'nnlm.bin' = $NeuralDataVersion; 's2t.tsv' = '1.4.1' }
 $DataFiles = [ordered]@{}
 foreach ($entry in $DataVersions.GetEnumerator()) {
@@ -289,6 +303,7 @@ if ($NoticeManifest.unresolved.Count -gt 0) {
 
 if (-not $SkipTests) {
     Step 'Testing installer preparation with disposable processes'
+    $env:FREETYPE_TEST_RESOURCES = Join-Path $Stage 'data'
     Invoke-Native python @('-X', 'utf8', '-m', 'unittest', 'discover', '-s', 'tests/windows', '-v')
 }
 

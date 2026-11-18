@@ -20,6 +20,10 @@ use anyhow::{anyhow, bail, Context, Result};
 
 use crate::syllable::{Syllable, SyllableId, SyllableQuery};
 
+#[path = "mapped_lexicon.rs"]
+mod mapped;
+pub use mapped::MappedLexicon;
+
 /// 词库快照的魔数与格式版本。格式一变就改版本号，旧快照自动失效。
 const CACHE_MAGIC: &[u8; 4] = b"WLC1";
 const CACHE_VERSION: u32 = 2;
@@ -160,6 +164,10 @@ impl SyllableKey {
 /// query 是一段连续音节；返回所有“音节序列恰好等于 query”的词。
 /// 简拼查询用 SyllableQuery::Jianpin，匹配每个音节的首字母。
 pub trait Lexicon: Send + Sync {
+    /// Static dictionaries can supply the same prediction priors directly from disk.
+    fn prediction_index(&self) -> Option<&dyn PredictionIndex> {
+        None
+    }
     /// 返回所有权值而非引用：这样「基础词库 + 用户词库」可以合并返回，
     /// 也能在运行时安全地增删用户词。命中数很小，克隆成本可接受。
     fn lookup(&self, query: &[SyllableQuery]) -> Vec<LexEntry>;
@@ -203,6 +211,11 @@ pub trait Lexicon: Send + Sync {
         let total = self.total_freq().max(1.0);
         -((entry.freq.max(0.5)) / total).ln()
     }
+}
+
+/// Read-only word frequencies used by prediction without an extra resident copy.
+pub trait PredictionIndex {
+    fn log_frequency(&self, word: &str) -> Option<f32>;
 }
 
 /// 内存词典。

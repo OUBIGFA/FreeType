@@ -20,7 +20,7 @@ use crate::lm::LanguageModel;
 use crate::{Engine, HistoryEntry};
 
 /// 两份学习数据都先完整写入并刷盘，再替换旧文件；临时文件独占创建，避免误覆盖。
-pub(crate) fn write_atomic(path: &Path, data: &str) -> std::io::Result<()> {
+pub(crate) fn write_atomic(path: &Path, data: impl AsRef<[u8]>) -> std::io::Result<()> {
     use std::io::Write;
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -36,7 +36,7 @@ pub(crate) fn write_atomic(path: &Path, data: &str) -> std::io::Result<()> {
             Err(e) => return Err(e),
         }
     };
-    let result = file.write_all(data.as_bytes()).and_then(|()| file.sync_all());
+    let result = file.write_all(data.as_ref()).and_then(|()| file.sync_all());
     drop(file);
     let result = result.and_then(|()| std::fs::rename(&temporary, path));
     if let Err(error) = result {
