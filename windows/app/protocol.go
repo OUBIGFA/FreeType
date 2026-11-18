@@ -28,8 +28,12 @@ type Config struct {
 	ArrowKeys   string `json:"arrow_keys"`
 	NumpadDot   bool   `json:"numpad_dot"`
 
-	FullwidthPunct   bool        `json:"fullwidth_punct"`
-	AutoPair         bool        `json:"auto_pair"`
+	FullwidthPunct       bool        `json:"fullwidth_punct"`
+	DigitHalfwidthPunct  bool        `json:"digit_halfwidth_punct"`
+	DigitPunctExceptions bool        `json:"digit_punct_exceptions"`
+	DigitPunctFullwidth  int         `json:"digit_punct_fullwidth"`
+	CornerQuotes         bool        `json:"corner_quotes"`
+	AutoPair             bool        `json:"auto_pair"`
 	Autospace        bool        `json:"autospace"`
 	AutospaceLetters bool        `json:"autospace_letters"`
 	AutospaceDigits  bool        `json:"autospace_digits"`
@@ -71,7 +75,8 @@ func defaultConfig() Config {
 		PageSize: 7, Horizontal: true, FontSize: 18, FontFamily: "Microsoft YaHei", CandidateStyle: "pink",
 		FuzzyGroups: fuzzyDefault, ShuangpinScheme: "xiaohe", TypoCorrection: true,
 		ShiftToggle: "both", PageKeys: pageKeyMinus, SelectKeys: "off", PickChar: true, ArrowKeys: "candidates", NumpadDot: true,
-		FullwidthPunct: true, AutoPair: true, Autospace: true, AutospaceLetters: true, AutospaceDigits: true,
+		FullwidthPunct: true, DigitHalfwidthPunct: true, DigitPunctExceptions: true, DigitPunctFullwidth: digitPunctDefault,
+		AutoPair: true, Autospace: true, AutospaceLetters: true, AutospaceDigits: true,
 		DefaultMode: "chinese", ModeScope: "global",
 		AppPresetRules: []AppPreset{},
 		QuickPhrases:   true, EmojiSuggest: true, DateTime: true, Calculator: true, Toolbar: true, EmailCompletion: true,
@@ -99,6 +104,33 @@ var fuzzyRules = []struct {
 	{1, "z = zh"}, {2, "c = ch"}, {4, "s = sh"}, {8, "n = l"}, {16, "f = h"}, {32, "r = l"},
 	{64, "an = ang"}, {128, "en = eng"}, {256, "in = ing"}, {512, "ian = iang"}, {1024, "uan = uang"}, {2048, "un = ong"},
 	{4096, "an = ai"}, {8192, "huang = wang"}, {16384, "un = iong"}, {32768, "eng = ong"},
+}
+
+// 数字后仍保持全角的标点位掩码（和服务进程一致，默认勾选顿号）。
+const digitPunctDefault = 1 << 0
+
+var digitPunctRules = []struct {
+	Bit   int
+	Label string
+}{
+	{1 << 0, "顿号 、"},
+	{1 << 1, "冒号 ："},
+	{1 << 2, "逗号 ，"},
+	{1 << 3, "句号 。"},
+	{1 << 4, "分号 ；"},
+	{1 << 5, "问号 ？"},
+	{1 << 6, "感叹号 ！"},
+	{1 << 7, "双引号 “ ”"},
+	{1 << 8, "单引号 ‘ ’"},
+	{1 << 9, "圆括号 （ ）"},
+	{1 << 10, "方括号 【 】"},
+	{1 << 11, "书名号 《 》"},
+	{1 << 12, "直角引号 「 」"},
+	{1 << 13, "破折号 ——"},
+	{1 << 14, "省略号 ……"},
+	{1 << 15, "波浪号 ～"},
+	{1 << 16, "间隔号 ·"},
+	{1 << 17, "人民币 ￥"},
 }
 
 // AppPreset 是一次切入指定程序时要使用的中英文状态。

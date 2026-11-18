@@ -441,6 +441,35 @@ func (s *settings) typingPage(c *ui.Context) {
 	})
 	section(c, "标点", func() {
 		changed = s.settingSwitch(c, "typing/中文标点", false, &s.config.FullwidthPunct) || changed
+		showDigitHalf := s.showSetting("typing/数字标点保持半角")
+		showDigitExcept := s.showSetting("typing/数字后例外保持全角")
+		showDigitSymbols := s.showSetting("typing/数字后保持全角的标点")
+		if s.config.FullwidthPunct || showDigitHalf || showDigitExcept || showDigitSymbols {
+			changed = s.settingSwitch(c, "typing/数字标点保持半角", true, &s.config.DigitHalfwidthPunct) || changed
+			if (s.config.FullwidthPunct && s.config.DigitHalfwidthPunct) || showDigitExcept || showDigitSymbols {
+				changed = s.settingSwitch(c, "typing/数字后例外保持全角", true, &s.config.DigitPunctExceptions) || changed
+				if (s.config.FullwidthPunct && s.config.DigitHalfwidthPunct && s.config.DigitPunctExceptions) || showDigitSymbols {
+					s.settingBlock(c, "typing/数字后保持全角的标点", func() {
+						ui.Column(c).FillWidth().Padding(2, 12, 6, 12).Children(func() {
+							ui.Row(c).FillWidth().Wrap().GapX(16).GapY(12).Padding(12, rowInset-12, 12, subInset-12).Radius(controlRadius).Background(colors(c).subtle).Children(func() {
+								for _, rule := range digitPunctRules {
+									on := s.config.DigitPunctFullwidth&rule.Bit != 0
+									if checkbox(c, &on, rule.Label).Width(max(132, textSize(c, 132))).Changed() {
+										if on {
+											s.config.DigitPunctFullwidth |= rule.Bit
+										} else {
+											s.config.DigitPunctFullwidth &^= rule.Bit
+										}
+										changed = true
+									}
+								}
+							})
+						})
+					})
+				}
+			}
+		}
+		changed = s.settingSwitch(c, "typing/双引号改用直角引号", false, &s.config.CornerQuotes) || changed
 		changed = s.settingSwitch(c, "typing/成对标点自动补全", false, &s.config.AutoPair) || changed
 		changed = s.settingSwitch(c, "typing/小键盘的点输入「.」", false, &s.config.NumpadDot) || changed
 	})

@@ -151,7 +151,7 @@ func newTestSettings() (*settings, *fakeBackend) {
 
 func open(t *testing.T, s *settings, page string) *ui.Tester {
 	t.Helper()
-	tt := ui.NewTester(s.view, 1000, 1400)
+	tt := ui.NewTester(s.view, 1000, 1800)
 	if page != "" {
 		if err := tt.Click(page); err != nil {
 			t.Fatalf("打不开「%s」：%v", page, err)
@@ -293,6 +293,54 @@ func TestTypingPageFuzzyGroups(t *testing.T) {
 	}
 	if b.config.AutoPair {
 		t.Fatal("成对标点没有关掉")
+	}
+}
+
+func TestTypingPagePunctuationOptions(t *testing.T) {
+	s, b := newTestSettings()
+	tt := open(t, s, "拼音与按键")
+	if !b.config.FullwidthPunct || !b.config.DigitHalfwidthPunct || !b.config.DigitPunctExceptions || b.config.DigitPunctFullwidth != digitPunctDefault || b.config.CornerQuotes {
+		t.Fatalf("标点默认配置不对：%+v", b.config)
+	}
+	for _, text := range []string{"数字标点保持半角", "数字后例外保持全角", "顿号 、", "冒号 ：", "双引号改用直角引号"} {
+		if !tt.HasText(text) {
+			t.Fatalf("没有显示「%s」：%q", text, tt.Texts())
+		}
+	}
+	// 勾选冒号作为数字后全角例外，开启双引号改用直角引号
+	if err := tt.Click("冒号 ："); err != nil {
+		t.Fatal(err)
+	}
+	if b.config.DigitPunctFullwidth&(1<<0) == 0 || b.config.DigitPunctFullwidth&(1<<1) == 0 {
+		t.Fatalf("数字后全角标点勾选没有保存：%+v", b.config)
+	}
+	if err := tt.Click("双引号改用直角引号"); err != nil {
+		t.Fatal(err)
+	}
+	if !b.config.CornerQuotes {
+		t.Fatalf("双引号改用直角引号没有保存：%+v", b.config)
+	}
+	// 关掉例外选项后隐藏符号勾选框；关掉数字标点保持半角后隐藏例外选项；关掉中文标点后隐藏子项
+	if err := tt.Click("数字后例外保持全角"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if b.config.DigitPunctExceptions || tt.HasText("顿号 、") {
+		t.Fatalf("关掉数字后例外保持全角后不应再显示符号勾选：%+v", b.config)
+	}
+	if err := tt.Click("数字标点保持半角"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if b.config.DigitHalfwidthPunct || tt.HasText("数字后例外保持全角") {
+		t.Fatalf("关掉数字标点保持半角后不应再显示例外开关：%+v", b.config)
+	}
+	if err := tt.Click("中文标点"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if b.config.FullwidthPunct || tt.HasText("数字标点保持半角") {
+		t.Fatalf("关掉中文标点后不应再显示数字标点子项：%+v", b.config)
 	}
 }
 

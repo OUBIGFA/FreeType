@@ -1,5 +1,5 @@
 use super::*;
-use freetype_protocol::{keysym, Panel};
+use freetype_protocol::{digit_punct, keysym, Panel};
 
 fn host(name: &str) -> Host {
     let dir = std::env::temp_dir().join(format!("freetype-host-{name}-{}", std::process::id()));
@@ -213,6 +213,65 @@ fn punctuation_commits_candidate_then_mark() {
     let frame = press(&mut host, '1' as u32);
     assert!(!frame.handled, "没在组字时数字交给应用");
     assert_eq!(press(&mut host, '.' as u32).commit.as_deref(), Some("."), "数字后面原样");
+    press(&mut host, '1' as u32);
+    assert_eq!(press(&mut host, '\\' as u32).commit.as_deref(), Some("、"), "数字后面顿号默认仍为全角");
+    cleanup(&host);
+}
+
+#[test]
+fn digit_punctuation_options_and_exceptions() {
+    let mut host = host("digit-punct");
+    // 默认开启数字标点保持半角与例外，且默认仅勾选顿号
+    press(&mut host, '1' as u32);
+    assert_eq!(press(&mut host, ':' as u32).commit.as_deref(), Some(":"));
+    press(&mut host, '1' as u32);
+    assert_eq!(press(&mut host, '\\' as u32).commit.as_deref(), Some("、"));
+
+    // 勾选冒号、圆括号作为数字后全角例外
+    configure(&mut host, |c| {
+        c.digit_punct_fullwidth = digit_punct::DUNHAO | digit_punct::COLON | digit_punct::PAREN;
+    });
+    press(&mut host, '1' as u32);
+    assert_eq!(press(&mut host, ':' as u32).commit.as_deref(), Some("："));
+    press(&mut host, '2' as u32);
+    let frame = press(&mut host, '(' as u32);
+    assert_eq!((frame.commit.as_deref(), frame.caret_back), (Some("（）"), 1));
+    press(&mut host, '3' as u32);
+    assert_eq!(press(&mut host, '.' as u32).commit.as_deref(), Some("."), "未勾选的句号仍保持半角");
+
+    // 关掉例外开关：数字后面的顿号、冒号也全部保持半角
+    configure(&mut host, |c| c.digit_punct_exceptions = false);
+    press(&mut host, '1' as u32);
+    assert_eq!(press(&mut host, '\\' as u32).commit.as_deref(), Some("\\"));
+    press(&mut host, '1' as u32);
+    assert_eq!(press(&mut host, ':' as u32).commit.as_deref(), Some(":"));
+
+    // 关掉数字标点保持半角：数字后面的标点一律按全角输出
+    configure(&mut host, |c| c.digit_halfwidth_punct = false);
+    press(&mut host, '1' as u32);
+    assert_eq!(press(&mut host, '.' as u32).commit.as_deref(), Some("。"));
+    press(&mut host, '1' as u32);
+    assert_eq!(press(&mut host, ',' as u32).commit.as_deref(), Some("，"));
+    cleanup(&host);
+}
+
+#[test]
+fn corner_quotes_replace_curved_double_quotes() {
+    let mut host = host("corner-quotes");
+    configure(&mut host, |c| c.corner_quotes = true);
+    let frame = press(&mut host, '"' as u32);
+    assert_eq!((frame.commit.as_deref(), frame.caret_back), (Some("「」"), 1));
+    let single = press(&mut host, '\'' as u32);
+    assert_eq!((single.commit.as_deref(), single.caret_back), (Some("‘’"), 1));
+
+    configure(&mut host, |c| c.auto_pair = false);
+    assert_eq!(press(&mut host, '"' as u32).commit.as_deref(), Some("「"));
+    typing(&mut host, "nihao");
+    assert_eq!(press(&mut host, '"' as u32).commit.as_deref(), Some("你好」"));
+    assert_eq!(press(&mut host, '"' as u32).commit.as_deref(), Some("「"));
+
+    configure(&mut host, |c| c.fullwidth_punct = false);
+    assert_eq!(press(&mut host, '"' as u32).commit.as_deref(), Some("\""));
     cleanup(&host);
 }
 

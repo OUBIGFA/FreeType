@@ -389,14 +389,25 @@ impl ClientState {
         self.current(true, env)
     }
 
-    /// 中文标点（数字后面原样；引号左右交替）。None：原样上屏 ASCII。
+    /// 中文标点（数字后面按设置保持半角或例外全角；引号左右交替）。None：原样上屏 ASCII。
     fn punct_text(&mut self, c: char, env: &Env, prev: Option<char>) -> Option<String> {
-        if !env.config.fullwidth_punct || prev.is_some_and(|p| p.is_ascii_digit()) {
+        if !env.config.fullwidth_punct {
+            return None;
+        }
+        if prev.is_some_and(|p| p.is_ascii_digit()) && !env.config.allows_fullwidth_after_digit(c) {
             return None;
         }
         if c == '"' || c == '\'' {
             let slot = usize::from(c == '\'');
-            let (open, close) = if c == '"' { ("“", "”") } else { ("‘", "’") };
+            let (open, close) = if c == '"' {
+                if env.config.corner_quotes {
+                    ("「", "」")
+                } else {
+                    ("“", "”")
+                }
+            } else {
+                ("‘", "’")
+            };
             if env.config.auto_pair {
                 return Some(open.to_string());
             }

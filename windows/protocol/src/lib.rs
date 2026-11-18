@@ -98,6 +98,76 @@ pub mod fuzzy {
     pub const DEFAULT: u32 = Z_ZH | C_CH | S_SH | AN_ANG | EN_ENG | IN_ING | IAN_IANG | UAN_UANG;
 }
 
+/// 数字后仍保持全角的标点（[`Config::digit_punct_fullwidth`] 的位掩码）。
+pub mod digit_punct {
+    /// 顿号 `\` -> `、`
+    pub const DUNHAO: u32 = 1 << 0;
+    /// 冒号 `:` -> `：`
+    pub const COLON: u32 = 1 << 1;
+    /// 逗号 `,` -> `，`
+    pub const COMMA: u32 = 1 << 2;
+    /// 句号 `.` -> `。`
+    pub const PERIOD: u32 = 1 << 3;
+    /// 分号 `;` -> `；`
+    pub const SEMICOLON: u32 = 1 << 4;
+    /// 问号 `?` -> `？`
+    pub const QUESTION: u32 = 1 << 5;
+    /// 感叹号 `!` -> `！`
+    pub const EXCLAMATION: u32 = 1 << 6;
+    /// 双引号 `"` -> `“ ”`（或直角引号 `「 」`）
+    pub const DOUBLE_QUOTE: u32 = 1 << 7;
+    /// 单引号 `'` -> `‘ ’`
+    pub const SINGLE_QUOTE: u32 = 1 << 8;
+    /// 圆括号 `( )` -> `（ ）`
+    pub const PAREN: u32 = 1 << 9;
+    /// 方括号 `[ ]` -> `【 】`
+    pub const BRACKET: u32 = 1 << 10;
+    /// 书名号 `< >` -> `《 》`
+    pub const BOOK_TITLE: u32 = 1 << 11;
+    /// 直角引号 `{ }` -> `「 」`
+    pub const CORNER_QUOTE: u32 = 1 << 12;
+    /// 破折号 `_` -> `——`
+    pub const DASH: u32 = 1 << 13;
+    /// 省略号 `^` -> `……`
+    pub const ELLIPSIS: u32 = 1 << 14;
+    /// 波浪号 `~` -> `～`
+    pub const TILDE: u32 = 1 << 15;
+    /// 间隔号 `` ` `` -> `·`
+    pub const MIDDLE_DOT: u32 = 1 << 16;
+    /// 人民币 `$` -> `￥`
+    pub const YUAN: u32 = 1 << 17;
+
+    /// 全部有效位掩码。
+    pub const ALL: u32 = (1 << 18) - 1;
+    /// 默认勾选：顿号「、」。
+    pub const DEFAULT: u32 = DUNHAO;
+
+    /// ASCII 标点对应的位掩码（不在列表里的返回 0）。
+    pub fn bit_of(ascii: char) -> u32 {
+        match ascii {
+            '\\' => DUNHAO,
+            ':' => COLON,
+            ',' => COMMA,
+            '.' => PERIOD,
+            ';' => SEMICOLON,
+            '?' => QUESTION,
+            '!' => EXCLAMATION,
+            '"' => DOUBLE_QUOTE,
+            '\'' => SINGLE_QUOTE,
+            '(' | ')' => PAREN,
+            '[' | ']' => BRACKET,
+            '<' | '>' => BOOK_TITLE,
+            '{' | '}' => CORNER_QUOTE,
+            '_' => DASH,
+            '^' => ELLIPSIS,
+            '~' => TILDE,
+            '`' => MIDDLE_DOT,
+            '$' => YUAN,
+            _ => 0,
+        }
+    }
+}
+
 /// 输入状态：中文（拼音）或英文（按键原样交给应用）。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -198,6 +268,14 @@ pub struct Config {
     // —— 中英文与标点 ——
     /// 中文状态下标点用中文（，。）；关掉是英文标点。
     pub fullwidth_punct: bool,
+    /// 中文标点下，数字后面的标点保持半角（如 3.14、3,000）。
+    pub digit_halfwidth_punct: bool,
+    /// 数字标点保持半角时，允许勾选的例外标点仍输出全角。
+    pub digit_punct_exceptions: bool,
+    /// 数字后面仍保持全角的例外标点位掩码（[`digit_punct`]），默认勾选顿号「、」。
+    pub digit_punct_fullwidth: u32,
+    /// 中文标点下，双引号改用直角引号「」替代默认弯引号“ ”。
+    pub corner_quotes: bool,
     /// 成对标点自动补全：打（ “ 《 【 时补上另一半，光标放中间。
     pub auto_pair: bool,
     /// 中英文之间自动加空格（总开关，默认开）；字母、数字两种分别控制。
@@ -290,6 +368,10 @@ impl Default for Config {
             arrow_keys: "candidates".into(),
             numpad_dot: true,
             fullwidth_punct: true,
+            digit_halfwidth_punct: true,
+            digit_punct_exceptions: true,
+            digit_punct_fullwidth: digit_punct::DEFAULT,
+            corner_quotes: false,
             auto_pair: true,
             autospace: true,
             autospace_letters: true,
@@ -375,6 +457,7 @@ impl Config {
         }
         self.fuzzy_groups &= 0xffff;
         self.page_keys &= 0xf;
+        self.digit_punct_fullwidth &= digit_punct::ALL;
         pick(&mut self.candidate_style, &CANDIDATE_STYLES, &d.candidate_style);
         pick(&mut self.shuangpin_scheme, &SHUANGPIN_SCHEMES, &d.shuangpin_scheme);
         pick(&mut self.shift_toggle, &SHIFT_TOGGLES, &d.shift_toggle);
@@ -398,6 +481,18 @@ impl Config {
         }
         self.app_preset_rules = rules;
         self
+    }
+
+    /// 数字后面的这个 ASCII 标点要不要按中文全角标点输出。
+    pub fn allows_fullwidth_after_digit(&self, ascii: char) -> bool {
+        if !self.digit_halfwidth_punct {
+            return true;
+        }
+        if !self.digit_punct_exceptions {
+            return false;
+        }
+        let bit = digit_punct::bit_of(ascii);
+        bit != 0 && (self.digit_punct_fullwidth & bit) != 0
     }
 }
 
@@ -822,6 +917,10 @@ mod tests {
         assert_eq!(config.hint_position, "top-left");
         assert_eq!(config.font_family, DEFAULT_FONT);
         assert!(config.fullwidth_punct);
+        assert!(config.digit_halfwidth_punct);
+        assert!(config.digit_punct_exceptions);
+        assert_eq!(config.digit_punct_fullwidth, digit_punct::DEFAULT);
+        assert!(!config.corner_quotes);
         assert_eq!(config.fuzzy_groups, fuzzy::DEFAULT);
     }
 
@@ -865,10 +964,12 @@ mod tests {
         assert_eq!(caret.arrow_keys, "caret");
         let fuzzy = Config {
             fuzzy_groups: fuzzy::AN_AI | fuzzy::ENG_ONG | (1 << 20),
+            digit_punct_fullwidth: digit_punct::DUNHAO | digit_punct::COLON | (1 << 25),
             ..Config::default()
         }
         .sanitized();
         assert_eq!(fuzzy.fuzzy_groups, fuzzy::AN_AI | fuzzy::ENG_ONG);
+        assert_eq!(fuzzy.digit_punct_fullwidth, digit_punct::DUNHAO | digit_punct::COLON);
     }
 
     #[test]
