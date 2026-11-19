@@ -14,13 +14,13 @@
 //! 建 TSF 线程时这个状态是「关闭」，`Ctrl+空格` 也会把它关掉，以前因此会一声不响地只出字母。
 //! 激活和换输入框时把它设回「打开」；只有应用明说这里不用输入法（密码框等）时才不接管按键。
 //!
-//! 服务进程连不上时一律不吃键，应用照常收到按键（并记进 `tsf.log`）。
+//! 服务进程连不上时通常不吃键（并记进 `tsf.log`）；已经显示的联想仍可用 Esc 本地关闭。
 
 use std::cell::RefCell;
 use std::mem::ManuallyDrop;
 use std::rc::{Rc, Weak};
 
-use freetype_protocol::{Command, Frame, Key, Mode, PairEdit, Request};
+use freetype_protocol::{keysym, modifier, Command, Frame, Key, Mode, PairEdit, Request};
 use unicode_segmentation::UnicodeSegmentation;
 use windows::core::{implement, IUnknownImpl, Interface, Ref, Result, BOOL, GUID};
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, POINT, RECT, WPARAM};
@@ -44,7 +44,7 @@ use windows::Win32::UI::TextServices::{
     IS_ALPHANUMERIC_PIN, IS_ALPHANUMERIC_PIN_SET,
     GUID_COMPARTMENT_KEYBOARD_OPENCLOSE, INSERT_TEXT_AT_SELECTION_FLAGS, TF_AE_NONE, TF_ANCHOR_END,
     TF_ANCHOR_START, TF_DEFAULT_SELECTION, TF_ES_ASYNCDONTCARE, TF_ES_READ, TF_ES_READWRITE, TF_ES_SYNC,
-    TF_IAS_QUERYONLY, TF_SELECTION, TF_SELECTIONSTYLE,
+    TF_GRAVITY_BACKWARD, TF_GRAVITY_FORWARD, TF_IAS_QUERYONLY, TF_SELECTION, TF_SELECTIONSTYLE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, DestroyMenu, GetGUIThreadInfo, GetMessageExtraInfo, GetWindowRect,
@@ -70,12 +70,25 @@ struct CommitWatch {
     armed: bool,
 }
 
+#[derive(Clone)]
 struct SpaceWatch {
     context: ITfContext,
     revision: u64,
-    expected: String,
+    range: ITfRange,
     pressed_ms: u64,
-    released: bool,
+}
+
+impl SpaceWatch {
+    fn ends_at(&self, ec: u32, caret: &ITfRange) -> bool {
+        unsafe { caret.CompareStart(ec, &self.range, TF_ANCHOR_END) == Ok(0) }
+    }
+
+    fn contains_space(&self, ec: u32) -> bool {
+        let mut buf = [0; 2];
+        let mut len = 0;
+        (unsafe { self.range.GetText(ec, 0, &mut buf, &mut len).is_ok() })
+            && len == 1 && buf[0] == u16::from(b' ')
+    }
 }
 
 struct State {
@@ -112,10 +125,14 @@ struct State {
     caps: bool,
     /// 服务进程要光标前的字（自动加空格打开了）。
     want_before: bool,
+    /// 记录联想接管的这一次 Esc，直到松开；不影响下一次按下。
+    prediction_escape: PredictionEscape,
     /// 服务进程那边在组字、开着面板（键要先问它）。
     busy: bool,
     /// 候选窗里是上屏联想：不算在组字（照常读光标前的字，不认的键交给应用）。
     predicting: bool,
+    /// 上一次成功上屏的末尾；核对联想选词位置时不使用可能滞后的正文快照。
+    prediction_caret: Option<ITfRange>,
 }
 
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
@@ -124,6 +141,14 @@ enum MenuState {
     Closed,
     Queued,
     Open,
+}
+
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+enum PredictionEscape {
+    #[default]
+    Free,
+    Preview,
+    Held,
 }
 
 #[implement(
@@ -175,8 +200,10 @@ impl TextService {
                 mode: Mode::Chinese,
                 caps: false,
                 want_before: false,
+                prediction_escape: PredictionEscape::Free,
                 busy: false,
                 predicting: false,
+                prediction_caret: None,
             })),
             instance,
             _dll: DllRef::new(),
@@ -379,6 +406,7 @@ fn set_sensitive(state: &Rc<RefCell<State>>, active: bool) {
         let mut state = state.borrow_mut();
         state.undo = None;
         state.space = None;
+        state.prediction_escape = PredictionEscape::Free;
         state.pairs.clear();
         if let Some(window) = &state.window { window.hide(); }
     }
@@ -408,16 +436,14 @@ fn replace_verified_space(state: &Rc<RefCell<State>>, context: &ITfContext, ec: 
     let watch = watch.filter(|watch| same_object(&watch.context, context)).ok_or_else(failed)?;
     let selection = selection_range(context, ec).ok_or_else(failed)?;
     unsafe {
-        if !selection.IsEmpty(ec)?.as_bool() || !before_text(context, ec).is_some_and(|before| before.ends_with(&watch.expected)) {
+        if !selection.IsEmpty(ec)?.as_bool() || !watch.ends_at(ec, &selection) || !watch.contains_space(ec) {
             return Err(failed());
         }
-        let mut moved = 0;
-        selection.ShiftStart(ec, -1, &mut moved, std::ptr::null())?;
-        if moved != -1 { return Err(failed()); }
-        selection.SetText(ec, 0, text)?;
-        selection.Collapse(ec, TF_ANCHOR_END)?;
+        let range = watch.range;
+        range.SetText(ec, 0, text)?;
+        range.Collapse(ec, TF_ANCHOR_END)?;
+        Ok(range)
     }
-    Ok(selection)
 }
 
 /// 把系统的「键盘打开」设成打开（中英文由 FreeType 自己管）。
@@ -498,6 +524,16 @@ fn apply_document(state: &Rc<RefCell<State>>, context: &ITfContext, frame: &Fram
                     range
                 };
                 set_selection(context, ec, &range)?;
+                if frame.predict {
+                    // Keep the insertion point on the left when the host adds text there.
+                    let anchor = range.Clone().and_then(|caret| {
+                        caret.SetGravity(ec, TF_GRAVITY_BACKWARD, TF_GRAVITY_BACKWARD)?;
+                        Ok(caret)
+                    });
+                    let mut s = state.borrow_mut();
+                    s.prediction_caret = anchor.ok();
+                    s.space = None;
+                }
                 if frame.caret_back == 1 && frame.pair_enabled {
                     if let Some(pair) = frame.commit.as_ref().and_then(|text| pair::Pair::after_commit(context, &range, ec, text)) {
                         let mut s = state.borrow_mut();
@@ -576,21 +612,31 @@ fn note_frame(state: &Rc<RefCell<State>>, frame: &Frame) {
     let mut s = state.borrow_mut();
     s.predicting = frame.predict && !frame.candidates.is_empty();
     s.predict_double_space = s.predicting && frame.predict_double_space;
+    if !s.predicting { s.prediction_caret = None; }
     if !s.predict_double_space && !frame.replace_space { s.space = None; }
     s.pair_enabled = frame.pair_enabled;
     if !frame.pair_enabled { s.pairs.clear(); }
     s.busy = !s.predicting && (!frame.preedit.is_empty() || !frame.candidates.is_empty() || frame.title.is_some());
 }
 
-/// 收起上屏联想：一会儿没选、来了翻不成键码的键、候选窗摆不出来。
+fn clear_prediction(state: &Rc<RefCell<State>>) -> bool {
+    let mut s = state.borrow_mut();
+    if !std::mem::take(&mut s.predicting) {
+        return false;
+    }
+    s.predict_double_space = false;
+    s.prediction_caret = None;
+    s.space = None;
+    if let Some(window) = &s.window { window.hide(); }
+    true
+}
+
 /// 服务进程那边也要收起，不然看不见的联想词还会吃掉数字键和空格。
 fn dismiss_prediction(state: &Rc<RefCell<State>>) {
-    if !state.borrow().predicting {
-        return;
-    }
-    if let Some(frame) = call(state, &Request::Reset { commit: false }) {
-        note_frame(state, &frame);
-        show_window(state, &frame);
+    if clear_prediction(state) {
+        if let Some(frame) = call(state, &Request::Reset { commit: false }) {
+            note_frame(state, &frame);
+        }
     }
 }
 
@@ -807,35 +853,84 @@ fn verified_pair_key(state: &Rc<RefCell<State>>, context: Option<&ITfContext>, k
     accepted.get().then_some(action)
 }
 
-/// Preview and real key-down both see the same frame. Only a release between them can arm a second tap.
-fn detect_double_space(state: &Rc<RefCell<State>>, context: Option<&ITfContext>, key: Key, lparam: LPARAM) -> Key {
-    use freetype_protocol::{keysym, modifier};
-    let revision = shown_revision(state);
-    let Some(context) = context else { return key; };
-    if key.keysym != 0x20 || key.modifiers & (modifier::SHIFT | modifier::CTRL | modifier::ALT | modifier::SUPER) != 0
-        || lparam.0 & (1 << 30) != 0 || revision == 0 || !state.borrow().predict_double_space {
-        return key;
+fn plain_key(key: Key) -> bool {
+    key.modifiers & (modifier::SHIFT | modifier::CTRL | modifier::ALT | modifier::SUPER) == 0
+}
+
+fn prediction_in(s: &State, context: &ITfContext) -> bool {
+    s.predicting && s.context.as_ref().is_some_and(|owner| same_object(owner, context))
+}
+
+/// Both TSF callbacks use the same candidate page and caret. A fresh text
+/// snapshot can lag behind the commit in a rich editor, so do not send it as
+/// `before` for this space. A verified move still invalidates the prediction.
+fn prediction_space_key(
+    state: &Rc<RefCell<State>>, context: &ITfContext, key: Key, repeat: bool, revision: u64,
+) -> (Key, bool) {
+    if key.keysym != 0x20 || !plain_key(key) || revision == 0 {
+        return (key, false);
     }
+    let (client_id, anchor, watch, double) = {
+        let s = state.borrow();
+        if !prediction_in(&s, context) { return (key, false); }
+        (s.client_id, s.prediction_caret.clone(), s.space.clone(), s.predict_double_space)
+    };
+    enum Check { Moved, First(ITfRange), Second }
     let ms = now_ms();
     let wait = u64::from(unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime() }).clamp(200, 700);
-    {
-        let held = state.borrow();
-        if held.space.as_ref().is_some_and(|watch| !watch.released && watch.revision == revision) {
-            return key;
+    let result = Rc::new(std::cell::Cell::new(None));
+    let (result2, doc) = (result.clone(), context.clone());
+    edit_with(context, client_id, TF_ES_SYNC | TF_ES_READ, move |ec| {
+        let Some(caret) = selection_range(&doc, ec) else { return Ok(()); };
+        unsafe {
+            if !caret.IsEmpty(ec)?.as_bool() {
+                result2.set(Some(Check::Moved));
+                return Ok(());
+            }
+            if let Some(watch) = watch.filter(|w| w.revision == revision && same_object(&w.context, &doc)) {
+                if watch.ends_at(ec, &caret) {
+                    // The range is empty on repeated previews of the first key.
+                    // Only an actual app insertion expands it to one space.
+                    if watch.contains_space(ec) {
+                        if !repeat && ms.saturating_sub(watch.pressed_ms) <= wait {
+                            result2.set(Some(Check::Second));
+                            return Ok(());
+                        }
+                    } else if !watch.range.IsEmpty(ec)?.as_bool() {
+                        result2.set(Some(Check::Moved));
+                        return Ok(());
+                    }
+                } else {
+                    result2.set(Some(Check::Moved));
+                    return Ok(());
+                }
+            } else if let Some(anchor) = anchor {
+                if caret.CompareStart(ec, &anchor, TF_ANCHOR_END)? != 0 {
+                    result2.set(Some(Check::Moved));
+                    return Ok(());
+                }
+            }
+            if double && !repeat {
+                caret.SetGravity(ec, TF_GRAVITY_BACKWARD, TF_GRAVITY_FORWARD)?;
+                result2.set(Some(Check::First(caret)));
+            }
         }
+        Ok(())
+    });
+    match result.take() {
+        Some(Check::Moved) => {
+            dismiss_prediction(state);
+            (key, false)
+        }
+        Some(Check::First(range)) => {
+            // A pass-through first space may only get OnTestKeyDown. Arming
+            // a range does not change the document or select a candidate.
+            state.borrow_mut().space = Some(SpaceWatch { context: context.clone(), revision, range, pressed_ms: ms });
+            (key, true)
+        }
+        Some(Check::Second) => (Key { keysym: keysym::SPACE_DOUBLE, ..key }, true),
+        None => (key, true),
     }
-    let Some(before) = read_before(state, context) else { return key; };
-    let mut state = state.borrow_mut();
-    if state.space.as_ref().is_some_and(|watch| watch.released && watch.revision == revision
-        && ms.saturating_sub(watch.pressed_ms) <= wait && same_object(&watch.context, context)
-        && before.ends_with(&watch.expected)) {
-        return Key { keysym: keysym::SPACE_DOUBLE, ..key };
-    }
-    // Compare a suffix that stays inside the TSF read limit even after one extra character.
-    let start = before.char_indices().rev().nth(7).map_or(0, |(i, _)| i);
-    let expected = format!("{} ", &before[start..]);
-    state.space = Some(SpaceWatch { context: context.clone(), revision, expected, pressed_ms: ms, released: false });
-    key
 }
 
 /// 虚拟键翻成键码；翻不出来（非 ASCII 字符、功能键）返回 None。
@@ -927,7 +1022,7 @@ fn on_click(state: &Weak<RefCell<State>>, click: Click) {
         }
         Click::Candidate { revision, action } => Request::CandidateAction { revision, action },
         Click::PinChoices { .. } => return,
-        Click::Dismiss => Request::Reset { commit: false },
+        Click::Dismiss => return dismiss_prediction(&state),
         Click::Settings => Request::Command {
             command: Command::OpenSettings,
         },
@@ -1052,15 +1147,23 @@ fn resume_composition(state: &Rc<RefCell<State>>, context: ITfContext) {
 /// （[`resume_composition`]）。以前一律收起候选窗，第一个字母就像直接成了英文。
 /// 焦点暂时落空（`focus` 是 None）时只收起候选窗，编辑区不动，回来以后同样接着显示。
 fn on_focus(state: &Rc<RefCell<State>>, focus: Option<&ITfDocumentMgr>) {
+    let context = focus.and_then(|doc| unsafe { doc.GetTop().ok() });
+    // A rich editor can reassert the same focus during the commit, before
+    // the prediction has even painted. Don't clear the new page or its range.
+    if context.as_ref().is_some_and(|context| prediction_in(&state.borrow(), context)) {
+        return;
+    }
     let composition = state.borrow().composition.clone();
     if let Some(context) = composing_context(composition.as_ref(), focus) {
         resume_composition(state, context);
         return;
     }
+    dismiss_prediction(state);
     {
         let mut s = state.borrow_mut();
         s.shift.cancel();
         s.space = None;
+        s.prediction_escape = PredictionEscape::Free;
         s.pairs.clear();
         s.caret_move = None;
         s.undo = None;
@@ -1069,7 +1172,6 @@ fn on_focus(state: &Rc<RefCell<State>>, focus: Option<&ITfDocumentMgr>) {
             window.hide();
         }
     }
-    let context = focus.and_then(|doc| unsafe { doc.GetTop().ok() });
     let Some(context) = context else {
         state.borrow_mut().context = None;
         if let Some(frame) = call(state, &Request::Focus { active: false, before: None }) {
@@ -1098,6 +1200,8 @@ fn on_focus(state: &Rc<RefCell<State>>, focus: Option<&ITfDocumentMgr>) {
         let sensitive = sensitive_scope(&context2, ec);
         set_sensitive(&state2, sensitive);
         if sensitive { return Ok(()); }
+        // A queued focus read can arrive after the first commit in this field.
+        if prediction_in(&state2.borrow(), &context2) { return Ok(()); }
         let before = before_text(&context2, ec);
         let caret = selection_rect(&context2, ec);
         // 大写锁定可能在别的窗口里开关过：先对齐，下面拿到的中英文状态才是对的
@@ -1152,6 +1256,9 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
         s.context = None;
         s.busy = false;
         s.predicting = false;
+        s.prediction_caret = None;
+        s.space = None;
+        s.prediction_escape = PredictionEscape::Free;
         s.sink = None;
         s.layout_sink = None;
         s.window = None;
@@ -1176,6 +1283,9 @@ impl ITfTextInputProcessorEx_Impl for TextService_Impl {
         }
         let weak = Rc::downgrade(&self.state);
         let button = langbar::create(Rc::new(move |click| on_button(&weak, click)));
+        if let Err(error) = button.watch_brand(&thread_mgr) {
+            crate::log::write("语言栏图标监视启动失败", &error.to_string());
+        }
         unsafe {
             if let (Ok(items), Some(item)) = (thread_mgr.cast::<ITfLangBarItemMgr>(), button.as_item()) {
                 let _ = items.AddItem(&item);
@@ -1233,9 +1343,6 @@ fn note_key_down(state: &Rc<RefCell<State>>, wparam: WPARAM, lparam: LPARAM) {
 fn key_released(state: &Rc<RefCell<State>>, context: Option<&ITfContext>, wparam: WPARAM, lparam: LPARAM) {
     if own_input() { return; }
     let vk = wparam.0 as u16;
-    if vk == 0x20 {
-        if let Some(watch) = state.borrow_mut().space.as_mut() { watch.released = true; }
-    }
     if vk == 0x08 { confirm_backspace(state, context); }
     if keys::is_modifier(vk) && state.borrow().caret_move.is_some() {
         caret_tick(state);
@@ -1266,9 +1373,55 @@ fn own_key_down(state: &Rc<RefCell<State>>) -> Result<BOOL> {
     Ok(composing(state).into())
 }
 
+/// A visible prediction owns plain Esc until release, including repeats
+/// after the window closes. A fresh press can still go to the application.
+fn prediction_escape_down(state: &Rc<RefCell<State>>, context: Option<&ITfContext>, key: Key, repeat: bool) -> bool {
+    if key.keysym != keysym::ESCAPE { return false; }
+    let (eat, close) = {
+        let mut s = state.borrow_mut();
+        if repeat && s.prediction_escape == PredictionEscape::Held { return true; }
+        let visible = context.is_some_and(|context| prediction_in(&s, context))
+            && s.window.as_ref().is_some_and(|window| window.visible());
+        let claimed = visible && plain_key(key);
+        s.prediction_escape = match (claimed, key.test) {
+            (false, _) => PredictionEscape::Free,
+            (true, true) => PredictionEscape::Preview,
+            (true, false) => PredictionEscape::Held,
+        };
+        (claimed, claimed && !key.test)
+    };
+    if close { dismiss_prediction(state); }
+    eat
+}
+
+fn prediction_escape_up(state: &Rc<RefCell<State>>, wparam: WPARAM, test: bool) -> bool {
+    if own_input() || wparam.0 as u16 != 0x1b { return false; }
+    let claimed = {
+        let mut s = state.borrow_mut();
+        let claimed = s.prediction_escape;
+        if claimed == PredictionEscape::Free { return false; }
+        s.prediction_escape = if test { PredictionEscape::Held } else { PredictionEscape::Free };
+        claimed
+    };
+    // Do not forward an unmatched release. If the host omitted KeyDown
+    // after a handled test, this still closes the window without editing text.
+    if claimed == PredictionEscape::Preview { dismiss_prediction(state); }
+    true
+}
+
+fn discard_prediction_from_other_context(state: &Rc<RefCell<State>>, context: &ITfContext) {
+    let stale = {
+        let s = state.borrow();
+        s.predicting && !prediction_in(&s, context)
+    };
+    if stale { dismiss_prediction(state); }
+}
+
 impl ITfKeyEventSink_Impl for TextService_Impl {
     fn OnSetFocus(&self, foreground: BOOL) -> Result<()> {
         if !foreground.as_bool() {
+            dismiss_prediction(&self.state);
+            self.state.borrow_mut().prediction_escape = PredictionEscape::Free;
             if let Some(window) = &self.state.borrow().window {
                 window.hide();
             }
@@ -1288,17 +1441,28 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         if keys::is_modifier(vk) || check_sensitive(&self.state, pic.as_ref()) {
             return Ok(false.into());
         }
+        if let Some(context) = pic.as_ref() { discard_prediction_from_other_context(&self.state, context); }
         watch_backspace(&self.state, pic.as_ref(), vk);
         let Some(key) = translate(wparam, lparam, true) else {
+            dismiss_prediction(&self.state);
             // 组字时不认识的键也吃掉，免得漏给应用
             return Ok(composing(&self.state).into());
         };
-        if verified_pair_key(&self.state, pic.as_ref(), key).is_some() { return Ok(true.into()); }
-        let key = detect_double_space(&self.state, pic.as_ref(), key, lparam);
+        let repeat = lparam.0 & (1 << 30) != 0;
+        if prediction_escape_down(&self.state, pic.as_ref(), key, repeat)
+            || verified_pair_key(&self.state, pic.as_ref(), key).is_some() {
+            return Ok(true.into());
+        }
+        let key = pic.as_ref().map_or(key, |context| {
+            prediction_space_key(&self.state, context, key, repeat, shown_revision(&self.state)).0
+        });
         let revision = shown_revision(&self.state);
         let frame = call(&self.state, &Request::PhysicalKey { key, before: None, scan: 0, shown_revision: Some(revision) });
         if let Some(frame) = &frame {
             note_preview(&self.state, frame);
+            // A passed-through key won't get OnKeyDown. The server has
+            // already put the prediction aside; don't leave the old popup.
+            if !frame.handled && !frame.predict { clear_prediction(&self.state); }
         }
         Ok(frame.is_some_and(|f| f.handled).into())
     }
@@ -1317,12 +1481,15 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         }
         watch_backspace(&self.state, pic.as_ref(), vk);
         let context = pic.ok()?.clone();
+        discard_prediction_from_other_context(&self.state, &context);
         self.state.borrow_mut().context = Some(context.clone());
         let Some(key) = translate(wparam, lparam, false) else {
             // 翻不成键码的键（功能键等）交给应用；显示着的联想词先收起
             dismiss_prediction(&self.state);
             return Ok(composing(&self.state).into());
         };
+        let repeat = lparam.0 & (1 << 30) != 0;
+        if prediction_escape_down(&self.state, Some(&context), key, repeat) { return Ok(true.into()); }
         // 没在组字时带上光标前的字（标点、自动加空格看它）
         let wants_before = {
             let s = self.state.borrow();
@@ -1335,8 +1502,8 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                 return Ok(true.into());
             }
         }
-        let key = detect_double_space(&self.state, Some(&context), key, lparam);
-        let before = if wants_before && key.keysym != freetype_protocol::keysym::SPACE_DOUBLE {
+        let (key, prediction_space) = prediction_space_key(&self.state, &context, key, repeat, shown_revision(&self.state));
+        let before = if wants_before && !prediction_space {
             read_before(&self.state, &context)
         } else { None };
         let scan = ((lparam.0 >> 16) & 0x1ff) as u16;
@@ -1362,11 +1529,13 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
     }
 
     fn OnTestKeyUp(&self, pic: Ref<ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
+        if prediction_escape_up(&self.state, wparam, true) { return Ok(true.into()); }
         key_released(&self.state, pic.as_ref(), wparam, lparam);
         Ok(false.into())
     }
 
     fn OnKeyUp(&self, pic: Ref<ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
+        if prediction_escape_up(&self.state, wparam, false) { return Ok(true.into()); }
         key_released(&self.state, pic.as_ref(), wparam, lparam);
         Ok(false.into())
     }
@@ -1496,3 +1665,7 @@ mod tests {
 #[cfg(test)]
 #[path = "service_focus_tests.rs"]
 mod focus_tests;
+
+#[cfg(test)]
+#[path = "service_prediction_tests.rs"]
+mod prediction_tests;

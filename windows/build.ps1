@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Build a FreeType test installer, release candidate or approved release tag.
 

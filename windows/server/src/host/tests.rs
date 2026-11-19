@@ -43,6 +43,59 @@ fn brand_icon_changes_persist_without_interrupting_composition() {
     cleanup(&host);
 }
 
+#[test]
+fn language_bar_reads_only_changed_brand_images_without_an_input_session() {
+    let mut host = host("language-bar-brand");
+    let request = |known: Option<u64>| serde_json::from_value(serde_json::json!({
+        "op": "get_brand_icon", "known_revision": known
+    })).expect("语言栏必须能单独读取用于显示的品牌图像");
+    let first = serde_json::to_value(host.handle(99, request(None))).unwrap();
+    assert_eq!(first["brand_icon"]["appearance"], "default");
+    assert!(first.get("config").is_none(), "图标读取不能暴露其他设置");
+    assert!(!host.clients.contains_key(&99), "读取图像不创建输入会话");
+    let revision = first["brand_icon"]["revision"].as_u64().unwrap();
+    let unchanged = serde_json::to_value(host.handle(99, request(Some(revision)))).unwrap();
+    assert!(unchanged.get("brand_icon").is_none(), "未变图标不能反复传输或解码");
+    configure(&mut host, |config| config.font_size = 20);
+    assert!(serde_json::to_value(host.handle(99, request(Some(revision)))).unwrap().get("brand_icon").is_none());
+    configure(&mut host, |config| config.brand_icon = "white".into());
+    let white = serde_json::to_value(host.handle(99, request(Some(revision)))).unwrap();
+    assert_eq!(white["brand_icon"]["appearance"], "white");
+    assert_ne!(white["brand_icon"]["revision"].as_u64().unwrap(), revision);
+    configure(&mut host, |config| {
+        config.brand_icon = "custom".into();
+        config.custom_brand_icon = "saved-png".into();
+    });
+    let custom = serde_json::to_value(host.handle(99, request(None))).unwrap();
+    assert_eq!(custom["brand_icon"]["custom_png"], "saved-png");
+    cleanup(&host);
+}
+
+#[test]
+fn language_bar_is_notified_only_when_the_displayed_brand_changes() {
+    struct Display(std::rc::Rc<std::cell::Cell<u32>>);
+    impl Desktop for Display {
+        fn update(&self, _: &BarState) {}
+        fn open_settings(&self) {}
+        fn brand_icon_changed(&self) { self.0.set(self.0.get() + 1); }
+    }
+    let notifications = std::rc::Rc::new(std::cell::Cell::new(0));
+    let mut host = host("brand-notify");
+    host.set_desktop(Box::new(Display(notifications.clone())));
+    configure(&mut host, |config| config.font_size = 20);
+    configure(&mut host, |config| config.custom_brand_icon = "saved-png".into());
+    assert_eq!(notifications.get(), 0, "普通设置和未选中的自定义图像不应刷新语言栏");
+    configure(&mut host, |config| config.brand_icon = "white".into());
+    assert_eq!(notifications.get(), 1);
+    configure(&mut host, |config| config.brand_icon = "white".into());
+    assert_eq!(notifications.get(), 1, "同一外观不重复通知");
+    configure(&mut host, |config| config.brand_icon = "custom".into());
+    assert_eq!(notifications.get(), 2);
+    configure(&mut host, |config| config.custom_brand_icon = "new-png".into());
+    assert_eq!(notifications.get(), 3, "重新导入自定义图标也应立即刷新");
+    cleanup(&host);
+}
+
 fn key_with(host: &mut Host, id: ClientId, sym: u32, modifiers: u32) -> Frame {
     let key = Key {
         keysym: sym,

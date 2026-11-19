@@ -250,7 +250,11 @@ def check():
             binary_paths.add(path)
             continue
         if text.startswith("\ufeff"):
-            errors.append(f"{path}: expected UTF-8 without BOM")
+            if path.lower().endswith(".ps1"):
+                # Windows PowerShell 5.1 需要 BOM 才能按 UTF-8 读取非 ASCII 脚本。
+                text = text[1:]
+            else:
+                errors.append(f"{path}: expected UTF-8 without BOM")
         texts[path] = text
         if path.endswith(".json"):
             try:

@@ -277,6 +277,10 @@ fn low_integrity_clients_can_type_but_cannot_manage_or_export_user_data() {
         assert!(restricted.call(&Request::Hello { session: true, app: "sandbox.exe".into() }).ok);
         for letter in "nihao".chars() { assert!(restricted.key(letter).handled); }
         assert_eq!(restricted.key(' ').commit.as_deref(), Some("你好"));
+        let icon = restricted.call(&Request::GetBrandIcon { known_revision: None });
+        assert!(icon.ok, "低完整性宿主仍应能读取用于显示的图像");
+        assert_eq!(icon.brand_icon.unwrap().appearance, "default");
+        assert!(icon.config.is_none(), "图标读取不能附带用户设置");
         let export = restricted.call(&Request::ExportSettings { path: target.display().to_string(), parts: None });
         assert!(!export.ok, "低完整性进程不应借服务进程写入用户文件");
         for request in [Request::GetConfig, Request::ListUserWords, Request::ClearLearned, Request::Shutdown] {

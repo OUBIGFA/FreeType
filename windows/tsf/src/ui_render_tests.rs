@@ -4,7 +4,7 @@ use windows::Win32::Graphics::Gdi::{
     CreateDIBSection, GdiFlush, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
 };
 use windows::Win32::System::StationsAndDesktops::{
-    CloseDesktop, CreateDesktopW, GetThreadDesktop, SetThreadDesktop, DESKTOP_CONTROL_FLAGS,
+    CreateDesktopW, GetThreadDesktop, SetThreadDesktop, DESKTOP_CONTROL_FLAGS,
     DESKTOP_CREATEMENU, DESKTOP_CREATEWINDOW, DESKTOP_READOBJECTS, DESKTOP_WRITEOBJECTS, HDESK,
 };
 use windows::Win32::System::Threading::GetCurrentThreadId;
@@ -44,7 +44,6 @@ fn candidate_text_palette_is_readable_in_both_appearances() {
 
 pub(crate) struct PrivateDesktop {
     previous: HDESK,
-    desktop: HDESK,
 }
 
 impl PrivateDesktop {
@@ -52,18 +51,24 @@ impl PrivateDesktop {
         unsafe {
             let tid = GetCurrentThreadId();
             let previous = GetThreadDesktop(tid).unwrap();
-            let name = HSTRING::from(format!("FreeType-render-{}-{tid}", std::process::id()));
-            let desktop = CreateDesktopW(
-                &name,
-                PCWSTR::null(),
-                None,
-                DESKTOP_CONTROL_FLAGS(0),
-                DESKTOP_CREATEMENU.0 | DESKTOP_CREATEWINDOW.0 | DESKTOP_READOBJECTS.0 | DESKTOP_WRITEOBJECTS.0,
-                None,
-            )
-            .expect("必须能建立独立桌面，不能退回用户桌面测试");
+            // 候选窗口类按进程共享，首次注册的桌面必须与窗口类保持相同生命期。
+            // 所有测试线程借用同一个私有桌面；测试进程退出时 Windows 一并释放桌面和类。
+            // 每个用例仍销毁自己的窗口，下面的 SetThreadDesktop 会拒绝遗留窗口或钩子。
+            static DESKTOP: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+            let desktop = HDESK(*DESKTOP.get_or_init(|| {
+                let name = HSTRING::from(format!("FreeType-render-{}", std::process::id()));
+                CreateDesktopW(
+                    &name,
+                    PCWSTR::null(),
+                    None,
+                    DESKTOP_CONTROL_FLAGS(0),
+                    DESKTOP_CREATEMENU.0 | DESKTOP_CREATEWINDOW.0 | DESKTOP_READOBJECTS.0 | DESKTOP_WRITEOBJECTS.0,
+                    None,
+                )
+                .expect("必须能建立独立桌面，不能退回用户桌面测试").0 as usize
+            }) as *mut _);
             SetThreadDesktop(desktop).unwrap();
-            Self { previous, desktop }
+            Self { previous }
         }
     }
 }
@@ -72,7 +77,6 @@ impl Drop for PrivateDesktop {
     fn drop(&mut self) {
         unsafe {
             SetThreadDesktop(self.previous).unwrap();
-            CloseDesktop(self.desktop).unwrap();
         }
     }
 }

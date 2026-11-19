@@ -18,7 +18,7 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
 use windows::Win32::UI::TextServices::{
     ITfLangBarItem, ITfLangBarItemButton, ITfLangBarItemButton_Impl, ITfLangBarItemSink, ITfLangBarItem_Impl,
-    ITfMenu, ITfSource, ITfSource_Impl, TfLBIClick, GUID_LBI_INPUTMODE, TF_LANGBARITEMINFO, TF_LBI_CLK_LEFT,
+    ITfMenu, ITfSource, ITfSource_Impl, ITfThreadMgr, TfLBIClick, GUID_LBI_INPUTMODE, TF_LANGBARITEMINFO, TF_LBI_CLK_LEFT,
     TF_LBI_CLK_RIGHT, TF_LBI_ICON, TF_LBI_STYLE_BTN_BUTTON, TF_LBI_STYLE_SHOWNINTRAY, TF_LBI_TEXT, TF_LBI_TOOLTIP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -41,6 +41,7 @@ struct State {
     mode: Mode,
     sink: Option<ITfLangBarItemSink>,
     on_click: Option<Rc<dyn Fn(ButtonClick)>>,
+    brand: Option<crate::brand_icon::BrandMonitor>,
 }
 
 #[implement(ITfLangBarItemButton, ITfSource)]
@@ -61,6 +62,7 @@ pub fn create(on_click: Rc<dyn Fn(ButtonClick)>) -> ButtonHandle {
         mode: Mode::Chinese,
         sink: None,
         on_click: Some(on_click),
+        brand: None,
     }));
     let item: ITfLangBarItemButton = ModeButton {
         state: state.clone(),
@@ -71,6 +73,13 @@ pub fn create(on_click: Rc<dyn Fn(ButtonClick)>) -> ButtonHandle {
 }
 
 impl ButtonHandle {
+    /// 输入组件激活后接入品牌刷新；模式按钮的创建和行为测试仍可独立使用。
+    pub fn watch_brand(&self, manager: &ITfThreadMgr) -> Result<()> {
+        let monitor = crate::brand_icon::BrandMonitor::new(manager)?;
+        self.state.borrow_mut().brand = Some(monitor);
+        Ok(())
+    }
+
     pub fn set_mode(&self, mode: Mode) {
         let sink = {
             let mut s = self.state.borrow_mut();
@@ -96,6 +105,9 @@ impl ButtonHandle {
         let mut s = self.state.borrow_mut();
         s.on_click = None;
         s.sink = None;
+        let brand = s.brand.take();
+        drop(s);
+        drop(brand);
     }
 }
 

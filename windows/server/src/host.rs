@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use freetype_protocol::{
-    keysym, modifier, AppWindow, BackupPart, CandidateAction, Command, Config, DefaultMode, Frame, ImportReport, Key, Mode, Request, Response,
+    keysym, modifier, AppWindow, BackupPart, BrandIcon, CandidateAction, Command, Config, DefaultMode, Frame, ImportReport, Key, Mode, Request, Response,
     Status, UserWord, PROTOCOL_VERSION,
 };
 use wowtype_core::msime;
@@ -62,6 +62,8 @@ pub struct BarState {
 pub trait Desktop {
     fn update(&self, state: &BarState);
     fn open_settings(&self);
+    /// 已保存的品牌图像变化时通知已激活的语言栏；接收方只读取图像。
+    fn brand_icon_changed(&self) {}
     /// 现在前台窗口属于哪个程序（小写文件名；认不出的程序是空串）。
     /// None：没有前台窗口，或者是 FreeType 自己的窗口，不算换了程序。
     fn foreground_app(&self) -> Option<String> {
@@ -87,6 +89,7 @@ pub struct Host {
     engine_error: Option<String>,
     store: Store,
     config: Config,
+    brand_icon_revision: u64,
     /// 最后主动选择的中英文状态；全局模式和没有输入焦点时使用。
     mode: Mode,
     /// 按应用记的中英文状态（mode_scope 是 app 时用）。
@@ -238,6 +241,7 @@ impl Host {
             engine: None,
             engine_error: None,
             mode: config.default_mode.resolve(store.load_mode()),
+            brand_icon_revision: config.brand_icon_revision(),
             config,
             store,
             app_modes: HashMap::new(),
@@ -407,6 +411,11 @@ impl Host {
         if !config.typing_stats || !self.config.typing_stats { self.stats.break_activity(); }
         if config.typing_stats && !self.config.typing_stats { self.stats.prepare(); }
         self.config = config.sanitized();
+        let brand_revision = self.config.brand_icon_revision();
+        if brand_revision != self.brand_icon_revision {
+            self.brand_icon_revision = brand_revision;
+            if let Some(desktop) = &self.desktop { desktop.brand_icon_changed(); }
+        }
         if !self.config.app_presets || !self.config.app_preset_rules.iter().any(|rule| rule.app == self.foreground) {
             self.preset_mode = None;
             self.preset_hint = false;
@@ -1522,6 +1531,14 @@ impl Host {
                 ..Response::ok()
             },
             Request::GetConfig => self.config_response(),
+            Request::GetBrandIcon { known_revision } => Response {
+                brand_icon: (known_revision != Some(self.brand_icon_revision)).then(|| BrandIcon {
+                    revision: self.brand_icon_revision,
+                    appearance: self.config.brand_icon.clone(),
+                    custom_png: if self.config.brand_icon == "custom" { self.config.custom_brand_icon.clone() } else { String::new() },
+                }),
+                ..Response::ok()
+            },
             Request::SetNeuralModel { path } => self.change_neural_model(path),
             Request::SetConfig { config } => match self.save_config(config) {
                 Ok(()) => self.config_response(),

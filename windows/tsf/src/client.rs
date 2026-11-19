@@ -34,6 +34,7 @@ struct Connection {
     pipe: HANDLE,
     event: HANDLE,
     buf: Vec<u8>,
+    timeout_ms: u32,
 }
 
 impl Drop for Connection {
@@ -49,6 +50,8 @@ pub struct Client {
     name: Option<String>,
     connection: Option<Connection>,
     last_spawn: Option<u64>,
+    session: bool,
+    timeout_ms: u32,
 }
 
 fn now_ms() -> u64 {
@@ -117,7 +120,7 @@ fn finish(conn: &Connection, overlapped: &mut OVERLAPPED, started: windows::core
             if e.code() != ERROR_IO_PENDING.to_hresult() {
                 return Err(Fail::Broken);
             }
-            if WaitForSingleObject(conn.event, TIMEOUT_MS) != WAIT_OBJECT_0 {
+            if WaitForSingleObject(conn.event, conn.timeout_ms) != WAIT_OBJECT_0 {
                 let _ = CancelIoEx(conn.pipe, Some(overlapped));
                 let mut n = 0;
                 let _ = GetOverlappedResult(conn.pipe, overlapped, &mut n, true);
@@ -131,7 +134,7 @@ fn finish(conn: &Connection, overlapped: &mut OVERLAPPED, started: windows::core
 }
 
 impl Connection {
-    fn open(name: &str) -> Result<Self, windows::core::Error> {
+    fn open(name: &str, timeout_ms: u32) -> Result<Self, windows::core::Error> {
         let name = HSTRING::from(name);
         unsafe {
             let mut attempt = CreateFileW(
@@ -167,6 +170,7 @@ impl Connection {
                 pipe,
                 event,
                 buf: Vec::new(),
+                timeout_ms,
             })
         }
     }
@@ -221,7 +225,14 @@ impl Client {
             name: current_user_sid().map(|sid| pipe_name(&sid)),
             connection: None,
             last_spawn: None,
+            session: true,
+            timeout_ms: TIMEOUT_MS,
         }
+    }
+
+    /// 图标监视不创建输入会话、不启动服务；较短的超时不会沿用按键的 1.5 秒等待。
+    pub fn for_brand_icon() -> Self {
+        Self { session: false, timeout_ms: 200, ..Self::new() }
     }
 
     fn spawn_server(&mut self) {
@@ -253,13 +264,14 @@ impl Client {
             return true;
         }
         let Some(name) = self.name.clone() else {
+            #[cfg(not(test))]
             crate::log::write("读不到当前用户", "管道名无法确定");
             return false;
         };
-        match Connection::open(&name) {
+        match Connection::open(&name, self.timeout_ms) {
             Ok(mut conn) => {
                 let hello = conn.call(&Request::Hello {
-                    session: true,
+                    session: self.session,
                     app: crate::log::app_name(),
                 });
                 match hello {
@@ -275,7 +287,7 @@ impl Client {
             }
             Err(e) => {
                 crate::log::write("连不上服务进程", &format!("{e}；尝试启动服务进程"));
-                self.spawn_server();
+                if self.session { self.spawn_server(); }
                 false
             }
         }
@@ -300,7 +312,7 @@ impl Client {
                     // 连接坏了：丢掉（服务进程那边的会话也随之丢掉）
                     self.connection = None;
                     if fail == Fail::Timeout {
-                        crate::log::write("服务进程没有应答", &format!("{TIMEOUT_MS} ms 内没有应答，这个键交给应用"));
+                        crate::log::write("服务进程没有应答", &format!("{} ms 内没有应答", self.timeout_ms));
                         return None;
                     }
                     if attempt == 0 {
@@ -316,5 +328,11 @@ impl Client {
 
     pub fn disconnect(&mut self) {
         self.connection = None;
+    }
+
+    #[cfg(test)]
+    // Stand in for a disconnected server without contacting the active user session.
+    pub(crate) fn without_server() -> Self {
+        Self { name: None, ..Self::new() }
     }
 }

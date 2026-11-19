@@ -20,6 +20,9 @@ pub const LANGID_ZH_CN: u16 = 0x0804;
 pub const DISPLAY_NAME: &str = "FreeType";
 /// 候选窗默认字体。
 pub const DEFAULT_FONT: &str = "Microsoft YaHei";
+/// 语言栏监视窗口和只读刷新消息；消息不携带图像或配置，接收方从本用户服务读取。
+pub const TSF_BRAND_MONITOR_CLASS: &str = "FreeTypeBrandIconMonitorV1";
+pub const BRAND_ICON_CHANGED_MESSAGE: &str = "FreeType.BrandIconChanged.v1";
 
 /// 管道名。`sid` 是当前用户 SID 的字符串形式（S-1-5-21-...）。
 pub fn pipe_name(sid: &str) -> String {
@@ -499,6 +502,15 @@ fn pick(value: &mut String, allowed: &[&str], fallback: &str) {
 }
 
 impl Config {
+    /// 只用来判断图像是否变化，不是签名。未选中的自定义图像不影响当前图标缓存。
+    pub fn brand_icon_revision(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        self.brand_icon.hash(&mut hash);
+        if self.brand_icon == "custom" { self.custom_brand_icon.hash(&mut hash); }
+        hash.finish()
+    }
+
     /// 把越界的值拉回范围，不认识的取值换成默认值。
     pub fn sanitized(mut self) -> Self {
         let d = Config::default();
@@ -737,6 +749,11 @@ pub enum Request {
     /// 现在开着窗口的程序（设置里添加指定软件时挑）。
     ListApps,
     GetConfig,
+    /// 所有输入宿主可读取已公开显示的图像；不暴露整份设置，不建立输入会话。
+    GetBrandIcon {
+        #[serde(default)]
+        known_revision: Option<u64>,
+    },
     /// 仅设置程序可用；None 移除外部模型并回退随包版本。
     SetNeuralModel { path: Option<String> },
     SetConfig { config: Config },
@@ -980,6 +997,15 @@ pub struct ImportReport {
     pub note: Option<String>,
 }
 
+/// 语言栏图像。内置外观由 DLL 的完整源图生成原生尺寸；自定义内容沿用导入时的 PNG。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BrandIcon {
+    pub revision: u64,
+    pub appearance: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub custom_png: String,
+}
+
 /// 应答。成功时按请求种类填 `frame`、`status`、`config` 等之一。
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Response {
@@ -994,6 +1020,8 @@ pub struct Response {
     pub status: Option<Status>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<Config>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brand_icon: Option<BrandIcon>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shuangpin_example: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

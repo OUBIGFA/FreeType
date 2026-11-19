@@ -186,6 +186,16 @@ class RepositoryCheckTests(unittest.TestCase):
                 self.git("add", "data.json")
                 self.assert_rejected(marker)
 
+    def test_utf8_bom_is_allowed_for_powershell_only(self):
+        content = "\ufeff# 中文注释\nWrite-Output 'FreeType'\n".encode("utf-8")
+        self.write("windows/example.ps1", content)
+        self.git("add", "windows/example.ps1")
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.write("example.txt", content)
+        self.git("add", "example.txt")
+        self.assert_rejected("BOM")
+
     def test_binary_suffix_alone_does_not_allow_a_binary(self):
         self.write("references/private.png", b"\x89PNG\x00\xff")
         self.git("add", "references/private.png")

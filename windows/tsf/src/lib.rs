@@ -10,6 +10,8 @@ mod client;
 #[cfg(windows)]
 mod langbar;
 #[cfg(windows)]
+mod brand_icon;
+#[cfg(windows)]
 mod log;
 #[cfg(windows)]
 mod register;

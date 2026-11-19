@@ -44,9 +44,9 @@ use windows::Win32::UI::HiDpi::{GetDpiForWindow, SetThreadDpiAwarenessContext, D
 use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW, EnumWindows,
-    GetClassNameW, GetCursorPos, GetForegroundWindow, GetMessageW, GetWindow, GetWindowLongW, GetWindowRect,
+    FindWindowExW, GetClassNameW, GetCursorPos, GetForegroundWindow, GetMessageW, GetWindow, GetWindowLongW, GetWindowRect,
     GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible, KillTimer, LoadCursorW, PostMessageW,
-    RegisterClassExW, SetCursor, SetForegroundWindow, SetTimer, SetWindowPos, ShowWindow, TrackPopupMenu,
+    RegisterClassExW, RegisterWindowMessageW, SetCursor, SetForegroundWindow, SetTimer, SetWindowPos, ShowWindow, TrackPopupMenu,
     TranslateMessage, CS_DROPSHADOW, EVENT_SYSTEM_FOREGROUND, GWL_EXSTYLE, GW_OWNER, HTCAPTION, HTCLIENT,
     HWND_MESSAGE, HWND_TOPMOST, IDC_ARROW, IDC_HAND, IDC_SIZEALL, MA_NOACTIVATE, MF_STRING, MSG, SWP_NOACTIVATE,
     SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, TPM_BOTTOMALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON,
@@ -140,6 +140,26 @@ impl Desktop for DesktopHandle {
 
     fn open_settings(&self) {
         open_settings(&self.settings_exe);
+    }
+
+    fn brand_icon_changed(&self) {
+        // message-only 窗口不接收 HWND_BROADCAST；逐个投递，既不抢焦点，也不切换输入法。
+        let message = unsafe { RegisterWindowMessageW(&HSTRING::from(freetype_protocol::BRAND_ICON_CHANGED_MESSAGE)) };
+        if message == 0 {
+            crate::log("无法注册语言栏图标刷新消息");
+            return;
+        }
+        let mut previous = None;
+        while let Ok(hwnd) = unsafe { FindWindowExW(Some(HWND_MESSAGE), previous, PCWSTR::null(), PCWSTR::null()) } {
+            if hwnd.0.is_null() { break; }
+            previous = Some(hwnd);
+            let mut name = [0u16; 128];
+            let length = unsafe { GetClassNameW(hwnd, &mut name) } as usize;
+            if !String::from_utf16_lossy(&name[..length]).starts_with(freetype_protocol::TSF_BRAND_MONITOR_CLASS) { continue; }
+            if let Err(error) = unsafe { PostMessageW(Some(hwnd), message, WPARAM(0), LPARAM(0)) } {
+                crate::log(&format!("语言栏图标刷新通知失败：{error}"));
+            }
+        }
     }
 
     fn foreground_app(&self) -> Option<String> {
