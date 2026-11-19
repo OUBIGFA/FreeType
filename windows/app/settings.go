@@ -23,6 +23,8 @@ type settings struct {
 	// 保存请求按操作顺序发送；旧应答不能覆盖用户随后改过的界面值。
 	configSaveTail <-chan struct{}
 	configRevision uint64
+	// 保存失败时恢复已确认的图标，避免预览与实际托盘显示不同的外观。
+	savedBrandIcon, savedCustomBrandIcon string
 	// 选文件、存文件、打开文件夹（测试里换掉）。
 	openFile                                          func(title string) string
 	openTable                                         func(title string) string
@@ -37,6 +39,10 @@ type settings struct {
 	resources string
 	// 托盘图标开关改了（托盘程序跟着建或拿掉图标）。
 	onTray func(show bool)
+	// 品牌图标在主线程热更新；文件选择与图像解码由导入动作完成。
+	onBrandIcon   func(Config) error
+	openIcon      func() (string, error)
+	brandIconBusy bool
 	// 更新动作由应用接入真实更新库；视图只显示状态并提交用户操作。
 	onCheckUpdates    func()
 	onUpdateNow       func()
@@ -121,12 +127,14 @@ type settings struct {
 }
 
 func newSettings(b Backend, version string) *settings {
+	config := defaultConfig()
 	return &settings{
-		backend: b,
-		version: version,
-		page:    "general",
-		config:  defaultConfig(),
-		apply:   func(fn func()) { fn() },
+		backend:        b,
+		version:        version,
+		page:           "general",
+		config:         config,
+		savedBrandIcon: config.BrandIcon,
+		apply:          func(fn func()) { fn() },
 	}
 }
 
@@ -168,6 +176,7 @@ func (s *settings) refresh() {
 				s.config = *config.Config
 				s.shuangpinExample = config.ShuangpinExample
 				s.loaded = true
+				s.updateBrandIcon()
 			}
 			s.dicts = dicts.Dictionaries
 			s.phrases = phrases.QuickPhrases
@@ -200,10 +209,19 @@ func (s *settings) saveConfig() {
 		resp, err := s.backend.Call(op("set_config", "config", c))
 		close(done)
 		return func() {
+			if err == nil {
+				confirmed := c
+				if resp.Config != nil {
+					confirmed = *resp.Config
+				}
+				s.savedBrandIcon, s.savedCustomBrandIcon = confirmed.BrandIcon, confirmed.CustomBrandIcon
+			}
 			if revision != s.configRevision {
 				return
 			}
 			if err != nil {
+				s.config.BrandIcon, s.config.CustomBrandIcon = s.savedBrandIcon, s.savedCustomBrandIcon
+				s.updateBrandIcon()
 				s.notice = "保存失败：" + err.Error()
 				return
 			}
@@ -211,6 +229,7 @@ func (s *settings) saveConfig() {
 				s.config = *resp.Config
 				s.shuangpinExample = resp.ShuangpinExample
 			}
+			s.updateBrandIcon()
 			if s.onAutomaticUpdate != nil {
 				s.onAutomaticUpdate(s.config.AutoUpdate)
 			}
@@ -236,6 +255,7 @@ func (s *settings) run(req Request) {
 			if config.Config != nil {
 				s.config = *config.Config
 				s.shuangpinExample = config.ShuangpinExample
+				s.updateBrandIcon()
 			}
 		}
 	})

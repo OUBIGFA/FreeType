@@ -2,8 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
@@ -15,7 +13,7 @@ var pages = []struct {
 	Icon     **ui.SVG
 }{
 	{"general", "常规", &icons.general},
-	{"candidates", "候选窗", &icons.candidates},
+	{"candidates", "候选窗与外观", &icons.candidates},
 	{"typing", "拼音与按键", &icons.typing},
 	{"features", "实用功能", &icons.features},
 	{"shortcuts", "快捷键", &icons.shortcuts},
@@ -116,18 +114,24 @@ func (s *settings) body(c *ui.Context, p palette) {
 	})
 }
 
-// 安装资源不在绘制期间变化；每个位置只读、解码一次，避免每帧重复磁盘 I/O。
-// 测试没有资源目录时保留原来的字母占位。
+// 按资源目录、外观和自定义内容缓存图像；切换外观或再次导入时立即换图，
+// 普通重画不重复读取、解码。没有资源的离屏测试仍使用字母占位。
 func (s *settings) logo(c *ui.Context, size float32) {
 	box := ui.Column(c).Size(size, size).Shrink(0)
-	image := ui.Local[ui.ImageSource](box, s.resources, func() ui.ImageSource {
-		if s.resources != "" {
-			if data, err := os.ReadFile(filepath.Join(s.resources, "icons", "logo.png")); err == nil {
-				if decoded, err := ui.DecodeImage(data); err == nil {
-					return decoded
-				}
+	key := struct{ resources, variant, custom string }{s.resources, s.config.BrandIcon, s.config.CustomBrandIcon}
+	image := ui.Local[ui.ImageSource](box, key, func() ui.ImageSource {
+		if s.resources == "" && s.config.BrandIcon != "custom" {
+			return nil
+		}
+		data, err := loadBrandIcon(s.resources, s.config, "logo.png")
+		if err == nil {
+			var decoded ui.ImageSource
+			decoded, err = ui.DecodeImage(data)
+			if err == nil {
+				return decoded
 			}
 		}
+		s.notice = "读取图标失败：" + err.Error()
 		return nil
 	})
 	box.Children(func() {
@@ -284,12 +288,13 @@ func (s *settings) statusBarAppearance(c *ui.Context) (changed bool) {
 }
 
 func (s *settings) candidatesPage(c *ui.Context) {
-	pageHeader(c, "候选窗", "打字时光标下方显示候选词的小窗口")
-	s.candidatePreview(c)
+	pageHeader(c, "候选窗与外观", "调整候选窗显示和 FreeType 品牌图标")
 	if !s.loaded {
+		s.candidatePreview(c)
 		return
 	}
 	changed := false
+	s.candidatePreview(c)
 	section(c, "外观", func() {
 		s.settingRow(c, "candidates/字体", func() {
 			family := s.config.FontFamily
@@ -362,6 +367,19 @@ func (s *settings) candidatesPage(c *ui.Context) {
 		s.settingRow(c, "candidates/补充字体", func() {
 			if ui.TextInput(c, &s.config.FontFallbacks).Label("补充字体").Placeholder("Microsoft YaHei, SimSun").Width(220).MaxWidthPercent(100).Changed() {
 				changed = true
+			}
+		})
+	})
+	section(c, "品牌外观", func() {
+		s.settingRow(c, "candidates/品牌图标", func() {
+			s.logo(c, 32)
+			choices := []choice{{"default", "默认"}, {"white", "白色"}}
+			if s.config.CustomBrandIcon != "" {
+				choices = append(choices, choice{"custom", "自定义"})
+			}
+			changed = choose(c, "品牌图标", choices, &s.config.BrandIcon, 140) || changed
+			if ui.Button(c, "自定义…").Disabled(s.brandIconBusy).Clicked() {
+				s.chooseBrandIcon()
 			}
 		})
 	})

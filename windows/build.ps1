@@ -219,6 +219,9 @@ Invoke-Native python @('-X', 'utf8', 'windows\tools\make_icons.py', 'windows\ass
 Copy-Item (Join-Path $Icons 'icon.png') (Join-Path $Resources 'icon.png')
 Copy-Item (Join-Path $Icons 'tray.png'), (Join-Path $Icons 'tray-16.png'), (Join-Path $Icons 'logo.png'), (Join-Path $Icons 'freetype.ico') (Join-Path $Resources 'icons')
 Copy-Item (Join-Path $Icons 'freetype.ico') $Bin
+$WhiteIcons = Join-Path $Icons 'white'
+Invoke-Native python @('-X', 'utf8', 'windows\tools\make_icons.py', 'windows\assets\freetype-white-logo.png', $WhiteIcons)
+Copy-Item -LiteralPath $WhiteIcons -Destination (Join-Path $Resources 'icons') -Recurse
 Copy-Item 'target\release\FreeTypeServer.exe', 'target\release\freetype_tsf.dll' $Bin
 Copy-Item 'target\i686-pc-windows-msvc\release\freetype_tsf.dll' (Join-Path $Bin 'x86')
 foreach ($name in 'lexicon.tsv', 'words.lm', 'english.txt', 'LICENSE', 'SOURCE.txt', 'VERSION', 'MANIFEST.json', 'WANXIANG-LICENSE-SCOPE.md', 'WANXIANG-NOTICE.md') {
@@ -259,6 +262,14 @@ $env:FREETYPE_MAKENSIS = $NsisCompiler
 
 Step 'Checking Windows version resources and bundled notices'
 $Stage = Join-Path $AppBuild 'windows-amd64'
+# 核对真正进入安装包的两套图标，避免源图正确但复制路径遗漏白色外观。
+$BrandIconHashes = [ordered]@{}
+foreach ($Name in 'tray.png', 'tray-16.png', 'logo.png', 'freetype.ico', 'white/tray.png', 'white/tray-16.png', 'white/logo.png', 'white/freetype.ico', 'white/icon.png') {
+    $Relative = "icons/$Name"
+    $Hash = Sha256 (Join-Path $Resources $Relative)
+    if ((Sha256 (Join-Path $Stage $Relative)) -ne $Hash) { throw "Staged brand icon hash mismatch: $Relative" }
+    $BrandIconHashes[$Relative] = $Hash
+}
 $ArtifactPaths = [ordered]@{
     'FreeType.exe' = Join-Path $Stage 'FreeType.exe'
     'bin/FreeTypeServer.exe' = Join-Path $Stage 'bin\FreeTypeServer.exe'
@@ -365,6 +376,7 @@ $Info = [ordered]@{
         'bin/x86/freetype_tsf.dll'     = Sha256 (Join-Path $Bin 'x86\freetype_tsf.dll')
         'bin/freetype.ico'             = Sha256 (Join-Path $Bin 'freetype.ico')
     }
+    brandIcons     = $BrandIconHashes
     data           = [ordered]@{
         frostCommit    = $DataManifest.sources[0].revision
         wanxiangCommit = $DataManifest.sources[1].revision

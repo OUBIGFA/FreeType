@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -32,6 +33,9 @@ type app struct {
 	updates   *updates
 	syncer    *autoSync
 	syncError string
+	// 图像只在外观改变时载入；窗口关闭后仍保留，供托盘及新窗口继续使用。
+	iconConfig         Config
+	iconLogo, iconTray []byte
 }
 
 func (a *app) openSettings() {
@@ -44,6 +48,7 @@ func (a *app) openSettings() {
 	}
 	s := newSettings(a.client, mygo.App.Version())
 	s.resources = a.resources
+	s.config.BrandIcon, s.config.CustomBrandIcon = a.iconConfig.BrandIcon, a.iconConfig.CustomBrandIcon
 	if a.syncer != nil {
 		s.autoSync = a.syncer
 		s.autoSyncStatus = a.syncer.snapshot()
@@ -51,6 +56,20 @@ func (a *app) openSettings() {
 		s.autoSyncStatus = autoSyncState{Failed: true, Message: a.syncError}
 	}
 	s.onTray = a.showTray
+	s.onBrandIcon = a.setBrandIcon
+	s.openIcon = func() (string, error) {
+		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
+			Parent: a.win, Title: "选择自定义品牌图标",
+			Filters: []mygo.FileFilter{{Name: "图像文件", Extensions: []string{"png", "jpg", "jpeg", "webp"}}},
+		})
+		if err != nil {
+			return "", err
+		}
+		if len(paths) == 0 {
+			return "", nil
+		}
+		return paths[0], nil
+	}
 	s.openFolder = func(path string) { _ = exec.Command("explorer.exe", path).Start() }
 	s.openURL = mygo.Shell.OpenExternal
 	s.defaultTip = windowsDefaultTip
@@ -134,7 +153,40 @@ func (a *app) openSettings() {
 	s.apply = func(fn func()) { win.Update(fn) }
 	win.OnClosed(func() { a.win, a.settings = nil, nil })
 	a.win, a.settings = win, s
+	if err := a.setBrandIcon(a.iconConfig); err != nil {
+		s.notice = "更新图标失败：" + err.Error()
+	} else if err := win.SetIcon(a.iconLogo); err != nil {
+		s.notice = "更新窗口图标失败：" + err.Error()
+	}
 	s.refresh()
+}
+
+// 直接替换现有窗口、托盘的图像，不重启应用或重建托盘，保留菜单和窗口状态。
+func (a *app) setBrandIcon(config Config) error {
+	if a.iconLogo != nil && config.BrandIcon == a.iconConfig.BrandIcon && config.CustomBrandIcon == a.iconConfig.CustomBrandIcon {
+		return nil
+	}
+	logo, err := loadBrandIcon(a.resources, config, "logo.png")
+	if err != nil {
+		return err
+	}
+	tray, err := loadBrandIcon(a.resources, config, "tray.png")
+	if err != nil {
+		return err
+	}
+	if a.win != nil {
+		if err := a.win.SetIcon(logo); err != nil {
+			return fmt.Errorf("窗口图标：%w", err)
+		}
+	}
+	if a.tray != nil {
+		if err := a.tray.SetIcon(tray, false); err != nil {
+			return fmt.Errorf("托盘图标：%w", err)
+		}
+	}
+	a.iconConfig = Config{BrandIcon: config.BrandIcon, CustomBrandIcon: config.CustomBrandIcon}
+	a.iconLogo, a.iconTray = logo, tray
+	return nil
 }
 
 // showTray 按设置建或拿掉托盘图标（在主线程上）。
@@ -148,9 +200,9 @@ func (a *app) showTray(show bool) {
 }
 
 func (a *app) makeTray() {
-	icon, err := os.ReadFile(filepath.Join(a.resources, "icons", "tray.png"))
-	if err != nil {
+	if err := a.setBrandIcon(a.iconConfig); err != nil {
 		log.Println("tray icon:", err)
+		return
 	}
 	menu := mygo.NewMenu([]*mygo.MenuItem{
 		{Label: "打开设置", Click: func(*mygo.MenuItem, *mygo.Window) { a.openSettings() }},
@@ -175,7 +227,7 @@ func (a *app) makeTray() {
 	})
 	tray, err := mygo.NewTray(mygo.TrayOptions{
 		ID:      "freetype",
-		Icon:    icon,
+		Icon:    a.iconTray,
 		ToolTip: "FreeType 输入法",
 		Menu:    menu,
 	})
@@ -200,7 +252,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	a := &app{client: client}
+	a := &app{client: client, iconConfig: defaultConfig()}
 	mygo.App.OnSecondInstance(func(args []string, workingDir string) { a.handleLaunch(args) })
 	// 关掉设置窗口后托盘图标还在
 	mygo.App.OnWindowAllClosed(func() {})
@@ -260,6 +312,9 @@ func main() {
 								s := a.settings
 								a.win.Update(func() { s.applyRestored(response) })
 							} else if response.Config != nil {
+								if err := a.setBrandIcon(*response.Config); err != nil {
+									log.Println("restore brand icon:", err)
+								}
 								a.showTray(response.Config.TrayIcon)
 								if a.updates != nil {
 									a.updates.setAutomatic(response.Config.AutoUpdate)
@@ -279,7 +334,21 @@ func main() {
 				a.handleLaunch(args)
 			}
 			config, err := a.client.Call(op("get_config"))
-			if err != nil || config.Config == nil || a.updates == nil {
+			if err != nil || config.Config == nil {
+				return
+			}
+			// 服务确认启动后再读取图标，开机时服务尚未就绪也能恢复已保存的外观。
+			loadedConfig := *config.Config
+			mygo.RunOnMain(func() {
+				if err := a.setBrandIcon(loadedConfig); err != nil {
+					log.Println("load brand icon:", err)
+					if a.settings != nil {
+						a.win.Update(func() { a.settings.notice = "读取图标失败：" + err.Error() })
+					}
+				}
+				a.showTray(loadedConfig.TrayIcon)
+			})
+			if a.updates == nil {
 				return
 			}
 			if config.Config.AutoUpdate && a.updates.snapshot().Ready {
@@ -297,12 +366,6 @@ func main() {
 		}()
 		// 先放托盘图标；读到设置里关掉了再拿掉
 		a.makeTray()
-		go func() {
-			if resp, err := a.client.Call(op("get_config")); err == nil && resp.Config != nil && !resp.Config.TrayIcon {
-				show := resp.Config.TrayIcon
-				mygo.RunOnMain(func() { a.showTray(show) })
-			}
-		}()
 		if !afterInstall {
 			a.handleLaunch(args)
 		}

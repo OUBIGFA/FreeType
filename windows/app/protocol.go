@@ -10,7 +10,10 @@ type Config struct {
 	FontSize   int    `json:"font_size"`
 	FontFamily string `json:"font_family"`
 	// CandidateStyle 是选中候选的样子：pink blue green sogou。
-	CandidateStyle      string `json:"candidate_style"`
+	CandidateStyle string `json:"candidate_style"`
+	// 品牌图标只更新运行中的窗口和托盘；自定义 PNG 随设置保存，避免依赖来源文件。
+	BrandIcon           string `json:"brand_icon"`
+	CustomBrandIcon     string `json:"custom_brand_icon,omitempty"`
 	CandidateWheel      bool   `json:"candidate_wheel"`
 	InlinePreedit       string `json:"inline_preedit"`
 	CandidatePreedit    bool   `json:"candidate_preedit"`
@@ -91,7 +94,7 @@ type Config struct {
 // defaultConfig 和服务进程的默认值一样（连不上服务进程时界面先按它画）。
 func defaultConfig() Config {
 	return Config{
-		PageSize: 7, Horizontal: true, FontSize: 18, FontFamily: "Microsoft YaHei", CandidateStyle: "pink", PinBadge: "paperclip",
+		PageSize: 7, Horizontal: true, FontSize: 18, FontFamily: "Microsoft YaHei", CandidateStyle: "pink", BrandIcon: "default", PinBadge: "paperclip",
 		InlinePreedit: "segmented", CandidatePreedit: true, CandidateFollow: true, CandidateSingleLine: true,
 		FuzzyGroups: fuzzyDefault, ShuangpinScheme: "xiaohe", TypoCorrection: true, TypoKinds: 15,
 		ShiftToggle: "both", PageKeys: pageKeyMinus, SelectKeys: "off", PickChar: true, ArrowKeys: "candidates", NumpadDot: true,

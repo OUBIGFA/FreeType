@@ -383,7 +383,7 @@ func TestTypingPagePunctuationOptions(t *testing.T) {
 func TestCandidatesPagePreviewsFont(t *testing.T) {
 	fontNames = func() []string { return []string{"SimSun", "Arial", "Microsoft YaHei"} }
 	s, _ := newTestSettings()
-	tt := open(t, s, "候选窗")
+	tt := open(t, s, "候选窗与外观")
 	for _, text := range []string{"预览", "你好", "字体", "字号", "排列方向"} {
 		if !tt.HasText(text) {
 			t.Fatalf("没有「%s」：%q", text, tt.Texts())

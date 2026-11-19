@@ -664,6 +664,7 @@ func (s *settings) applyRestored(response Response) {
 	s.dicts, s.phrases, s.common = response.Dictionaries, response.QuickPhrases, response.CommonPhrases
 	s.words, s.wordsLoaded = response.UserWords, true
 	s.report, s.reportErrors = "", nil
+	s.updateBrandIcon()
 	if s.onTray != nil {
 		s.onTray(s.config.TrayIcon)
 	}

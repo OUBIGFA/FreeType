@@ -169,6 +169,14 @@
       "sha256": "edb1aa0ddfade65c407145a9b73fe4a29fb568c5b6951dc413c525fd4ac608c4"
     },
     {
+      "path": "windows/assets/freetype-white-logo.png",
+      "reason": "FreeType 白色品牌图标源图；构建时生成与默认图标相同的各尺寸，供外观热切换",
+      "source": "仓库所有者提供（2026-11-19）",
+      "license": "FreeType 项目品牌资源，随项目使用",
+      "bytes": 38639,
+      "sha256": "9e8504f0cf2af1e50f154eff350d7d6b4d118406d0e08300de9b8dc529b29639"
+    },
+    {
       "path": "dist/FreeType_logo.png",
       "reason": "README 品牌图；与 windows/assets/freetype-logo.png 使用相同图像",
       "source": "仓库所有者提供（2026-11-12）",

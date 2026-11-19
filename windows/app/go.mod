@@ -7,6 +7,7 @@ require (
 	github.com/creativeprojects/go-selfupdate v1.7.1
 	github.com/egoist/mygo v0.10.0
 	github.com/google/go-github/v93 v93.0.0
+	golang.org/x/image v0.46.0
 	golang.org/x/sys v0.50.0
 )
 
@@ -29,7 +30,6 @@ require (
 	go.digitalxero.dev/rpm v0.3.4 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/crypto v0.59.0 // indirect
-	golang.org/x/image v0.46.0 // indirect
 	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/text v0.44.0 // indirect

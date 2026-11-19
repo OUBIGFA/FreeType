@@ -235,6 +235,11 @@ pub struct Config {
     pub font_family: String,
     /// 选中候选的样子：pink 品牌粉、blue 蓝、green 微信绿、sogou 不画底色块只换字色。
     pub candidate_style: String,
+    /// 运行中窗口和托盘的品牌图标：default、white、custom；不改安装和注册资源。
+    pub brand_icon: String,
+    /// 自定义图像转为 256 px PNG 后以 Base64 保存，让备份和同步不依赖本机路径。
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub custom_brand_icon: String,
     /// 鼠标悬停候选窗时允许滚轮翻页。
     pub candidate_wheel: bool,
     /// 行内预编辑：segmented、raw、off；候选窗预编辑独立控制。
@@ -386,6 +391,8 @@ impl Default for Config {
             font_size: 18,
             font_family: DEFAULT_FONT.into(),
             candidate_style: "pink".into(),
+            brand_icon: "default".into(),
+            custom_brand_icon: String::new(),
             candidate_wheel: false,
             inline_preedit: "segmented".into(),
             candidate_preedit: true,
@@ -523,6 +530,10 @@ impl Config {
         self.page_keys &= 0xf;
         self.digit_punct_fullwidth &= digit_punct::ALL;
         pick(&mut self.candidate_style, &CANDIDATE_STYLES, &d.candidate_style);
+        pick(&mut self.brand_icon, &["default", "white", "custom"], &d.brand_icon);
+        // 显示端只导入 256 px PNG；限制配置体积，保留未选中的自定义图标供再次选择。
+        if self.custom_brand_icon.len() > 512 * 1024 { self.custom_brand_icon.clear(); }
+        if self.brand_icon == "custom" && self.custom_brand_icon.is_empty() { self.brand_icon = d.brand_icon.clone(); }
         pick(&mut self.shuangpin_scheme, &SHUANGPIN_SCHEMES, &d.shuangpin_scheme);
         pick(&mut self.shift_toggle, &SHIFT_TOGGLES, &d.shift_toggle);
         pick(&mut self.select_keys, &SELECT_KEYS, &d.select_keys);
@@ -1078,6 +1089,29 @@ mod tests {
         assert_eq!(config.digit_punct_fullwidth, digit_punct::DEFAULT);
         assert!(!config.corner_quotes);
         assert_eq!(config.fuzzy_groups, fuzzy::DEFAULT);
+    }
+
+    #[test]
+    fn brand_icon_settings_round_trip_and_keep_old_defaults() {
+        let old: Config = serde_json::from_str(r#"{"tray_icon":true}"#).unwrap();
+        assert_eq!(serde_json::to_value(old).unwrap()["brand_icon"], "default");
+        for variant in ["default", "white", "custom"] {
+            let config: Config = serde_json::from_value(serde_json::json!({
+                "brand_icon": variant,
+                "custom_brand_icon": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg=="
+            })).unwrap();
+            let saved = serde_json::to_value(config.sanitized()).unwrap();
+            assert_eq!(saved["brand_icon"], variant);
+            assert!(saved["custom_brand_icon"].as_str().is_some_and(|data| !data.is_empty()));
+        }
+        let unknown: Config = serde_json::from_value(serde_json::json!({"brand_icon":"other"})).unwrap();
+        assert_eq!(serde_json::to_value(unknown.sanitized()).unwrap()["brand_icon"], "default");
+        let oversized: Config = serde_json::from_value(serde_json::json!({
+            "brand_icon":"custom", "custom_brand_icon":"A".repeat(512 * 1024 + 1)
+        })).unwrap();
+        let saved = serde_json::to_value(oversized.sanitized()).unwrap();
+        assert_eq!(saved["brand_icon"], "default");
+        assert!(saved.get("custom_brand_icon").is_none());
     }
 
     #[test]

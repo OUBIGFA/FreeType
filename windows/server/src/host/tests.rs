@@ -31,6 +31,18 @@ fn configure(host: &mut Host, change: impl FnOnce(&mut Config)) {
     assert!(host.handle(1, Request::SetConfig { config }).ok);
 }
 
+#[test]
+fn brand_icon_changes_persist_without_interrupting_composition() {
+    let mut host = host("brand-icon");
+    typing(&mut host, "ni");
+    configure(&mut host, |config| config.brand_icon = "white".into());
+    let frame = typing(&mut host, "hao");
+    assert_eq!(frame.candidates.first().map(String::as_str), Some("你好"));
+    let restarted = Host::new(Store::new(host.data_dir().to_path_buf()));
+    assert_eq!(restarted.config().brand_icon, "white");
+    cleanup(&host);
+}
+
 fn key_with(host: &mut Host, id: ClientId, sym: u32, modifiers: u32) -> Frame {
     let key = Key {
         keysym: sym,
@@ -1119,6 +1131,8 @@ fn settings_backup_restores_all_data_including_unsaved_learning_and_custom_lexic
         c.tray_icon = false;
         c.auto_update = true;
         c.show_settings_after_update = true;
+        c.brand_icon = "custom".into();
+        c.custom_brand_icon = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==".into();
         c.lexicon = main_lexicon.to_string_lossy().into();
         c.default_mode = DefaultMode::Global;
     });
@@ -1146,6 +1160,8 @@ fn settings_backup_restores_all_data_including_unsaved_learning_and_custom_lexic
     assert_eq!(data["config"]["lexicon"], "", "备份不依赖来源机器的路径");
     assert_eq!(data["config"]["auto_update"], true);
     assert_eq!(data["config"]["show_settings_after_update"], true);
+    assert_eq!(data["config"]["brand_icon"], "custom");
+    assert_eq!(data["config"]["custom_brand_icon"], source.config.custom_brand_icon);
 
     let mut target = learning_host("settings-target");
     target.engine.as_ref().unwrap().record_selection_with_pinyin("旧词", Some("jiu ci"));
@@ -1160,6 +1176,8 @@ fn settings_backup_restores_all_data_including_unsaved_learning_and_custom_lexic
     assert!(!target.config.autospace_digits && !target.config.tray_icon);
     assert!(target.config.auto_update, "全部设置备份也应恢复自动更新开关");
     assert!(target.config.show_settings_after_update, "全部设置备份也应恢复安装后显示设置页的开关");
+    assert_eq!(target.config.brand_icon, "custom");
+    assert_eq!(target.config.custom_brand_icon, source.config.custom_brand_icon);
     assert_eq!(target.mode, Mode::English);
     assert_eq!(target.store.list_quick_phrases()[0].text, "第一行\n第二行");
     assert_eq!(target.store.load_common_phrases().unwrap(), vec!["常用FreeType"]);
