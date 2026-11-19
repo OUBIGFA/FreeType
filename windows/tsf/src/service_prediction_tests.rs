@@ -18,6 +18,8 @@ struct Store {
     text: RefCell<Vec<u16>>,
     selection: Cell<TS_SELECTION_ACP>,
     sink: RefCell<Option<ITextStoreACPSink>>,
+    /// Like CUAS for IMM32 apps: only composition text lives here, app text never does.
+    transitory: Cell<bool>,
 }
 
 impl Store {
@@ -51,7 +53,9 @@ impl ITextStoreACP_Impl for Store_Impl {
         let sink = self.sink.borrow().clone().ok_or_else(|| windows::core::Error::from_hresult(E_FAIL))?;
         Ok(unsafe { sink.OnLockGranted(TEXT_STORE_LOCK_FLAGS(flags)) }.err().map_or(S_OK, |e| e.code()))
     }
-    fn GetStatus(&self) -> Result<TS_STATUS> { Ok(TS_STATUS::default()) }
+    fn GetStatus(&self) -> Result<TS_STATUS> {
+        Ok(TS_STATUS { dwStaticFlags: if self.transitory.get() { TS_SS_TRANSITORY } else { 0 }, ..Default::default() })
+    }
     fn QueryInsert(&self, start: i32, end: i32, _: u32, out_start: *mut i32, out_end: *mut i32) -> Result<()> {
         unsafe { *out_start = start; *out_end = end; }
         Ok(())
@@ -201,6 +205,27 @@ fn prediction_double_space_uses_the_app_inserted_range_without_key_up() {
         apply(&state, Some(&editor.context), Frame {
             handled: true, replace_space: true, commit: Some("下雨".into()), ..Frame::default()
         }, true);
+        assert_eq!(String::from_utf16_lossy(&editor.store.text.borrow()), "今天下雨");
+    });
+}
+
+#[test]
+fn prediction_double_space_in_a_transitory_document_waits_for_the_backspace() {
+    in_editor(|editor, state, sink| unsafe {
+        editor.store.transitory.set(true);
+        let revision = open_prediction(&editor, &state, true);
+        let space = Key { keysym: 0x20, test: true, ..Key::default() };
+        let classify = |key| prediction_space_key(&state, &editor.context, key, false, revision);
+        // The app types the first space itself; the document never shows it.
+        assert_eq!(classify(space), (space, true));
+        assert_eq!(classify(space), (space, true), "a repeated preview of the same press is not a double tap");
+        assert!(!sink.OnTestKeyUp(&editor.context, WPARAM(0x20), LPARAM((3u32 << 30) as isize)).unwrap().as_bool());
+        assert_eq!(classify(space).0.keysym, keysym::SPACE_DOUBLE);
+        let frame = Frame { handled: true, replace_space: true, commit: Some("下雨".into()), ..Frame::default() };
+        defer_space_replace(&state, &editor.context, frame);
+        assert_eq!(String::from_utf16_lossy(&editor.store.text.borrow()), "今天", "nothing is committed before the space is gone");
+        finish_space_replace(&state);
+        finish_space_replace(&state);
         assert_eq!(String::from_utf16_lossy(&editor.store.text.borrow()), "今天下雨");
     });
 }
