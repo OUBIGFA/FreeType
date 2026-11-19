@@ -31,7 +31,7 @@ use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::System::Variant::{VariantClear, VARIANT, VT_I4, VT_UNKNOWN};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, GetKeyState, GetKeyboardState, SendInput, ToUnicode, INPUT, INPUT_0, INPUT_KEYBOARD,
-    KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_BACK, VK_LEFT,
+    KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_BACK, VK_LEFT, VK_SPACE,
 };
 use windows::Win32::UI::TextServices::{
     ITfCompartmentMgr, ITfComposition, ITfCompositionSink, ITfCompositionSink_Impl, ITfContext,
@@ -47,7 +47,7 @@ use windows::Win32::UI::TextServices::{
     TF_GRAVITY_BACKWARD, TF_GRAVITY_FORWARD, TF_IAS_QUERYONLY, TF_SELECTION, TF_SELECTIONSTYLE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, DestroyMenu, GetGUIThreadInfo, GetMessageExtraInfo, GetWindowRect,
+    AppendMenuW, CreatePopupMenu, DestroyMenu, GetGUIThreadInfo, GetMessageExtraInfo, GetMessageTime, GetWindowRect,
     EndMenu, PostMessageW, TrackPopupMenu, GUITHREADINFO, MF_SEPARATOR, MF_STRING, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON,
 };
 
@@ -74,21 +74,21 @@ struct CommitWatch {
 struct SpaceWatch {
     context: ITfContext,
     revision: u64,
-    range: ITfRange,
-    pressed_ms: u64,
-    /// 这次空格已经松开：临时文档看不到应用写入的空格，靠它区分新的一次按下和宿主重复询问。
-    released: bool,
+    /// 有正文时追踪第一个空格；CUAS 不提供正文或读锁时只记录按键。
+    range: Option<ITfRange>,
+    /// Windows 消息时间：重复预询问和正式处理共享同一时间，不依赖宿主转发松开事件。
+    pressed_ms: u32,
 }
 
 impl SpaceWatch {
     fn ends_at(&self, ec: u32, caret: &ITfRange) -> bool {
-        unsafe { caret.CompareStart(ec, &self.range, TF_ANCHOR_END) == Ok(0) }
+        self.range.as_ref().is_some_and(|range| unsafe { caret.CompareStart(ec, range, TF_ANCHOR_END) == Ok(0) })
     }
 
     fn contains_space(&self, ec: u32) -> bool {
         let mut buf = [0; 2];
         let mut len = 0;
-        (unsafe { self.range.GetText(ec, 0, &mut buf, &mut len).is_ok() })
+        self.range.as_ref().is_some_and(|range| unsafe { range.GetText(ec, 0, &mut buf, &mut len).is_ok() })
             && len == 1 && buf[0] == u16::from(b' ')
     }
 }
@@ -135,7 +135,7 @@ struct State {
     predicting: bool,
     /// 上一次成功上屏的末尾；核对联想选词位置时不使用可能滞后的正文快照。
     prediction_caret: Option<ITfRange>,
-    /// 临时文档里双击空格选中的联想词：等 FreeType 发的退格删掉应用里的第一个空格后再上屏。
+    /// 临时文档里双击空格选中的联想词：退格后用自发空格的按下回调上屏，不等待松开回调。
     space_replace: Option<(ITfContext, Frame)>,
 }
 
@@ -172,7 +172,8 @@ impl TextService {
     /// 组字、候选选择和补全光标移动全部结束后才允许交接实现。
     pub(crate) fn can_reload(&self) -> bool {
         let s = self.state.borrow();
-        s.composition.is_none() && !s.busy && s.caret_move.is_none() && s.language_menu == MenuState::Closed
+        s.composition.is_none() && !s.busy && s.caret_move.is_none() && s.space_replace.is_none()
+            && s.language_menu == MenuState::Closed
     }
 
     pub fn new(instance: HINSTANCE) -> Self {
@@ -403,6 +404,7 @@ fn sensitive_scope(context: &ITfContext, ec: u32) -> bool {
 }
 
 fn set_sensitive(state: &Rc<RefCell<State>>, active: bool) {
+    if active { cancel_space_replace(state); }
     if std::mem::replace(&mut state.borrow_mut().sensitive, active) == active { return; }
     if let Some(frame) = call(state, &Request::SensitiveFocus { active }) {
         note_frame(state, &frame);
@@ -444,7 +446,7 @@ fn replace_verified_space(state: &Rc<RefCell<State>>, context: &ITfContext, ec: 
         if !selection.IsEmpty(ec)?.as_bool() || !watch.ends_at(ec, &selection) || !watch.contains_space(ec) {
             return Err(failed());
         }
-        let range = watch.range;
+        let range = watch.range.ok_or_else(failed)?;
         range.SetText(ec, 0, text)?;
         range.Collapse(ec, TF_ANCHOR_END)?;
         Ok(range)
@@ -530,9 +532,11 @@ fn apply_document(state: &Rc<RefCell<State>>, context: &ITfContext, frame: &Fram
                 };
                 set_selection(context, ec, &range)?;
                 if frame.predict {
-                    // Keep the insertion point on the left when the host adds text there.
+                    // Chromium may replay the renderer's committed suffix after
+                    // the edit lock ends. Follow its final insertion to the right;
+                    // the next first-space key creates its own replacement range.
                     let anchor = range.Clone().and_then(|caret| {
-                        caret.SetGravity(ec, TF_GRAVITY_BACKWARD, TF_GRAVITY_BACKWARD)?;
+                        caret.SetGravity(ec, TF_GRAVITY_FORWARD, TF_GRAVITY_FORWARD)?;
                         Ok(caret)
                     });
                     let mut s = state.borrow_mut();
@@ -625,6 +629,7 @@ fn note_frame(state: &Rc<RefCell<State>>, frame: &Frame) {
 }
 
 fn clear_prediction(state: &Rc<RefCell<State>>) -> bool {
+    cancel_space_replace(state);
     let mut s = state.borrow_mut();
     if !std::mem::take(&mut s.predicting) {
         return false;
@@ -680,6 +685,20 @@ fn show_window(state: &Rc<RefCell<State>>, frame: &Frame) {
 
 /// 应答落到文档和候选窗上。
 fn apply(state: &Rc<RefCell<State>>, context: Option<&ITfContext>, frame: Frame, sync: bool) {
+    // TS_SS_TRANSITORY 也用于 Chromium；只有已确认空格不在文档里时才走外部退格。
+    let external_space = frame.replace_space && context.is_some_and(|context| {
+        state.borrow().space.as_ref().is_some_and(|watch| {
+            watch.range.is_none() && same_object(&watch.context, context)
+        })
+    });
+    if external_space {
+        defer_space_replace(state, context.unwrap(), frame);
+        let inputs: Vec<INPUT> = own_tap(VK_BACK, 0x0e, false).into_iter()
+            .chain(own_tap(VK_SPACE, 0x39, false)).collect();
+        // 同一次 SendInput 保证退格在提交标记之前；标记只由 FreeType 接收。
+        if !send_own_inputs(&inputs) { dismiss_prediction(state); }
+        return;
+    }
     note_frame(state, &frame);
     let Some(context) = context else {
         state.borrow_mut().caret = None;
@@ -767,6 +786,11 @@ fn caret_tick(state: &Rc<RefCell<State>>) -> bool {
 
 /// 让应用收到几下 FreeType 自己发的键（带 [`keys::OWN_INPUT_TAG`]，按键回调认得出来、不再处理）。
 fn send_own_taps(vk: VIRTUAL_KEY, scan: u16, extended: bool, steps: usize) {
+    let inputs: Vec<INPUT> = (0..steps).flat_map(|_| own_tap(vk, scan, extended)).collect();
+    send_own_inputs(&inputs);
+}
+
+fn own_tap(vk: VIRTUAL_KEY, scan: u16, extended: bool) -> [INPUT; 2] {
     let flags = if extended { KEYEVENTF_EXTENDEDKEY } else { KEYBD_EVENT_FLAGS(0) };
     let key = |up: bool| INPUT {
         r#type: INPUT_KEYBOARD,
@@ -780,13 +804,19 @@ fn send_own_taps(vk: VIRTUAL_KEY, scan: u16, extended: bool, steps: usize) {
             },
         },
     };
-    let inputs: Vec<INPUT> = (0..steps).flat_map(|_| [key(false), key(true)]).collect();
-    unsafe {
-        SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
-    }
+    [key(false), key(true)]
 }
 
-/// 文档是不是 CUAS 的临时文档：只装组字中的字，不含应用正文。
+fn send_own_inputs(inputs: &[INPUT]) -> bool {
+    let sent = unsafe { SendInput(inputs, std::mem::size_of::<INPUT>() as i32) };
+    if sent as usize != inputs.len() {
+        crate::log::write("发送辅助按键失败", &format!("{sent}/{}", inputs.len()));
+        return false;
+    }
+    true
+}
+
+/// 文档是否带临时标志；CUAS 和 Chromium 都会设置它，不能据此判断正文是否可读。
 fn transitory(context: &ITfContext) -> bool {
     unsafe { context.GetStatus() }.is_ok_and(|status| status.dwStaticFlags & TF_SS_TRANSITORY != 0)
 }
@@ -800,11 +830,18 @@ fn defer_space_replace(state: &Rc<RefCell<State>>, context: &ITfContext, frame: 
 
 fn finish_space_replace(state: &Rc<RefCell<State>>) {
     let Some((context, frame)) = state.borrow_mut().space_replace.take() else { return; };
-    // 松开回调里不一定给同步编辑会话：能同步就同步，不能就排队
-    apply(state, Some(&context), frame, false);
+    // 在标记的 OnKeyDown 中同步上屏，后续按键不能先创建会被旧联想覆盖的组字。
+    apply(state, Some(&context), frame, true);
 }
 
-/// 正在处理的按键是不是 FreeType 自己发的（[`caret_tick`] 发的 ←、双击空格发的退格）。
+fn cancel_space_replace(state: &Rc<RefCell<State>>) {
+    let pending = state.borrow_mut().space_replace.take();
+    if pending.is_some_and(|(_, frame)| frame.undo_learning) {
+        let _ = call(state, &Request::UndoCommitLearning);
+    }
+}
+
+/// 正在处理的按键是不是 FreeType 自己发的（移动光标、删除空格或提交联想的标记）。
 fn own_input() -> bool {
     unsafe { GetMessageExtraInfo() }.0 as usize == keys::OWN_INPUT_TAG
 }
@@ -894,7 +931,7 @@ fn prediction_in(s: &State, context: &ITfContext) -> bool {
 /// snapshot can lag behind the commit in a rich editor, so do not send it as
 /// `before` for this space. A verified move still invalidates the prediction.
 fn prediction_space_key(
-    state: &Rc<RefCell<State>>, context: &ITfContext, key: Key, repeat: bool, revision: u64,
+    state: &Rc<RefCell<State>>, context: &ITfContext, key: Key, repeat: bool, revision: u64, ms: u32,
 ) -> (Key, bool) {
     if key.keysym != 0x20 || !plain_key(key) || revision == 0 {
         return (key, false);
@@ -904,11 +941,15 @@ fn prediction_space_key(
         if !prediction_in(&s, context) { return (key, false); }
         (s.client_id, s.prediction_caret.clone(), s.space.clone(), s.predict_double_space)
     };
-    // CUAS 给 IMM32 应用（如微信的 Qt 输入框）的临时文档只有组字中的字，看不到应用自己写入的空格
+    // 这个标志不能区分 CUAS 和 Chromium；有可验证的正文空格时始终使用它。
     let transitory = transitory(context);
-    enum Check { Moved, First(ITfRange), Second }
-    let ms = now_ms();
-    let wait = u64::from(unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime() }).clamp(200, 700);
+    enum Check { Moved, First(Option<ITfRange>), Second(bool) }
+    let wait = unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime() }.clamp(200, 700);
+    let watch = watch.filter(|w| w.revision == revision && same_object(&w.context, context));
+    let second = watch.as_ref().is_some_and(|watch| {
+        let elapsed = ms.wrapping_sub(watch.pressed_ms);
+        !repeat && elapsed > 0 && elapsed <= wait
+    });
     let result = Rc::new(std::cell::Cell::new(None));
     let (result2, doc) = (result.clone(), context.clone());
     edit_with(context, client_id, TF_ES_SYNC | TF_ES_READ, move |ec| {
@@ -918,18 +959,16 @@ fn prediction_space_key(
                 result2.set(Some(Check::Moved));
                 return Ok(());
             }
-            if let Some(watch) = watch.filter(|w| w.revision == revision && same_object(&w.context, &doc)) {
-                if watch.ends_at(ec, &caret) {
-                    // The range is empty on repeated previews of the first key.
-                    // Only an actual app insertion expands it to one space.
-                    // A transitory document never shows that insertion; a release marks the first tap instead.
-                    let tapped = if transitory { watch.released } else { watch.contains_space(ec) };
-                    if tapped {
-                        if !repeat && ms.saturating_sub(watch.pressed_ms) <= wait {
-                            result2.set(Some(Check::Second));
+            if let Some(watch) = watch {
+                if watch.range.is_none() || watch.ends_at(ec, &caret) {
+                    let in_document = watch.contains_space(ec);
+                    let empty = watch.range.as_ref().is_none_or(|range| range.IsEmpty(ec).is_ok_and(|empty| empty.as_bool()));
+                    if in_document || (transitory && empty) {
+                        if second {
+                            result2.set(Some(Check::Second(in_document)));
                             return Ok(());
                         }
-                    } else if !watch.range.IsEmpty(ec)?.as_bool() {
+                    } else if !empty {
                         result2.set(Some(Check::Moved));
                         return Ok(());
                     }
@@ -945,12 +984,17 @@ fn prediction_space_key(
             }
             if double && !repeat {
                 caret.SetGravity(ec, TF_GRAVITY_BACKWARD, TF_GRAVITY_FORWARD)?;
-                result2.set(Some(Check::First(caret)));
+                result2.set(Some(Check::First(Some(caret))));
             }
         }
         Ok(())
     });
-    match result.take() {
+    // CUAS 空闲时可能不提供选区/同步读锁；双击识别仍使用两条真实按下消息的时间。
+    let checked = result.take().or_else(|| {
+        if !transitory || !double || repeat { return None; }
+        Some(if second { Check::Second(false) } else { Check::First(None) })
+    });
+    match checked {
         Some(Check::Moved) => {
             dismiss_prediction(state);
             (key, false)
@@ -958,10 +1002,15 @@ fn prediction_space_key(
         Some(Check::First(range)) => {
             // A pass-through first space may only get OnTestKeyDown. Arming
             // a range does not change the document or select a candidate.
-            state.borrow_mut().space = Some(SpaceWatch { context: context.clone(), revision, range, pressed_ms: ms, released: false });
+            state.borrow_mut().space = Some(SpaceWatch { context: context.clone(), revision, range, pressed_ms: ms });
             (key, true)
         }
-        Some(Check::Second) => (Key { keysym: keysym::SPACE_DOUBLE, ..key }, true),
+        Some(Check::Second(in_document)) => {
+            if !in_document {
+                if let Some(watch) = state.borrow_mut().space.as_mut() { watch.range = None; }
+            }
+            (Key { keysym: keysym::SPACE_DOUBLE, ..key }, true)
+        }
         None => (key, true),
     }
 }
@@ -1355,6 +1404,8 @@ impl ITfTextInputProcessorEx_Impl for TextService_Impl {
 /// 成对标点还等着挪光标时用户又按了别的键（Shift、Ctrl 这些不算）：不挪了，
 /// 光标已经不一定在那一对标点后面。
 fn note_key_down(state: &Rc<RefCell<State>>, wparam: WPARAM, lparam: LPARAM) {
+    // 用户的新键先于辅助按键到达时，放弃旧选择；之后的自发退格和标记都会被吃掉。
+    if state.borrow().space_replace.is_some() { dismiss_prediction(state); }
     let vk = wparam.0 as u16;
     let repeat = lparam.0 & (1 << 30) != 0;
     let mut s = state.borrow_mut();
@@ -1378,12 +1429,7 @@ fn note_key_down(state: &Rc<RefCell<State>>, wparam: WPARAM, lparam: LPARAM) {
 fn key_released(state: &Rc<RefCell<State>>, context: Option<&ITfContext>, wparam: WPARAM, lparam: LPARAM) {
     let vk = wparam.0 as u16;
     if own_input() {
-        // 应用已经处理完 FreeType 发的退格（第一个空格删掉了），这时上屏才不会删到联想词
-        if vk == VK_BACK.0 { finish_space_replace(state); }
         return;
-    }
-    if vk == 0x20 {
-        if let Some(watch) = state.borrow_mut().space.as_mut() { watch.released = true; }
     }
     if vk == 0x08 { confirm_backspace(state, context); }
     if keys::is_modifier(vk) && state.borrow().caret_move.is_some() {
@@ -1409,9 +1455,21 @@ fn key_released(state: &Rc<RefCell<State>>, context: Option<&ITfContext>, wparam
     }
 }
 
-/// FreeType 自己发的 ←（[`caret_tick`]）到了：交给应用。只有这时又在组字了才吃掉
-/// （用户已经接着打字，← 会把编辑区打断）。
-fn own_key_down(state: &Rc<RefCell<State>>) -> Result<BOOL> {
+/// 辅助退格只在原输入框仍等待联想提交时放行；后续标记同步上屏且不传给应用。
+/// 成对标点的 ← 仍在没有新组字时放行。
+fn own_key_down(state: &Rc<RefCell<State>>, context: Option<&ITfContext>, vk: u16, test: bool) -> Result<BOOL> {
+    if vk == VK_BACK.0 || vk == VK_SPACE.0 {
+        let active = {
+            let s = state.borrow();
+            !composing(state) && !s.sensitive && s.space_replace.as_ref().is_some_and(|(owner, _)| {
+                context.is_some_and(|context| same_object(owner, context))
+            })
+        };
+        if !active { cancel_space_replace(state); }
+        if vk == VK_BACK.0 { return Ok((!active).into()); }
+        if active && !test { finish_space_replace(state); }
+        return Ok(true.into());
+    }
     Ok(composing(state).into())
 }
 
@@ -1473,7 +1531,7 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
 
     fn OnTestKeyDown(&self, pic: Ref<ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
         if own_input() {
-            return own_key_down(&self.state);
+            return own_key_down(&self.state, pic.as_ref(), wparam.0 as u16, true);
         }
         let vk = wparam.0 as u16;
         note_key_down(&self.state, wparam, lparam);
@@ -1496,7 +1554,7 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
             return Ok(true.into());
         }
         let key = pic.as_ref().map_or(key, |context| {
-            prediction_space_key(&self.state, context, key, repeat, shown_revision(&self.state)).0
+            prediction_space_key(&self.state, context, key, repeat, shown_revision(&self.state), unsafe { GetMessageTime() } as u32).0
         });
         let revision = shown_revision(&self.state);
         let frame = call(&self.state, &Request::PhysicalKey { key, before: None, scan: 0, shown_revision: Some(revision) });
@@ -1511,7 +1569,7 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
 
     fn OnKeyDown(&self, pic: Ref<ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
         if own_input() {
-            return own_key_down(&self.state);
+            return own_key_down(&self.state, pic.as_ref(), wparam.0 as u16, false);
         }
         let vk = wparam.0 as u16;
         note_key_down(&self.state, wparam, lparam);
@@ -1544,7 +1602,7 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                 return Ok(true.into());
             }
         }
-        let (key, prediction_space) = prediction_space_key(&self.state, &context, key, repeat, shown_revision(&self.state));
+        let (key, prediction_space) = prediction_space_key(&self.state, &context, key, repeat, shown_revision(&self.state), unsafe { GetMessageTime() } as u32);
         let before = if wants_before && !prediction_space {
             read_before(&self.state, &context)
         } else { None };
@@ -1560,11 +1618,6 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                 return Ok(false.into());
             }
         };
-        if frame.replace_space && transitory(&context) {
-            defer_space_replace(&self.state, &context, frame);
-            send_own_taps(VK_BACK, 0x0e, false, 1);
-            return Ok(true.into());
-        }
         let handled = frame.handled;
         let visible = self.state.borrow().window.as_ref().is_some_and(|w| w.visible());
         if handled || frame.commit.is_some() || composing(&self.state) || visible {

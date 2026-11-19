@@ -20,6 +20,10 @@ struct Store {
     sink: RefCell<Option<ITextStoreACPSink>>,
     /// Like CUAS for IMM32 apps: only composition text lives here, app text never does.
     transitory: Cell<bool>,
+    deny_read: Cell<bool>,
+    /// CUAS forwards committed text to the app, then empties its document.
+    commit_only: Cell<bool>,
+    app_text: RefCell<Vec<u16>>,
 }
 
 impl Store {
@@ -36,7 +40,11 @@ impl Store {
 
     fn app_insert(&self, text: &str) {
         let selection = self.selection.get();
-        let change = self.replace(selection.acpStart, selection.acpEnd, &wide(text));
+        self.app_replace(selection.acpStart, selection.acpEnd, text);
+    }
+
+    fn app_replace(&self, start: i32, end: i32, text: &str) {
+        let change = self.replace(start, end, &wide(text));
         let sink = self.sink.borrow().clone().unwrap();
         unsafe { sink.OnTextChange(TEXT_STORE_TEXT_CHANGE_FLAGS(0), &change).unwrap(); }
         self.move_caret(change.acpNewEnd);
@@ -50,8 +58,19 @@ impl ITextStoreACP_Impl for Store_Impl {
     }
     fn UnadviseSink(&self, _: Ref<IUnknown>) -> Result<()> { self.sink.borrow_mut().take(); Ok(()) }
     fn RequestLock(&self, flags: u32) -> Result<HRESULT> {
+        if self.deny_read.get() && flags & TS_LF_READWRITE.0 == TS_LF_READ.0 {
+            return Ok(TS_E_SYNCHRONOUS);
+        }
         let sink = self.sink.borrow().clone().ok_or_else(|| windows::core::Error::from_hresult(E_FAIL))?;
-        Ok(unsafe { sink.OnLockGranted(TEXT_STORE_LOCK_FLAGS(flags)) }.err().map_or(S_OK, |e| e.code()))
+        let result = unsafe { sink.OnLockGranted(TEXT_STORE_LOCK_FLAGS(flags)) }.err().map_or(S_OK, |e| e.code());
+        if self.commit_only.get() && flags & TS_LF_READWRITE.0 == TS_LF_READWRITE.0 && result.is_ok() {
+            let size = self.text.borrow().len() as i32;
+            if size > 0 {
+                self.app_text.borrow_mut().extend_from_slice(&self.text.borrow());
+                self.app_replace(0, size, "");
+            }
+        }
+        Ok(result)
     }
     fn GetStatus(&self) -> Result<TS_STATUS> {
         Ok(TS_STATUS { dwStaticFlags: if self.transitory.get() { TS_SS_TRANSITORY } else { 0 }, ..Default::default() })
@@ -190,18 +209,21 @@ fn open_prediction(editor: &Editor, state: &Rc<RefCell<State>>, double: bool) ->
 #[test]
 fn prediction_double_space_uses_the_app_inserted_range_without_key_up() {
     in_editor(|editor, state, _| {
+        // Chromium/Devin text stores advertise TS_SS_TRANSITORY but still expose
+        // the application's committed space through the text store.
+        editor.store.transitory.set(true);
         let revision = open_prediction(&editor, &state, true);
         let space = Key { keysym: 0x20, test: true, ..Key::default() };
-        let classify = |key, repeat| prediction_space_key(&state, &editor.context, key, repeat, revision);
+        let classify = |key, repeat, ms| prediction_space_key(&state, &editor.context, key, repeat, revision, ms);
         // Repeated previews are not taps. The app receives the first space and reports a text change.
-        assert_eq!(classify(space, false), (space, true));
-        assert_eq!(classify(space, false), (space, true));
+        assert_eq!(classify(space, false, 1000), (space, true));
+        assert_eq!(classify(space, false, 1000), (space, true));
         on_focus(&state, Some(&editor.document));
         assert_eq!(shown_revision(&state), revision, "same input context keeps the visible page");
         editor.store.app_insert(" ");
-        assert_eq!(classify(space, true), (space, true), "held Space is not a double tap");
-        assert_eq!(classify(space, false).0.keysym, keysym::SPACE_DOUBLE);
-        assert_eq!(classify(Key { test: false, ..space }, false).0.keysym, keysym::SPACE_DOUBLE);
+        assert_eq!(classify(space, true, 1050), (space, true), "held Space is not a double tap");
+        assert_eq!(classify(space, false, 1100).0.keysym, keysym::SPACE_DOUBLE);
+        assert_eq!(classify(Key { test: false, ..space }, false, 1100).0.keysym, keysym::SPACE_DOUBLE);
         apply(&state, Some(&editor.context), Frame {
             handled: true, replace_space: true, commit: Some("下雨".into()), ..Frame::default()
         }, true);
@@ -210,23 +232,139 @@ fn prediction_double_space_uses_the_app_inserted_range_without_key_up() {
 }
 
 #[test]
-fn prediction_double_space_in_a_transitory_document_waits_for_the_backspace() {
-    in_editor(|editor, state, sink| unsafe {
+fn prediction_double_space_continues_after_delayed_committed_text_notifications() {
+    in_editor(|editor, state, _| {
+        editor.store.transitory.set(true);
+        open_prediction(&editor, &state, true);
+        let space = Key { keysym: 0x20, test: true, ..Key::default() };
+        for (revision, word, next, expected) in [
+            (1, "天气", "不错", "今天天气"),
+            (2, "不错", "适合", "今天天气不错"),
+            (3, "适合", "散步", "今天天气不错适合"),
+        ] {
+            let start = editor.store.text.borrow().len() as i32;
+            let ms = revision as u32 * 1000;
+            assert_eq!(prediction_space_key(&state, &editor.context, space, false, revision, ms), (space, true));
+            editor.store.app_insert(" ");
+            assert_eq!(prediction_space_key(&state, &editor.context, space, false, revision, ms + 100).0.keysym, keysym::SPACE_DOUBLE);
+            apply(&state, Some(&editor.context), Frame {
+                handled: true, replace_space: true, commit: Some(word.into()), candidates: vec![next.into()],
+                predict: true, predict_double_space: true, cursor: Some(0), page_revision: revision + 1,
+                font_family: "Microsoft YaHei".into(), font_size: 18, ..Frame::default()
+            }, true);
+            assert_eq!(String::from_utf16_lossy(&editor.store.text.borrow()), expected);
+            assert!(state.borrow().space_replace.is_none(), "a readable app space must use the TSF range, not injected backspace");
+            // Chromium updates its text store again after OnLockGranted. A stale
+            // renderer snapshot followed by the committed suffix must not strand
+            // the next prediction's caret at the beginning of that suffix.
+            editor.store.app_replace(start, start + 2, "");
+            editor.store.app_insert(word);
+            assert_eq!(shown_revision(&state), revision + 1);
+        }
+    });
+}
+
+#[test]
+fn prediction_double_space_in_a_transitory_document_uses_distinct_down_messages() {
+    in_editor(|editor, state, _| {
         editor.store.transitory.set(true);
         let revision = open_prediction(&editor, &state, true);
         let space = Key { keysym: 0x20, test: true, ..Key::default() };
-        let classify = |key| prediction_space_key(&state, &editor.context, key, false, revision);
+        let classify = |key, ms| prediction_space_key(&state, &editor.context, key, false, revision, ms);
         // The app types the first space itself; the document never shows it.
-        assert_eq!(classify(space), (space, true));
-        assert_eq!(classify(space), (space, true), "a repeated preview of the same press is not a double tap");
-        assert!(!sink.OnTestKeyUp(&editor.context, WPARAM(0x20), LPARAM((3u32 << 30) as isize)).unwrap().as_bool());
-        assert_eq!(classify(space).0.keysym, keysym::SPACE_DOUBLE);
-        let frame = Frame { handled: true, replace_space: true, commit: Some("下雨".into()), ..Frame::default() };
-        defer_space_replace(&state, &editor.context, frame);
-        assert_eq!(String::from_utf16_lossy(&editor.store.text.borrow()), "今天", "nothing is committed before the space is gone");
-        finish_space_replace(&state);
-        finish_space_replace(&state);
-        assert_eq!(String::from_utf16_lossy(&editor.store.text.borrow()), "今天下雨");
+        assert_eq!(classify(space, 1000), (space, true));
+        assert_eq!(classify(space, 1000), (space, true), "a repeated preview of the same press is not a double tap");
+        assert_eq!(classify(space, 1100).0.keysym, keysym::SPACE_DOUBLE);
+        assert_eq!(classify(Key { test: false, ..space }, 1100).0.keysym, keysym::SPACE_DOUBLE);
+        assert_eq!(String::from_utf16_lossy(&editor.store.text.borrow()), "今天", "classification cannot change the document");
+    });
+}
+
+#[test]
+fn prediction_transitory_commit_does_not_require_a_backspace_key_up_callback() {
+    use windows::Win32::UI::WindowsAndMessaging::SetMessageExtraInfo;
+    in_editor(|editor, state, sink| unsafe {
+        editor.store.transitory.set(true);
+        editor.store.commit_only.set(true);
+        open_prediction(&editor, &state, true);
+        editor.store.app_text.borrow_mut().push(u16::from(b' '));
+        defer_space_replace(&state, &editor.context, Frame {
+            handled: true, replace_space: true, commit: Some("下雨".into()), ..Frame::default()
+        });
+        let previous = SetMessageExtraInfo(LPARAM(keys::OWN_INPUT_TAG as isize));
+        // IMM32 hosts need not offer key-up events. An owned Space after the
+        // Backspace pair completes the commit through normal key-down delivery.
+        let back = sink.OnTestKeyDown(&editor.context, WPARAM(0x08), LPARAM(0)).unwrap().as_bool();
+        let back_down = sink.OnKeyDown(&editor.context, WPARAM(0x08), LPARAM(0)).unwrap().as_bool();
+        // The app, not the composition-only document, handles the passed key.
+        if !back && !back_down { editor.store.app_text.borrow_mut().pop(); }
+        let preview = sink.OnTestKeyDown(&editor.context, WPARAM(0x20), LPARAM(0)).unwrap().as_bool();
+        let before = String::from_utf16_lossy(&editor.store.app_text.borrow());
+        let handled = sink.OnKeyDown(&editor.context, WPARAM(0x20), LPARAM(0)).unwrap().as_bool();
+        let duplicate = sink.OnKeyDown(&editor.context, WPARAM(0x20), LPARAM(0)).unwrap().as_bool();
+        SetMessageExtraInfo(previous);
+        assert!(!back && !back_down, "the app must receive the backspace before the commit marker");
+        assert!(preview && handled && duplicate, "the owned commit marker must not become an app space");
+        assert_eq!(before, "今天", "preview must not commit ahead of the app's backspace");
+        assert_eq!(String::from_utf16_lossy(&editor.store.app_text.borrow()), "今天下雨");
+        assert!(editor.store.text.borrow().is_empty(), "committed app text is absent from the CUAS document");
+    });
+}
+
+#[test]
+fn prediction_transitory_double_space_survives_unavailable_read_sessions() {
+    in_editor(|editor, state, _| {
+        editor.store.transitory.set(true);
+        let revision = open_prediction(&editor, &state, true);
+        editor.store.deny_read.set(true);
+        let space = Key { keysym: 0x20, test: true, ..Key::default() };
+        assert_eq!(prediction_space_key(&state, &editor.context, space, false, revision, 1000), (space, true));
+        assert_eq!(prediction_space_key(&state, &editor.context, space, false, revision, 1100).0.keysym, keysym::SPACE_DOUBLE);
+    });
+}
+
+#[test]
+fn prediction_transitory_pending_commit_cannot_overwrite_new_input() {
+    use windows::Win32::UI::WindowsAndMessaging::SetMessageExtraInfo;
+    in_editor(|editor, state, sink| unsafe {
+        open_prediction(&editor, &state, true);
+        defer_space_replace(&state, &editor.context, Frame {
+            handled: true, replace_space: true, commit: Some("下雨".into()), ..Frame::default()
+        });
+        note_key_down(&state, WPARAM(0x4e), LPARAM(0));
+        state.borrow_mut().sink = Some(sink.cast().unwrap());
+        apply(&state, Some(&editor.context), Frame {
+            handled: true, preedit: "n".into(), preedit_cursor: 1, ..Frame::default()
+        }, true);
+        let previous = SetMessageExtraInfo(LPARAM(keys::OWN_INPUT_TAG as isize));
+        let back = sink.OnTestKeyDown(&editor.context, WPARAM(0x08), LPARAM(0)).unwrap().as_bool();
+        let marker = sink.OnKeyDown(&editor.context, WPARAM(0x20), LPARAM(0)).unwrap().as_bool();
+        SetMessageExtraInfo(previous);
+        let text = String::from_utf16_lossy(&editor.store.text.borrow());
+        let composing = composing(&state);
+        apply(&state, Some(&editor.context), Frame::default(), true);
+        state.borrow_mut().sink = None;
+        assert!(back && marker, "cancelled helper keys cannot reach the new input");
+        assert_eq!(text, "今天n");
+        assert!(composing, "the user's new composition must survive");
+    });
+}
+
+#[test]
+fn prediction_double_space_respects_message_timing_and_ignores_previews() {
+    in_editor(|editor, state, _| {
+        editor.store.transitory.set(true);
+        let revision = open_prediction(&editor, &state, true);
+        let space = Key { keysym: 0x20, test: true, ..Key::default() };
+        let classify = |ms, repeat| prediction_space_key(&state, &editor.context, space, repeat, revision, ms).0.keysym;
+        assert_eq!(classify(1000, false), 0x20);
+        assert_eq!(classify(1000, false), 0x20, "duplicate preview cannot count as another tap");
+        assert_eq!(classify(2000, false), 0x20, "a slow second tap begins a new pair");
+        assert_eq!(classify(2100, true), 0x20, "holding Space cannot select");
+        assert_eq!(classify(2100, false), keysym::SPACE_DOUBLE);
+        state.borrow_mut().space = None;
+        assert_eq!(classify(u32::MAX - 50, false), 0x20);
+        assert_eq!(classify(49, false), keysym::SPACE_DOUBLE, "Windows message time may wrap");
     });
 }
 
@@ -235,9 +373,9 @@ fn prediction_single_space_uses_the_page_only_while_the_caret_matches() {
     in_editor(|editor, state, _| {
         let revision = open_prediction(&editor, &state, false);
         let space = Key { keysym: 0x20, ..Key::default() };
-        assert_eq!(prediction_space_key(&state, &editor.context, space, false, revision), (space, true));
+        assert_eq!(prediction_space_key(&state, &editor.context, space, false, revision, 1000), (space, true));
         editor.store.move_caret(1);
-        assert_eq!(prediction_space_key(&state, &editor.context, space, false, revision), (space, false));
+        assert_eq!(prediction_space_key(&state, &editor.context, space, false, revision, 1100), (space, false));
         assert_eq!(shown_revision(&state), 0);
         assert_eq!(String::from_utf16_lossy(&editor.store.text.borrow()), "今天");
     });
@@ -248,9 +386,9 @@ fn prediction_double_space_does_not_replace_text_after_a_caret_move() {
     in_editor(|editor, state, _| {
         let revision = open_prediction(&editor, &state, true);
         let space = Key { keysym: 0x20, test: true, ..Key::default() };
-        assert_eq!(prediction_space_key(&state, &editor.context, space, false, revision).0, space);
+        assert_eq!(prediction_space_key(&state, &editor.context, space, false, revision, 1000).0, space);
         editor.store.app_insert(" ");
-        assert_eq!(prediction_space_key(&state, &editor.context, space, false, revision).0.keysym, keysym::SPACE_DOUBLE);
+        assert_eq!(prediction_space_key(&state, &editor.context, space, false, revision, 1100).0.keysym, keysym::SPACE_DOUBLE);
         editor.store.move_caret(1);
         let doc = editor.context.clone();
         let verdict = Rc::new(Cell::new(None));
@@ -269,7 +407,7 @@ fn prediction_does_not_follow_focus_to_another_input_context() {
     in_editor(|editor, state, sink| unsafe {
         let revision = open_prediction(&editor, &state, true);
         let space = Key { keysym: 0x20, test: true, ..Key::default() };
-        prediction_space_key(&state, &editor.context, space, false, revision);
+        prediction_space_key(&state, &editor.context, space, false, revision, 1000);
         let other = editor.manager.CreateDocumentMgr().unwrap();
         let mut context = None;
         let mut cookie = 0;

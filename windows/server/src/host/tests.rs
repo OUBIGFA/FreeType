@@ -2216,6 +2216,13 @@ fn prediction_double_space_is_enabled_by_default_and_selects_highlight() {
     let result = press(&mut host, keysym::SPACE_DOUBLE);
     assert_eq!(result.commit.as_deref(), Some(selected.as_str()));
     assert!(result.replace_space);
+    assert_eq!(result.candidates, ["不错"]);
+    let single = press(&mut host, 0x20);
+    assert!(!single.handled && single.commit.is_none() && single.predict);
+    assert_eq!(single.page_revision, result.page_revision, "下一轮第一次空格必须保留新联想页");
+    let next = press(&mut host, keysym::SPACE_DOUBLE);
+    assert_eq!(next.commit.as_deref(), Some("不错"));
+    assert!(next.replace_space && !next.predict);
     cleanup(&host);
 }
 
