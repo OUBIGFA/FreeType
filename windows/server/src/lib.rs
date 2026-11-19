@@ -16,6 +16,8 @@ pub mod desktop;
 pub mod pipe;
 #[cfg(windows)]
 pub mod setup;
+#[cfg(windows)]
+pub mod brand_icon;
 
 use std::path::PathBuf;
 

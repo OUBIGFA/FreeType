@@ -238,7 +238,7 @@ pub struct Config {
     pub font_family: String,
     /// 选中候选的样子：pink 品牌粉、blue 蓝、green 微信绿、sogou 不画底色块只换字色。
     pub candidate_style: String,
-    /// 运行中窗口和托盘的品牌图标：default、white、custom；不改安装和注册资源。
+    /// 窗口、托盘及系统输入指示器的品牌图标：default、white、custom。
     pub brand_icon: String,
     /// 自定义图像转为 256 px PNG 后以 Base64 保存，让备份和同步不依赖本机路径。
     #[serde(skip_serializing_if = "String::is_empty")]

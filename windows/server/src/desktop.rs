@@ -143,23 +143,7 @@ impl Desktop for DesktopHandle {
     }
 
     fn brand_icon_changed(&self) {
-        // message-only 窗口不接收 HWND_BROADCAST；逐个投递，既不抢焦点，也不切换输入法。
-        let message = unsafe { RegisterWindowMessageW(&HSTRING::from(freetype_protocol::BRAND_ICON_CHANGED_MESSAGE)) };
-        if message == 0 {
-            crate::log("无法注册语言栏图标刷新消息");
-            return;
-        }
-        let mut previous = None;
-        while let Ok(hwnd) = unsafe { FindWindowExW(Some(HWND_MESSAGE), previous, PCWSTR::null(), PCWSTR::null()) } {
-            if hwnd.0.is_null() { break; }
-            previous = Some(hwnd);
-            let mut name = [0u16; 128];
-            let length = unsafe { GetClassNameW(hwnd, &mut name) } as usize;
-            if !String::from_utf16_lossy(&name[..length]).starts_with(freetype_protocol::TSF_BRAND_MONITOR_CLASS) { continue; }
-            if let Err(error) = unsafe { PostMessageW(Some(hwnd), message, WPARAM(0), LPARAM(0)) } {
-                crate::log(&format!("语言栏图标刷新通知失败：{error}"));
-            }
-        }
+        notify_brand_icon_changed();
     }
 
     fn foreground_app(&self) -> Option<String> {
@@ -168,6 +152,27 @@ impl Desktop for DesktopHandle {
 
     fn open_apps(&self) -> Vec<AppWindow> {
         open_apps()
+    }
+}
+
+/// 保存设置及更新系统资源后共用同一通知；不切换输入法，不改变前台焦点。
+pub(crate) fn notify_brand_icon_changed() {
+    // message-only 窗口不接收 HWND_BROADCAST，需要逐个投递。
+    let message = unsafe { RegisterWindowMessageW(&HSTRING::from(freetype_protocol::BRAND_ICON_CHANGED_MESSAGE)) };
+    if message == 0 {
+        crate::log("无法注册语言栏图标刷新消息");
+        return;
+    }
+    let mut previous = None;
+    while let Ok(hwnd) = unsafe { FindWindowExW(Some(HWND_MESSAGE), previous, PCWSTR::null(), PCWSTR::null()) } {
+        if hwnd.0.is_null() { break; }
+        previous = Some(hwnd);
+        let mut name = [0u16; 128];
+        let length = unsafe { GetClassNameW(hwnd, &mut name) } as usize;
+        if !String::from_utf16_lossy(&name[..length]).starts_with(freetype_protocol::TSF_BRAND_MONITOR_CLASS) { continue; }
+        if let Err(error) = unsafe { PostMessageW(Some(hwnd), message, WPARAM(0), LPARAM(0)) } {
+            crate::log(&format!("语言栏图标刷新通知失败：{error}"));
+        }
     }
 }
 

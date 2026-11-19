@@ -38,7 +38,7 @@ pub fn record_setup_result(result: Result<(), String>, marker: Option<&Path>) ->
     Ok(())
 }
 
-fn program_files(x86: bool) -> PathBuf {
+pub(crate) fn program_files(x86: bool) -> PathBuf {
     let var = if x86 { "ProgramFiles(x86)" } else { "ProgramW6432" };
     std::env::var_os(var)
         .or_else(|| std::env::var_os("ProgramFiles"))
@@ -55,7 +55,7 @@ fn installed_dll(x86: bool) -> PathBuf {
         .unwrap_or_else(|| root.join(DLL_NAME))
 }
 
-fn valid_revision(revision: &str) -> bool {
+pub(crate) fn valid_revision(revision: &str) -> bool {
     revision.len() == 64 && revision.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
@@ -191,6 +191,7 @@ fn set_server_path(server: &Path) -> Result<(), String> {
 }
 
 pub fn register_tsf(bin_dir: &Path) -> Result<(), String> {
+    let previous_icon = crate::brand_icon::installed_icon()?;
     let root64 = program_files(false);
     let root86 = program_files(true);
     let (revision64, x64) = stage_component(&bin_dir.join(DLL_NAME), &root64)?;
@@ -201,6 +202,7 @@ pub fn register_tsf(bin_dir: &Path) -> Result<(), String> {
     }
     call_dll(&x64, s!("DllRegisterServer"))?;
     regsvr32_x86(&x86, false)?;
+    crate::brand_icon::register_installation_icon(&x64, &bin_dir.join(ICON_NAME), previous_icon.as_deref())?;
     set_server_path(&bin_dir.join("FreeTypeServer.exe"))?;
     // 两种架构全部可用后才通知现存组件切换；注册失败保留旧的发布指针。
     publish_component(&root64, &revision64)?;
@@ -237,6 +239,15 @@ pub fn unregister_tsf() -> Result<(), String> {
             if let Some(dir) = path.parent().filter(|dir| *dir != root) { let _ = std::fs::remove_dir(dir); }
         }
         if let Err(e) = remove_file(&root.join("current.txt")) { errors.push(e); }
+        if let Ok(entries) = std::fs::read_dir(root.join("brand")) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                if name.to_string_lossy().split('.').next().is_some_and(valid_revision) {
+                    if let Err(error) = remove_file(&entry.path()) { errors.push(error); }
+                }
+            }
+            let _ = std::fs::remove_dir(root.join("brand"));
+        }
         let _ = std::fs::remove_dir(root.join("versions"));
         let _ = std::fs::remove_dir(root);
     }

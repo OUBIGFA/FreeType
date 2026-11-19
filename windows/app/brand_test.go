@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -74,6 +75,41 @@ func TestBrandLogoRepaintsWithoutRecreatingTheView(t *testing.T) {
 		view.Frame()
 		if got := view.Image().RGBAAt(16, 16); got != example.want {
 			t.Fatalf("切换到 %s 后仍显示旧图标：%v，需要 %v", example.variant, got, example.want)
+		}
+	}
+}
+
+// 系统输入指示器需要完整 ICO 资源；只返回窗口使用的 PNG 会让它继续读取旧图标。
+func TestCustomBrandICOContainsEverySystemIconSize(t *testing.T) {
+	config := defaultConfig()
+	config.BrandIcon = "custom"
+	config.CustomBrandIcon = base64.StdEncoding.EncodeToString(testBrandPNG(t, color.RGBA{0, 100, 200, 255}))
+	data, err := loadBrandIcon("", config, "freetype.ico")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) < 6 || binary.LittleEndian.Uint16(data[:2]) != 0 || binary.LittleEndian.Uint16(data[2:4]) != 1 {
+		t.Fatal("系统图标必须是 ICO，不能是窗口预览 PNG")
+	}
+	sizes := []int{16, 20, 24, 32, 40, 48, 64, 96, 128, 256}
+	if got := int(binary.LittleEndian.Uint16(data[4:6])); got != len(sizes) {
+		t.Fatalf("系统图标只有 %d 个尺寸，需要 %d 个", got, len(sizes))
+	}
+	for index, size := range sizes {
+		entry := data[6+16*index : 6+16*(index+1)]
+		length, offset := int(binary.LittleEndian.Uint32(entry[8:12])), int(binary.LittleEndian.Uint32(entry[12:16]))
+		if offset < 6+16*len(sizes) || offset+length > len(data) {
+			t.Fatal("ICO 图像位置超出资源范围")
+		}
+		img, err := png.Decode(bytes.NewReader(data[offset : offset+length]))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if img.Bounds().Dx() != size || img.Bounds().Dy() != size {
+			t.Fatalf("%d 像素图标存成了 %v", size, img.Bounds())
+		}
+		if got := color.RGBAModel.Convert(img.At(size/2, size/2)); got != (color.RGBA{0, 100, 200, 255}) {
+			t.Fatalf("系统资源中的品牌颜色不符：%v", got)
 		}
 	}
 }

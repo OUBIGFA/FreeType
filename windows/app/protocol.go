@@ -11,7 +11,7 @@ type Config struct {
 	FontFamily string `json:"font_family"`
 	// CandidateStyle 是选中候选的样子：pink blue green sogou。
 	CandidateStyle string `json:"candidate_style"`
-	// 品牌图标只更新运行中的窗口和托盘；自定义 PNG 随设置保存，避免依赖来源文件。
+	// 品牌图标更新窗口、托盘和系统输入指示器；自定义 PNG 随设置保存。
 	BrandIcon           string `json:"brand_icon"`
 	CustomBrandIcon     string `json:"custom_brand_icon,omitempty"`
 	CandidateWheel      bool   `json:"candidate_wheel"`

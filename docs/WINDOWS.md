@@ -112,9 +112,11 @@ flowchart LR
 
 字体默认是 Microsoft YaHei，设置里能换成系统里的任何字体，能改字号、每页个数和横排 / 竖排，设置页有预览。应用一时给不出光标位置（浏览器类应用打字时还没排好版）时，候选窗先放在上一次的位置或系统记的插入符处，排好版后再挪过去。
 
-设置页「候选窗与外观」还可选择品牌图标：默认、白色，或点击「自定义…」导入 PNG、JPEG、WebP。图像文件最大 10 MB，宽高各不超过 4096 像素；导入时保留比例与透明度，规范为 256 像素 PNG，并生成窗口和托盘使用的 128、32 像素图像。图像内容随设置保存在用户数据目录，原文件移动后仍可显示，备份与同步也保留该图标。切换立即更新设置页、正在运行的设置窗口（包括其任务栏图标）、通知区域托盘和系统语言栏品牌图像，无需提权或重启。
+设置页「候选窗与外观」最下面的「品牌外观」可选择默认、白色，或点击「自定义…」导入 PNG、JPEG、WebP。图像文件最大 10 MB，宽高各不超过 4096 像素；导入时保留比例与透明度，规范为 256 像素 PNG，并生成窗口、托盘和系统图标使用的各尺寸图像。图像内容随设置保存在用户数据目录，原文件移动后仍可显示，备份与同步也保留该图标。设置页、正在运行的设置窗口和托盘立即换图。
 
-语言栏通过 [`ITfSystemLangBarItem::SetIcon`](https://learn.microsoft.com/en-us/windows/win32/api/ctfutb/nf-ctfutb-itfsystemlangbaritem-seticon) 替换当前图像，保留「中／英」按钮和输入状态。服务保存图像后向已激活的 TSF 监视窗口发送只读刷新通知，输入线程重新取得焦点时也会更新；未变图像不重复传输或解码。低完整性和商店宿主只获图像，不获整份配置。私有桌面测试验证真实系统语言栏对象的图像变化、尺寸及停用恢复；Windows 11 当前桌面的输入指示器显示仍属本地验收范围。安装器、程序文件、快捷方式及注册的输入法列表图标继续使用默认资源。
+Windows 任务栏的系统输入指示器从注册的 DLL/EXE 图标资源读取品牌图像，不能用传统语言栏的临时图像代替。更换时，短暂运行的管理员助手将选中的 ICO 写入 `Program Files\FreeType\brand\<图像 SHA-256>.dll` 的 `RT_GROUP_ICON` / `RT_ICON` 资源，再调用 [`ITfInputProcessorProfileMgr::RegisterProfile`](https://learn.microsoft.com/en-us/windows/win32/api/msctf/nf-msctf-itfinputprocessorprofilemgr-registerprofile) 更新图标来源，并发送系统和 TSF 刷新通知。资源模块只用于读取图像，不替换输入法代码，不切换输入法、不结束当前组字。图标资源含 16、20、24、32、40、48、64、96、128、256 像素；路径随图像摘要变化，使系统缓存区分不同图像。依据见 [Windows IME 图标要求](https://learn.microsoft.com/en-us/windows/apps/develop/input/input-method-editor-requirements#ime-branding-icon)。
+
+首次应用新的系统图标需要同意管理员授权。取消或更新失败会明确提示「设置已保存，系统输入指示图标更新失败」；系统可能仍显示先前图标，再次打开设置或改选另一种图标可重试。登记成功后，重启仍读取该资源；启动时只读核对资源，已匹配时不再次提权。覆盖安装保留已登记的品牌资源。传统语言栏继续通过 `ITfSystemLangBarItem::SetIcon` 更新，低完整性和商店宿主只取得图像，不取得整份配置。自动测试覆盖真实 Windows 资源读取、各尺寸及磁盘重新载入；完整 Windows 11 桌面显示、UAC 和重启验收仍是按需执行的本地验证。安装器、程序文件和快捷方式保留原来的品牌图标。
 
 ## 水杉输入法格式兼容
 
@@ -274,7 +276,7 @@ flowchart LR
 `output/release/FreeType-0.0.1-Setup.exe` 由 mygo 生成的 NSIS 安装器，按当前用户安装到 `%LOCALAPPDATA%\Programs\FreeType`。安装钩子见 `windows/app/installer.nsh`：
 
 1. 升级前让旧的服务进程保存后退出，关闭托盘程序。
-2. 弹出一次管理员授权，运行 `bin\FreeTypeServer.exe --register-tsf`：把 x64、x86 两份 DLL 和图标分别保存到 `Program Files\FreeType\versions\<DLL SHA-256>`、`Program Files (x86)\FreeType\versions\<DLL SHA-256>`，注册 COM 类和简体中文输入法配置，并在 `HKLM\SOFTWARE\FreeType` 记下服务进程位置。两种架构注册成功后原子更新各目录的 `current.txt`。正在使用的旧 DLL 保留，不覆盖内存中的代码。
+2. 弹出一次管理员授权，运行 `bin\FreeTypeServer.exe --register-tsf`：把 x64、x86 两份 DLL 和图标分别保存到 `Program Files\FreeType\versions\<DLL SHA-256>`、`Program Files (x86)\FreeType\versions\<DLL SHA-256>`，注册 COM 类和简体中文输入法配置，并在 `HKLM\SOFTWARE\FreeType` 记下服务进程位置。系统输入指示器最终登记到独立的品牌资源模块；覆盖安装保留已登记的品牌资源，首次安装则生成默认图标模块。两种架构注册成功后原子更新各目录的 `current.txt`。正在使用的旧 DLL 保留，不覆盖内存中的代码。
 3. 把 FreeType 加进当前用户的输入法列表，写入开机启动项，启动托盘程序。
 
 安装器的文字跟随系统显示语言：简体中文、繁体中文或英文（其他语言用简体中文）。语言目录在 `windows/app/locales`，`catalog_gen.go` 由 `go tool mygo generate` 生成。

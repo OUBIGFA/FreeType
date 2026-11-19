@@ -1,7 +1,7 @@
 //! DllRegisterServer / DllUnregisterServer：COM 类、TSF 语言配置和类别。
 //!
 //! COM 类写在 `HKLM\SOFTWARE\Classes\CLSID`（32 位 DLL 由 regsvr32 写进 WOW6432Node）。
-//! 图标用 DLL 旁边的 `freetype.ico`（注册程序一起复制过去）。
+//! 自注册先使用 DLL 旁的 ICO；安装助手在两种架构注册后登记系统输入指示器的独立图标模块。
 
 use windows::core::{Result, GUID, HSTRING};
 use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, HINSTANCE, MAX_PATH};

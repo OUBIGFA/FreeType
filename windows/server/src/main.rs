@@ -89,6 +89,32 @@ mod app {
                 return 0;
             }
             Some("--serve") => return serve(),
+            Some("--set-brand-icon") => {
+                let result = match args.as_slice() {
+                    [_, path] => freetype_server::brand_icon::apply(std::path::Path::new(path)),
+                    _ => Err("需要品牌 ICO 图像路径".into()),
+                };
+                if let Err(error) = &result { eprintln!("{error}"); }
+                return report(result, "更新系统品牌图标");
+            }
+            Some("--set-brand-icon-elevated") => {
+                use std::io::Write;
+                let result = match args.as_slice() {
+                    [_, path, result_file] => {
+                        let result = freetype_server::brand_icon::install(std::path::Path::new(path));
+                        let response = match &result {
+                            Ok(()) => freetype_protocol::Response::ok(),
+                            Err(error) => freetype_protocol::Response::error(error.clone()),
+                        };
+                        let recorded = serde_json::to_vec(&response).map_err(|error| error.to_string())
+                            .and_then(|data| std::fs::OpenOptions::new().write(true).create_new(true).open(result_file)
+                                .and_then(|mut file| file.write_all(&data)).map_err(|error| error.to_string()));
+                        result.and(recorded)
+                    }
+                    _ => Err("需要品牌 ICO 图像和结果文件路径".into()),
+                };
+                return report(result, "更新系统品牌图标");
+            }
             Some("--register-tsf") => {
                 let bin = args
                     .get(1)

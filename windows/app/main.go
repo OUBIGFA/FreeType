@@ -36,6 +36,11 @@ type app struct {
 	// 图像只在外观改变时载入；窗口关闭后仍保留，供托盘及新窗口继续使用。
 	iconConfig         Config
 	iconLogo, iconTray []byte
+	// 系统品牌资源的更新串行进行；失败保留可见结果，重新选择或打开设置时可重试。
+	systemBrandConfig   Config
+	systemBrandTail     chan struct{}
+	systemBrandRevision uint64
+	systemBrandError    string
 }
 
 func (a *app) openSettings() {
@@ -56,7 +61,8 @@ func (a *app) openSettings() {
 		s.autoSyncStatus = autoSyncState{Failed: true, Message: a.syncError}
 	}
 	s.onTray = a.showTray
-	s.onBrandIcon = a.setBrandIcon
+	s.onBrandIcon = a.applyBrandIcon
+	s.notice = a.systemBrandError
 	s.openIcon = func() (string, error) {
 		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
 			Parent: a.win, Title: "选择自定义品牌图标",
@@ -312,7 +318,7 @@ func main() {
 								s := a.settings
 								a.win.Update(func() { s.applyRestored(response) })
 							} else if response.Config != nil {
-								if err := a.setBrandIcon(*response.Config); err != nil {
+								if err := a.applyBrandIcon(*response.Config); err != nil {
 									log.Println("restore brand icon:", err)
 								}
 								a.showTray(response.Config.TrayIcon)
@@ -340,7 +346,7 @@ func main() {
 			// 服务确认启动后再读取图标，开机时服务尚未就绪也能恢复已保存的外观。
 			loadedConfig := *config.Config
 			mygo.RunOnMain(func() {
-				if err := a.setBrandIcon(loadedConfig); err != nil {
+				if err := a.applyBrandIcon(loadedConfig); err != nil {
 					log.Println("load brand icon:", err)
 					if a.settings != nil {
 						a.win.Update(func() { a.settings.notice = "读取图标失败：" + err.Error() })
