@@ -376,6 +376,8 @@ pub struct Candidate {
     pub kind: CandidateKind,
     /// 纠错标志只供外壳显示，不参与上屏。
     pub corrected: bool,
+    /// 长词补全只用于提示，实际提交与学习使用完整词和完整读音。
+    pub long_completion: bool,
     pub pin_key: Option<String>,
     pub pin_position: u8,
     /// 选中时上屏的字：emoji 推荐在句尾对上时是「整句 + emoji」，其余和 text 一样。
@@ -1355,7 +1357,7 @@ impl<'e> Session<'e> {
                     CandidateKind::Word
                 };
                 let corrected = c.features.typo_count > 0.0;
-                let pin_key = (kind == CandidateKind::Word && !corrected && consumed == input.len()
+                let pin_key = (kind == CandidateKind::Word && !corrected && !c.long_completion && consumed == input.len()
                     && c.words.len() == 1 && c.words[0].known && !c.pinyin.is_empty())
                     .then(|| format!("{}\t{}", c.pinyin, c.words[0].text));
                 Candidate {
@@ -1365,6 +1367,7 @@ impl<'e> Session<'e> {
                     consumed,
                     kind,
                     corrected,
+                    long_completion: c.long_completion,
                     pin_key,
                     ..Candidate::default()
                 }

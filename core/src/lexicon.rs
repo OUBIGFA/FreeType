@@ -147,7 +147,7 @@ impl LexEntry {
 }
 
 /// 全拼音节键。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SyllableKey {
     pub id: SyllableId,
     pub erhua: bool,
@@ -164,6 +164,10 @@ impl SyllableKey {
 /// query 是一段连续音节；返回所有“音节序列恰好等于 query”的词。
 /// 简拼查询用 SyllableQuery::Jianpin，匹配每个音节的首字母。
 pub trait Lexicon: Send + Sync {
+    /// 至少四个完整音节起，取词频最高的更长汉字词；word_prefix 非空时还要匹配字面前缀。
+    fn complete_long_word(&self, _prefix: &[SyllableKey], _word_prefix: &str) -> Option<LexEntry> {
+        None
+    }
     /// Static dictionaries can supply the same prediction priors directly from disk.
     fn prediction_index(&self) -> Option<&dyn PredictionIndex> {
         None
@@ -222,6 +226,8 @@ pub trait PredictionIndex {
 #[derive(Default)]
 pub struct MemoryLexicon {
     entries: Vec<LexEntry>,
+    /// 只按前四个音节分桶，每个长词存一次；查询不会遍历整份词库。
+    long_prefix_index: HashMap<[SyllableKey; 4], Vec<usize>>,
     full_index: HashMap<Vec<SyllableKey>, Vec<usize>>,
     jianpin_index: HashMap<Vec<u8>, Vec<usize>>,
     /// 模糊音索引：键是各音节在全部分组都打开时的归并键（`syllable::fuzzy_key`），
@@ -277,6 +283,9 @@ impl MemoryLexicon {
         });
         let rare = self.entries[idx].is_rare();
         let entries = &self.entries;
+        if keys.len() > 4 {
+            self.long_prefix_index.entry(keys[..4].try_into().unwrap()).or_default().push(idx);
+        }
         // 每组里生僻字（LexEntry::is_rare）排在最后，lookup_common 读到它们就停
         let push = |list: &mut Vec<usize>| {
             list.push(idx);
@@ -645,6 +654,13 @@ impl MemoryLexicon {
 }
 
 impl Lexicon for MemoryLexicon {
+    fn complete_long_word(&self, prefix: &[SyllableKey], word_prefix: &str) -> Option<LexEntry> {
+        let head: [SyllableKey; 4] = prefix.get(..4)?.try_into().ok()?;
+        self.long_prefix_index.get(&head)?.iter().map(|&i| &self.entries[i])
+            .filter(|entry| long_word_matches(entry, prefix, word_prefix))
+            .max_by(|a, b| long_word_order(a, b)).cloned()
+    }
+
     fn lookup(&self, query: &[SyllableQuery]) -> Vec<LexEntry> {
         self.lookup_impl(query, false)
     }
@@ -1184,6 +1200,15 @@ fn user_reading(input: &str, word: &str, frequency: f64) -> Result<String> {
 }
 
 impl Lexicon for UserLexicon {
+    fn complete_long_word(&self, prefix: &[SyllableKey], word_prefix: &str) -> Option<LexEntry> {
+        // 学习和导入数据沿用各自的快照，删除或换词库后不留下过期补全。
+        [
+            self.base.complete_long_word(prefix, word_prefix),
+            self.snapshot.read().ok().and_then(|s| s.complete_long_word(prefix, word_prefix)),
+            self.extra_snapshot.read().ok().and_then(|s| s.complete_long_word(prefix, word_prefix)),
+        ].into_iter().flatten().max_by(long_word_order)
+    }
+
     fn lookup(&self, query: &[SyllableQuery]) -> Vec<LexEntry> {
         let mut result = self.base.lookup(query);
         if let Ok(snapshot) = self.snapshot.read() {
@@ -1240,6 +1265,20 @@ impl Lexicon for UserLexicon {
         self.base.len() + self.snapshot.read().map(|s| s.len()).unwrap_or(0)
             + self.extra_snapshot.read().map(|s| s.len()).unwrap_or(0)
     }
+}
+
+/// 补全只返回词库已有、一个音节对应一个汉字的更长词，避免混输或符号扩写。
+fn long_word_matches(entry: &LexEntry, prefix: &[SyllableKey], word_prefix: &str) -> bool {
+    entry.keys.len() > prefix.len() && entry.keys.starts_with(prefix)
+        && entry.word.starts_with(word_prefix)
+        && entry.word.chars().count() == entry.keys.len()
+        && entry.word.chars().all(crate::autospace::is_han)
+}
+
+/// 同频时先取短词，再按文字和读音稳定排序，内存与编译词库得到同一结果。
+fn long_word_order(a: &LexEntry, b: &LexEntry) -> std::cmp::Ordering {
+    a.freq.total_cmp(&b.freq).then_with(|| b.keys.len().cmp(&a.keys.len()))
+        .then_with(|| b.word.cmp(&a.word)).then_with(|| b.keys.cmp(&a.keys))
 }
 
 /// 查询每个音节的声母（全拼音节取首字母，和词条的 initials 一样）。

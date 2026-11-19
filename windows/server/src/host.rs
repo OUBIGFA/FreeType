@@ -140,6 +140,7 @@ fn configure_engine(engine: &mut Engine, config: &Config) {
     }
     engine.set_typo_correction(config.typo_correction);
     engine.set_typo_kinds(config.typo_kinds);
+    engine.set_long_word_completion(config.long_word_completion);
     engine.set_traditional(config.traditional);
     engine.set_rare_ext_chars(config.rare_chars);
 }

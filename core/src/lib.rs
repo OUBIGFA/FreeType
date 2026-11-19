@@ -17,6 +17,7 @@ pub mod ffi;
 pub mod graph;
 pub mod learn;
 pub mod lexicon;
+mod long_completion;
 pub mod llama;
 pub mod lm;
 pub mod msime;
@@ -73,6 +74,8 @@ pub struct Candidate {
     /// 整句候选等于输入长度；句首词候选（长句先选「你好」，剩下的接着打）更短，
     /// 前端上屏后应把剩余部分留在输入框里继续转换。
     pub consumed: usize,
+    /// 补出了尚未输入的完整音节；外壳标记“补全”，不把它固定在前缀编码下。
+    pub long_completion: bool,
 }
 
 /// 候选内的一个分词。
@@ -121,6 +124,8 @@ pub struct EngineConfig {
     /// 前面几页之后把剩下的词全补上（整个输入的同音词、句首词、单字），直到
     /// `max_candidates`。关掉时只给最可能的那几页。
     pub more_candidates: bool,
+    /// 至少四个完整音节后补一个词库长词；由支持此功能的外壳显式开启。
+    pub long_word_completion: bool,
     /// 有神经语言模型时，按束搜索分数取前几条整句用它重排（0 表示不用）。
     pub nnlm_rerank: usize,
 }
@@ -154,6 +159,7 @@ impl Default for EngineConfig {
             typo_kinds: crate::graph::typo::ALL,
             prefix_candidates: 16,
             more_candidates: true,
+            long_word_completion: false,
             nnlm_rerank: 8,
         }
     }
@@ -548,6 +554,11 @@ impl Engine {
         self.config.typo_kinds = kinds & crate::graph::typo::ALL;
     }
 
+    /// 开关组字期间的长词补全，独立于上屏后的联想。
+    pub fn set_long_word_completion(&mut self, on: bool) {
+        self.config.long_word_completion = on;
+    }
+
     /// 是否也出 CJK 扩展 B 区及以后的单字（默认不出，常见字体显示不了；通用规范汉字表里的照常）。
     pub fn set_rare_ext_chars(&mut self, on: bool) {
         self.config.beam.rare_ext_chars = on;
@@ -802,6 +813,7 @@ impl Engine {
             self.pinyin_candidates(raw, None, true, at_ms)?
         };
         self.prepend_custom_codes(raw, at_ms, &mut result);
+        self.add_long_completion(raw, &mut result);
         if let Ok(mut last) = self.last_words.write() {
             last.clear();
             for c in &result {
@@ -841,6 +853,7 @@ impl Engine {
         learned.retain(|(_, text, _)| !words.contains(text));
         result.retain(|c| !words.contains(&c.text) && !learned.iter().any(|(_, text, _)| text == &c.text));
         let configured = words.into_iter().map(|text| Candidate {
+            long_completion: false,
             pinyin: String::new(),
             score: 0.0,
             features: Feature::default(),
@@ -854,6 +867,7 @@ impl Engine {
             text,
         });
         let learned = learned.into_iter().map(|(input, text, freq)| Candidate {
+            long_completion: false,
             pinyin: input.clone(), score: preference(&text), features: Feature::default(),
             words: vec![CandidateWord { text: text.clone(), pinyin: input, freq, known: true }],
             consumed: raw.len(), text,
@@ -1029,6 +1043,7 @@ impl Engine {
         Ok(words
             .into_iter()
             .map(|(word, cost)| Candidate {
+                long_completion: false,
                 text: word.text.clone(),
                 pinyin: word.pinyin.clone(),
                 score: -cost,
@@ -1100,6 +1115,7 @@ impl Engine {
             .map(|c| c.features.typo_count == 0.0)
             .unwrap_or(false);
         let to_candidate = |word: BeamWord, cost: f64| Candidate {
+            long_completion: false,
             text: word.text.clone(),
             pinyin: word.pinyin.clone(),
             score: -cost,
@@ -1287,6 +1303,7 @@ impl Engine {
             (Some(prev), Some(next)) => (prev.score + next.score) / 2.0,
         };
         let raw = Candidate {
+            long_completion: false,
             text,
             pinyin: display.to_ascii_lowercase(),
             score,
@@ -1452,6 +1469,7 @@ impl Engine {
                     continue;
                 }
                 extra.push(Candidate {
+                    long_completion: false,
                     text: entry.word.clone(),
                     pinyin: pinyin.clone(),
                     score,
@@ -1622,6 +1640,7 @@ impl Engine {
         };
         Candidate {
             text: path.text,
+            long_completion: false,
             pinyin: path.pinyin,
             score,
             features: feature,
@@ -2295,6 +2314,7 @@ fn sentence_head(result: &[Candidate], normalized: &str) -> Option<Candidate> {
     // （计算机 -> 電腦）。开着繁体时由调用方再转一次
     Some(Candidate {
         text: head_words.iter().map(|w| w.text.as_str()).collect(),
+        long_completion: false,
         pinyin: syllables.join(" "),
         score: top.score,
         features: Feature::default(),

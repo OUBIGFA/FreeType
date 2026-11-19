@@ -121,6 +121,26 @@ fn cleanup(host: &Host) {
     let _ = std::fs::remove_dir_all(host.data_dir());
 }
 
+#[test]
+fn long_word_completion_marks_commits_and_persists_its_switch() {
+    let mut host = host("long-completion");
+    host.install_engine(Ok(Engine::new(
+        std::sync::Arc::new(wowtype_core::MemoryLexicon::from_tsv_str(
+            "zhong hua ren min\t中华人民\t3000\nzhong hua ren min gong he guo\t中华人民共和国\t6000\n").unwrap()),
+        std::sync::Arc::new(wowtype_core::BigramLm::default()))));
+    configure(&mut host, |config| { config.typo_mark = false; config.pin_badge = "off".into(); });
+    let frame = typing(&mut host, "zhonghuarenmin");
+    assert_eq!(frame.candidates[0], "中华人民");
+    assert_eq!(frame.candidates[1], "中华人民共和国");
+    assert_eq!(frame.badges[1], "补全");
+    assert!(frame.pin_slots[1].is_none());
+    assert_eq!(press(&mut host, '2' as u32).commit.as_deref(), Some("中华人民共和国"));
+    configure(&mut host, |config| config.long_word_completion = false);
+    assert!(!typing(&mut host, "zhonghuarenmin").candidates.contains(&"中华人民共和国".into()));
+    assert!(!Host::new(Store::new(host.data_dir().to_path_buf())).config().long_word_completion);
+    cleanup(&host);
+}
+
 fn learning_request(operation: &str, path: &Path) -> Request {
     serde_json::from_value(serde_json::json!({
         "op": operation,

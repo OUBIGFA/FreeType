@@ -63,6 +63,7 @@ type Config struct {
 	Toolbar            bool `json:"toolbar"`
 	ClipboardHistory   bool `json:"clipboard_history"`
 	EmailCompletion    bool `json:"email_completion"`
+	LongWordCompletion bool `json:"long_word_completion"`
 	PredictNext        bool `json:"predict_next"`
 	PredictDigits      bool `json:"predict_digits"`
 	PredictSpace       bool `json:"predict_space"`
@@ -102,7 +103,7 @@ func defaultConfig() Config {
 		AutoPair: true, Autospace: true, AutospaceLetters: true, AutospaceDigits: true,
 		DefaultMode: "chinese", ModeScope: "global",
 		AppPresetRules: []AppPreset{},
-		QuickPhrases:   true, EmojiSuggest: true, DateTime: true, Calculator: true, Toolbar: true, EmailCompletion: true,
+		QuickPhrases:   true, EmojiSuggest: true, DateTime: true, Calculator: true, Toolbar: true, EmailCompletion: true, LongWordCompletion: true,
 		PredictSpace: true, PredictDoubleSpace: true, PredictArrows: true, StatsRetention: 365,
 		HotkeyEmoji: "off", HotkeyPunct: "off", HotkeyTraditional: "off", HotkeyMode: "off",
 		TrayIcon: true, HintOnToggle: true, HintPosition: "top-left", BarScale: 100, BarIconSize: 15, BarHideSeconds: 4, BarShadow: true, BarParts: 11,

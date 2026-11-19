@@ -58,6 +58,25 @@ class InputPerformanceTests(ServerFixture, unittest.TestCase):
                     frame = self.call(connection, "key", key={"keysym": ord(char), "modifiers": 0, "test": False})["frame"]
                 self.assertEqual(frame["candidates"][0], expected)
                 self.call(connection, "key", key={"keysym": 32, "modifiers": 0, "test": False})
+        # Reuse this full-dictionary process to cover completion through the real pipe,
+        # with both models loaded. No extra copy or second expensive startup is needed.
+        for shuangpin, code, expected in [
+            (False, "zhonghuarenmin", "中华人民共和国"),
+            (False, "chuangqianmingyue", "床前明月光"),
+            (True, "vshxrfmb", "中华人民共和国"),
+        ]:
+            config = self.call(connection, "get_config")["config"]
+            config.update(shuangpin=shuangpin, shuangpin_scheme="xiaohe", long_word_completion=True)
+            self.call(connection, "set_config", config=config)
+            self.call(connection, "reset", commit=False)
+            for char in code:
+                started = time.perf_counter()
+                frame = self.call(connection, "key", key={"keysym": ord(char), "modifiers": 0, "test": False})["frame"]
+                self.assertLess(time.perf_counter() - started, 1.0, "Completion approached the TSF 1.5-second timeout")
+            self.assertEqual(frame["candidates"][1], expected)
+            self.assertEqual(frame["badges"][1], "补全")
+            commit = self.call(connection, "key", key={"keysym": ord("2"), "modifiers": 0, "test": False})["frame"]
+            self.assertEqual(commit["commit"], expected)
         counters = subprocess.check_output(["powershell", "-NoProfile", "-Command",
             f"Get-Process -Id {server.pid} | Select-Object WorkingSet64,PrivateMemorySize64 | ConvertTo-Json"])
         for name, size in json.loads(counters).items():

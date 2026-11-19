@@ -2,7 +2,7 @@
 //! the finished index read-only and allocates only the candidates returned by a query.
 use super::*;
 use anyhow::ensure;
-use fst::{Map, MapBuilder};
+use fst::{IntoStreamer, Map, MapBuilder, Streamer};
 use memmap2::Mmap;
 use std::fs::File;
 use std::io::Read;
@@ -275,6 +275,24 @@ impl MappedLexicon {
 }
 
 impl Lexicon for MappedLexicon {
+    fn complete_long_word(&self, prefix: &[SyllableKey], word_prefix: &str) -> Option<LexEntry> {
+        if prefix.len() < 4 { return None; }
+        // 复用已部署的全拼 FST；只读取前缀范围，无须改文件格式或另建常驻索引。
+        let prefix_key = full_key(prefix.iter().copied());
+        let mut stream = self.index.range().ge(&prefix_key).into_stream();
+        let mut best: Option<LexEntry> = None;
+        while let Some((key, _)) = stream.next() {
+            if !key.starts_with(&prefix_key) { break; }
+            if key.len() == prefix_key.len() { continue; }
+            for entry in self.entries(key).filter(|entry| long_word_matches(entry, prefix, word_prefix)) {
+                if best.as_ref().is_none_or(|old| long_word_order(&entry, old).is_gt()) {
+                    best = Some(entry);
+                }
+            }
+        }
+        best
+    }
+
     fn lookup(&self, query: &[SyllableQuery]) -> Vec<LexEntry> {
         self.lookup_impl(query, false)
     }

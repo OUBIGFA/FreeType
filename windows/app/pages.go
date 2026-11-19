@@ -632,6 +632,7 @@ func (s *settings) featuresPage(c *ui.Context) {
 	})
 	section(c, "智能输入", func() {
 		s.neuralModelRow(c)
+		changed = s.settingSwitch(c, "features/长词前缀补全", false, &s.config.LongWordCompletion) || changed
 		changed = s.settingSwitch(c, "features/邮箱、网址补全", false, &s.config.EmailCompletion) || changed
 		changed = s.settingSwitch(c, "features/日期时间", false, &s.config.DateTime) || changed
 		changed = s.settingSwitch(c, "features/V 模式：计算与数字大写", false, &s.config.Calculator) || changed

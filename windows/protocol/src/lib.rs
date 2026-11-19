@@ -336,6 +336,8 @@ pub struct Config {
     pub clipboard_history: bool,
     /// 邮箱、网址补全：打 @ 出常用邮箱后缀，打 gmail. 出 .com 等。
     pub email_completion: bool,
+    /// 至少四个完整音节后补一个词库长词，默认开启，与上屏联想独立。
+    pub long_word_completion: bool,
     /// 上屏联想：一个词上屏以后，候选窗接着给出常跟在它后面的词（默认关）。
     pub predict_next: bool,
     /// 上屏联想时数字键选联想词（默认关，数字照常输入）。
@@ -441,6 +443,7 @@ impl Default for Config {
             toolbar: true,
             clipboard_history: false,
             email_completion: true,
+            long_word_completion: true,
             predict_next: false,
             predict_digits: false,
             predict_space: true,

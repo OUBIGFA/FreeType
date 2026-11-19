@@ -788,6 +788,28 @@ func TestEverySettingsSearchResultHasARealTarget(t *testing.T) {
 	}
 }
 
+func TestLongWordCompletionSwitchSavesAndReloads(t *testing.T) {
+	s, backend := newTestSettings()
+	s.locateSetting(setting("features/长词前缀补全"))
+	tt := ui.NewTester(s.view, 1000, 1400)
+	tt.Frame()
+	if !s.config.LongWordCompletion {
+		t.Fatal("长词前缀补全应默认开启")
+	}
+	if err := tt.Click("长词前缀补全"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	s.refresh()
+	tt.Frame()
+	if s.config.LongWordCompletion || backend.config.LongWordCompletion {
+		t.Fatal("关闭补全后，保存和重新读取必须保留选择")
+	}
+	if len(findSettings("长词")) == 0 {
+		t.Fatal("搜索应能定位补全设置")
+	}
+}
+
 func TestAddWordWithAndWithoutPinyin(t *testing.T) {
 	s, b := newTestSettings()
 	tt := open(t, s, "学到的词")
