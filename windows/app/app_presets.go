@@ -137,12 +137,12 @@ func (s *settings) appPresetSection(c *ui.Context) {
 			change := -1
 			changeMode := ""
 			if len(s.config.AppPresetRules) == 0 {
-				ui.Text(c, "还没有指定软件规则").FontSize(textSize(c, 13)).TextColor(colors(c).muted).Padding(10, rowInset, 12, rowInset)
+				ui.Text(c, "还没有指定软件规则").FontSize(textSize(c, 13)).TextColor(colors(c).muted).Padding(10, 0, 12, 0)
 			}
 			ui.List(c, nil, len(s.config.AppPresetRules), func(i int) {
 				rule := s.config.AppPresetRules[i]
 				mode := rule.Mode
-				item := ui.Row(c).Padding(10, rowInset).MinHeight(58).Gap(12).AlignItems(ui.Center)
+				item := ui.Row(c).Padding(10, 0).MinHeight(58).Gap(12).AlignItems(ui.Center)
 				if item.Hovered() {
 					item.Background(colors(c).cardHover)
 				}

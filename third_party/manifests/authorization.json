@@ -39,5 +39,22 @@
     "sourceSha256": "ef485070dbe394a13a4c479358ea60a7cc4f2c6eb2ddc77b3320c8ad3131b575",
     "licenseText": "third_party/licenses/Unicode-LICENSE.txt",
     "scope": "Emoji data only; the LDML specification is not distributed"
+  },
+  "wowtypeKeyboard": {
+    "revision": "bb2a04fd573f1e5f2444ee68f8f71b7ea429b3c5",
+    "licenseExpression": "MIT OR Apache-2.0",
+    "distributionLicense": "Apache-2.0",
+    "declaration": "代码按 MIT 或 Apache-2.0 双许可证发布，任选其一。",
+    "readme": {
+      "file": "third_party/licenses/WowType-STATS-README.txt",
+      "source": "https://github.com/Gloridust/WowType/blob/bb2a04fd573f1e5f2444ee68f8f71b7ea429b3c5/README.md",
+      "sha256": "d006fca600ca812b5b1560c95e52b6cd96661583916d0ae5eb50610fa0f40fff"
+    },
+    "source": {
+      "file": "third_party/sources/wowtype-keyboard.py.txt",
+      "sha256": "6af695065ef3b79eefc450d0ea03a6b00d6a1a001aa75ea0b52e81d54ce20c23",
+      "upstreamFile": "settings/wowtype-config",
+      "upstreamFileSha256": "128e8e95c849cc9aaecfd92fe129efddbbf46599a96b0a961edf9463bb83a386"
+    }
   }
 }

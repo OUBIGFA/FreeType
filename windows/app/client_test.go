@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
@@ -9,6 +10,38 @@ import (
 
 	"golang.org/x/sys/windows"
 )
+
+type startingBackend struct {
+	states []Status
+}
+
+func (b *startingBackend) Call(Request) (Response, error) {
+	if len(b.states) == 0 {
+		return Response{}, errors.New("unexpected extra startup poll")
+	}
+	state := b.states[0]
+	b.states = b.states[1:]
+	return Response{OK: true, Status: &state}, nil
+}
+
+func TestEnsureServerWaitsForDictionaryAndReportsStartupFailure(t *testing.T) {
+	for _, sample := range []struct {
+		name string
+		last Status
+		fail bool
+	}{
+		{"ready", Status{Ready: true}, false},
+		{"failed", Status{Error: "词库文件已损坏"}, true},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			backend := &startingBackend{states: []Status{{Ready: false}, sample.last}}
+			err := ensureServer(backend, t.TempDir(), time.Second)
+			if (err != nil) != sample.fail || len(backend.states) != 0 {
+				t.Fatalf("startup returned before its final state: remaining=%d err=%v", len(backend.states), err)
+			}
+		})
+	}
+}
 
 func TestPipeTimeoutReleasesQueueWithoutReplayingMutation(t *testing.T) {
 	path := fmt.Sprintf(`\\.\pipe\FreeType-audit-%d-%d`, os.Getpid(), time.Now().UnixNano())

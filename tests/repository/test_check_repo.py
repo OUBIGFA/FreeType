@@ -72,6 +72,22 @@ class RepositoryCheckTests(unittest.TestCase):
         result = self.run_check()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_large_index_uses_a_bounded_number_of_git_processes(self):
+        for index in range(256):
+            self.write(f"src/fixture-{index}.txt", f"public fixture {index}\n")
+        self.git("add", "src")
+        trace = self.repo / "_temp/git-trace.json"
+        trace.parent.mkdir()
+        result = subprocess.run(
+            [sys.executable, "-X", "utf8", str(CHECKER)], cwd=self.repo,
+            env={**os.environ, "GIT_TRACE2_EVENT": str(trace)},
+            capture_output=True, text=True, encoding="utf-8",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        starts = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()
+                  if json.loads(line).get("event") == "start"]
+        self.assertLess(len(starts), 20, "Repository scans must batch Git reads, not spawn per file")
+
     def test_public_technical_docs_are_allowed(self):
         self.write("docs/ABI.md", "# Public ABI contract\n")
         self.git("add", "docs/ABI.md")

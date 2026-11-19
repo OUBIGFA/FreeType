@@ -91,7 +91,7 @@ func (s *settings) syncPage(c *ui.Context) {
 			s.saveSync()
 		}
 		s.settingBlock(c, "sync/同步计划", func() {
-			ui.Column(c).Padding(8, rowInset, 14, rowInset).Gap(16).Children(func() {
+			ui.Column(c).Padding(8, 0, 14, 0).Gap(16).Children(func() {
 				s.syncStatusSummary(c)
 				ui.Row(c).Gap(16).Wrap().AlignItems(ui.Start).Children(func() {
 					ui.Field(c, "同步方式", func() {
@@ -169,9 +169,9 @@ func (s *settings) syncPage(c *ui.Context) {
 					s.uploadSync()
 				}
 			})
-			ui.Column(c).Padding(0, rowInset).Children(func() { s.syncFeedback(c, "transfer") })
+			ui.Column(c).Padding(0, 0).Children(func() { s.syncFeedback(c, "transfer") })
 			if s.syncListed && len(s.syncDevices) == 0 {
-				ui.Text(c, "云端还没有备份").TextColor(colors(c).muted).Wrap().Padding(6, rowInset, 12, rowInset)
+				ui.Text(c, "云端还没有备份").TextColor(colors(c).muted).Wrap().Padding(6, 0, 12, 0)
 			}
 			for _, device := range s.syncDevices {
 				device := device

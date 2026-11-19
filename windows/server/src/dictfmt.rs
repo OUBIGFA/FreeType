@@ -554,6 +554,12 @@ mod rime {
     /// 找 `import_tables` 里的词典文件：相对主词典的目录；主词典自己在子目录里的话
     /// （用户选了 `cn_dicts\x.dict.yaml`）再往上找两层，librime 是从用户目录的根算的。
     pub fn read_table(main: &Path, table: &str) -> Option<Vec<u8>> {
+        // import_tables 只接受包内相对名称；拒绝父目录、盘符和绝对路径，
+        // 免得导入外部词典时读入该词典指定的其他本机文件。
+        if table.is_empty() || table.contains(':') || !Path::new(table).components()
+            .all(|part| matches!(part, std::path::Component::Normal(_))) {
+            return None;
+        }
         let relative = format!("{table}.dict.yaml");
         main.parent()?
             .ancestors()

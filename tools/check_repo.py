@@ -41,16 +41,18 @@ MACHINE_PATH = re.compile(
 )
 
 
-def git(*args):
+def git(*args, input=None):
     """Use Git's index and blob APIs instead of the working tree."""
-    result = subprocess.run(["git", *args], capture_output=True)
+    result = subprocess.run(["git", *args], input=input, capture_output=True)
     if result.returncode:
         raise RuntimeError("Git command failed: " + " ".join(args[:2]))
     return result.stdout
 
 
-def ignored(path, tracked_paths):
-    """Evaluate project rules without inheriting a developer's global excludes."""
+def ignored_paths(paths, tracked_paths):
+    """Evaluate all paths in one process without inheriting global excludes."""
+    if not paths:
+        return set()
     result = subprocess.run(
         [
             "git",
@@ -62,15 +64,57 @@ def ignored(path, tracked_paths):
             "-z",
             "--stdin",
         ],
-        input=path.encode("utf-8") + b"\0",
+        input=b"".join(path.encode("utf-8") + b"\0" for path in paths),
         capture_output=True,
     )
     if result.returncode not in (0, 1):
         raise RuntimeError("Git ignore check failed")
     if result.returncode == 1:
-        return False
-    source, _, pattern, _ = result.stdout.rstrip(b"\0").split(b"\0")
-    return source.decode("utf-8") in tracked_paths and not pattern.startswith(b"!")
+        return set()
+    fields = result.stdout.rstrip(b"\0").split(b"\0")
+    if len(fields) % 4:
+        raise RuntimeError("Invalid Git ignore response")
+    return {
+        fields[index + 3].decode("utf-8") for index in range(0, len(fields), 4)
+        if fields[index].decode("utf-8") in tracked_paths and not fields[index + 2].startswith(b"!")
+    }
+
+
+def staged_blobs(entries):
+    """Read each unique staged blob once; reject oversized objects before loading."""
+    objects = list(dict.fromkeys(blob for _, mode, blob, stage in entries
+                                if mode in ("100644", "100755") and stage == "0"))
+    if not objects:
+        return {}, {}
+    request = "".join(blob + "\n" for blob in objects).encode("ascii")
+    sizes = {}
+    for line in git("cat-file", "--batch-check", input=request).splitlines():
+        fields = line.split()
+        if len(fields) != 3 or fields[1] != b"blob":
+            raise RuntimeError("Invalid staged Git object")
+        sizes[fields[0].decode("ascii")] = int(fields[2])
+    if set(sizes) != set(objects):
+        raise RuntimeError("Incomplete staged Git object metadata")
+    selected = [blob for blob in objects if sizes[blob] <= MAX_BYTES]
+    if not selected:
+        return sizes, {}
+    data = git("cat-file", "--batch", input="".join(blob + "\n" for blob in selected).encode("ascii"))
+    blobs = {}
+    offset = 0
+    for blob in selected:
+        end = data.find(b"\n", offset)
+        expected = f"{blob} blob {sizes[blob]}".encode("ascii")
+        if end < 0 or data[offset:end] != expected:
+            raise RuntimeError("Invalid staged Git blob header")
+        offset = end + 1
+        end = offset + sizes[blob]
+        if data[end:end + 1] != b"\n":
+            raise RuntimeError("Incomplete staged Git blob")
+        blobs[blob] = data[offset:end]
+        offset = end + 1
+    if offset != len(data):
+        raise RuntimeError("Unexpected trailing Git blob response")
+    return sizes, blobs
 
 
 def staged_entries():
@@ -199,6 +243,9 @@ def check():
     if not entries:
         errors.append("empty Git index: stage the intended files first")
 
+    ignored = ignored_paths(paths, paths)
+    sizes, object_data = staged_blobs(entries)
+
     for path, mode, blob, stage in entries:
         parts = PurePosixPath(path).parts
         for offset in range(1, len(parts) + 1):
@@ -219,7 +266,7 @@ def check():
         boundary = forbidden_path(path)
         if boundary:
             errors.append(f"{path}: forbidden {boundary}")
-        if ignored(path, paths):
+        if path in ignored:
             errors.append(f"{path}: ignored path is tracked")
 
         if mode == "160000":
@@ -229,11 +276,11 @@ def check():
             errors.append(f"{path}: unsupported mode or unresolved index stage")
             continue
 
-        size = int(git("cat-file", "-s", blob))
+        size = sizes[blob]
         if size > MAX_BYTES:
             errors.append(f"{path}: exceeds 10 MiB file limit")
             continue
-        data = git("cat-file", "blob", blob)
+        data = object_data[blob]
         blobs[path] = data
         searchable = data.decode("utf-8", errors="ignore")
         if CREDENTIAL.search(searchable):
@@ -311,8 +358,9 @@ def check():
             ".github/workflows/telegram-bot.yml",
             ".github/workflows/telegram-notify.yml",
         )
+        hidden = ignored_paths(probes, paths)
         for probe in probes:
-            if not ignored(probe, paths):
+            if probe not in hidden:
                 errors.append(f"ignore boundary: {probe} is exposed")
 
     for path, text in texts.items():

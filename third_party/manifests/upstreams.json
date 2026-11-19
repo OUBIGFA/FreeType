@@ -53,6 +53,25 @@
       "revision": "26796f3ed646e2ce75ba39bca6f1352caca9fd67",
       "use": "参照词库与快捷短语批量文件的公开格式，以及单按 Shift、成对标点后挪光标的处理思路；不复制代码或词库数据。本地对照副本放在 .local/references/msime-windows（不入库）",
       "license": "GPL-3.0"
+    },
+    {
+      "name": "WowType typing statistics",
+      "repository": "https://github.com/Gloridust/WowType",
+      "revision": "bb2a04fd573f1e5f2444ee68f8f71b7ea429b3c5",
+      "use": "直接移植 settings/wowtype-config 的统计指标计算、六行键盘、相对热度、趋势、类型和候选分类页面；GTK/Cairo 改用 mygo 原生控件与图表；保留 Windows 原有日统计格式和额外视图",
+      "license": "MIT OR Apache-2.0；本次按 Apache-2.0 分发",
+      "trackedEvidence": [
+        {
+          "path": "third_party/licenses/WowType-STATS-README.txt",
+          "bytes": 48368,
+          "sha256": "d006fca600ca812b5b1560c95e52b6cd96661583916d0ae5eb50610fa0f40fff"
+        },
+        {
+          "path": "third_party/sources/wowtype-keyboard.py.txt",
+          "bytes": 30085,
+          "sha256": "6af695065ef3b79eefc450d0ea03a6b00d6a1a001aa75ea0b52e81d54ce20c23"
+        }
+      ]
     }
   ]
 }

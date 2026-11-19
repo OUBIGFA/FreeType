@@ -332,6 +332,19 @@ func TestTypingPageFuzzyGroups(t *testing.T) {
 	}
 }
 
+func TestRemoveLastQuickPhraseSendsAnEmptyProtocolArray(t *testing.T) {
+	s, backend := newTestSettings()
+	s.removePhrase(0)
+	request := backend.last("set_quick_phrases")
+	raw, err := json.Marshal(request["phrases"])
+	if err != nil || string(raw) != "[]" {
+		t.Fatalf("clearing quick phrases must send an empty array accepted by the Rust service: %s %v", raw, err)
+	}
+	if len(s.phrases) != 0 {
+		t.Fatal("the removed phrase is still displayed")
+	}
+}
+
 func TestTypingPagePunctuationOptions(t *testing.T) {
 	s, b := newTestSettings()
 	tt := open(t, s, "拼音与按键")

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -23,6 +24,8 @@ type settings struct {
 	// 保存请求按操作顺序发送；旧应答不能覆盖用户随后改过的界面值。
 	configSaveTail <-chan struct{}
 	configRevision uint64
+	// 启动结束与再次打开窗口都可刷新；晚到的旧快照不能覆盖较新的结果。
+	refreshRevision uint64
 	// 保存失败时恢复已确认的图标，避免预览与实际托盘显示不同的外观。
 	savedBrandIcon, savedCustomBrandIcon string
 	// 选文件、存文件、打开文件夹（测试里换掉）。
@@ -63,13 +66,17 @@ type settings struct {
 	fonts            []string
 	shuangpinExample string
 
-	dicts                        []Dictionary
-	phrases                      []QuickPhrase
-	common                       []string
+	dicts   []Dictionary
+	phrases []QuickPhrase
+	common  []string
+	// 全列表保存完成并刷新前不接受下一次修改，避免用旧列表覆盖刚写入的条目。
+	phrasesBusy, commonBusy      bool
 	words                        []UserWord
 	stats                        map[string]typingDay
 	statsBusy, confirmStatsClear bool
 	statsError                   string
+	statsTab, statsScope         int
+	statsUpdatedAt               time.Time
 
 	// 最近一次从服务端发现的可选窗口。
 	apps                                     []AppWindow
@@ -156,18 +163,27 @@ func (s *settings) background(work func() func()) {
 // refresh 重新读状态、设置、词库和快捷短语。
 func (s *settings) refresh() {
 	s.refreshDefaultTip(false)
+	s.refreshRevision++
+	refreshRevision := s.refreshRevision
 	revision := s.configRevision
 	s.background(func() func() {
 		status, err := s.backend.Call(op("status"))
 		if err != nil {
-			return func() { s.statusErr = err.Error() }
+			return func() {
+				if refreshRevision == s.refreshRevision {
+					s.statusErr = err.Error()
+				}
+			}
 		}
 		config, cerr := s.backend.Call(op("get_config"))
-		dicts, _ := s.backend.Call(op("list_dictionaries"))
-		phrases, _ := s.backend.Call(op("list_quick_phrases"))
+		dicts, dictErr := s.backend.Call(op("list_dictionaries"))
+		phrases, phraseErr := s.backend.Call(op("list_quick_phrases"))
 		common, commonErr := s.backend.Call(op("list_common_phrases"))
 		apps, _ := s.backend.Call(op("list_apps"))
 		return func() {
+			if refreshRevision != s.refreshRevision {
+				return
+			}
 			s.statusErr = ""
 			if status.Status != nil {
 				s.status = *status.Status
@@ -178,8 +194,19 @@ func (s *settings) refresh() {
 				s.loaded = true
 				s.updateBrandIcon()
 			}
-			s.dicts = dicts.Dictionaries
-			s.phrases = phrases.QuickPhrases
+			if cerr != nil && revision == s.configRevision {
+				s.notice = "读取设置失败：" + cerr.Error()
+			}
+			if dictErr == nil {
+				s.dicts = dicts.Dictionaries
+			} else {
+				s.notice = "读取词库列表失败：" + dictErr.Error()
+			}
+			if phraseErr == nil {
+				s.phrases = phrases.QuickPhrases
+			} else {
+				s.notice = "读取快捷短语失败：" + phraseErr.Error()
+			}
 			if commonErr == nil {
 				s.common = common.CommonPhrases
 			} else {
@@ -240,6 +267,7 @@ func (s *settings) saveConfig() {
 
 // run 发一条命令（切中英、标点、简繁），刷新状态。
 func (s *settings) run(req Request) {
+	revision := s.configRevision
 	s.background(func() func() {
 		_, err := s.backend.Call(req)
 		status, serr := s.backend.Call(op("status"))
@@ -252,7 +280,7 @@ func (s *settings) run(req Request) {
 			if serr == nil && status.Status != nil {
 				s.status = *status.Status
 			}
-			if config.Config != nil {
+			if config.Config != nil && revision == s.configRevision {
 				s.config = *config.Config
 				s.shuangpinExample = config.ShuangpinExample
 				s.updateBrandIcon()
@@ -397,37 +425,55 @@ func (state *settings) importLearning() {
 }
 
 func (s *settings) importPhrases() {
+	if s.phrasesBusy {
+		return
+	}
+	s.phrasesBusy = true
 	replace := s.replacePhrases
 	s.background(func() func() {
 		path := s.openFile("导入快捷短语")
 		if path == "" {
-			return nil
+			return func() { s.phrasesBusy = false }
 		}
 		resp, err := s.backend.Call(op("import_quick_phrases", "path", path, "replace", replace))
-		list, _ := s.backend.Call(op("list_quick_phrases"))
+		list, listErr := s.backend.Call(op("list_quick_phrases"))
 		return func() {
+			s.phrasesBusy = false
 			if err != nil {
 				s.report, s.reportErrors = "导入失败："+err.Error(), nil
 			} else {
 				s.report, s.reportErrors = describe(resp.Report, "快捷短语新增")
 			}
-			s.phrases = list.QuickPhrases
+			if listErr == nil {
+				s.phrases = list.QuickPhrases
+			} else {
+				s.notice = "刷新快捷短语失败：" + listErr.Error()
+			}
 		}
 	})
 }
 
 // savePhrases 整份替换快捷短语。
-func (s *settings) savePhrases(phrases []QuickPhrase, done string) {
+func (s *settings) savePhrases(phrases []QuickPhrase, done func()) {
+	if s.phrasesBusy {
+		return
+	}
+	s.phrasesBusy = true
+	// Rust 协议把 null 视为格式错误；删除最后一条也必须发送列表。
+	if phrases == nil {
+		phrases = []QuickPhrase{}
+	}
 	s.background(func() func() {
 		_, err := s.backend.Call(op("set_quick_phrases", "phrases", phrases))
-		list, _ := s.backend.Call(op("list_quick_phrases"))
 		return func() {
+			s.phrasesBusy = false
 			if err != nil {
 				s.notice = "保存失败：" + err.Error()
 			} else {
-				s.notice = done
+				// 保存请求已完整验证；直接接纳这份列表，避免后续刷新失败丢失界面状态。
+				s.phrases = phrases
+				done()
 			}
-			s.phrases = list.QuickPhrases
 		}
 	})
 }
@@ -446,6 +492,10 @@ func validCode(code string) bool {
 }
 
 func (s *settings) addPhrase() {
+	if s.phrasesBusy {
+		return
+	}
+	inputCode, inputText, inputWeight := s.newCode, s.newText, s.newWeight
 	code := strings.ToLower(strings.TrimSpace(s.newCode))
 	text := strings.ReplaceAll(s.newText, "\r\n", "\n")
 	weight := 10
@@ -467,8 +517,12 @@ func (s *settings) addPhrase() {
 	}
 	s.formError = ""
 	phrases := append(append([]QuickPhrase(nil), s.phrases...), QuickPhrase{Code: code, Text: text, Weight: weight})
-	s.newCode, s.newText, s.newWeight = "", "", ""
-	s.savePhrases(phrases, "已添加 "+code)
+	s.savePhrases(phrases, func() {
+		if s.newCode == inputCode && s.newText == inputText && s.newWeight == inputWeight {
+			s.newCode, s.newText, s.newWeight = "", "", ""
+		}
+		s.notice = "已添加 " + code
+	})
 }
 
 func (s *settings) removePhrase(i int) {
@@ -476,7 +530,8 @@ func (s *settings) removePhrase(i int) {
 		return
 	}
 	phrases := append(append([]QuickPhrase(nil), s.phrases[:i]...), s.phrases[i+1:]...)
-	s.savePhrases(phrases, "已删除 "+s.phrases[i].Code)
+	code := s.phrases[i].Code
+	s.savePhrases(phrases, func() { s.notice = "已删除 " + code })
 }
 
 // loadWords 读学到的词。

@@ -331,7 +331,7 @@ func (s *settings) settingBlock(c *ui.Context, id string, content func()) {
 			ui.Column(c).FillWidth().Disabled(true).Children(content)
 		}
 		if chosen && reason != "" {
-			ui.Text(c, reason).FontSize(textSize(c, 13)).TextColor(colors(c).muted).LineHeight(1.4).Wrap().Padding(0, rowInset, 14, rowInset)
+			ui.Text(c, reason).FontSize(textSize(c, 13)).TextColor(colors(c).muted).LineHeight(1.4).Wrap().Padding(0, 0, 14, 0)
 		}
 	})
 	if chosen && s.revealSetting {

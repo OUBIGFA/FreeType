@@ -539,6 +539,23 @@ mod tests {
     }
 
     #[test]
+    fn rime_import_tables_cannot_read_absolute_or_parent_paths() {
+        let store = temp_store("rime-paths");
+        let source = store.dir().join("source");
+        fs::create_dir_all(&source).unwrap();
+        let outside = store.dir().join("outside.dict.yaml");
+        fs::write(&outside, "---\nname: outside\n...\n私密词\tsi mi ci\t1000\n").unwrap();
+        let main = source.join("main.dict.yaml");
+        let absolute = outside.with_extension("").with_extension("").to_string_lossy().into_owned();
+        for table in ["../outside".to_string(), absolute] {
+            fs::write(&main, format!("---\nname: main\nimport_tables:\n  - {table}\n...\n你好\tni hao\t1000\n")).unwrap();
+            let parsed = dictfmt::parse_dictionary_file(&main, &|_| Box::new(crate::dictfmt::LexiconReading::default())).unwrap();
+            assert_eq!(parsed.parsed.items.len(), 1, "import_tables read outside data: {table}");
+            assert!(!parsed.parsed.errors.is_empty(), "invalid table references must be reported");
+        }
+    }
+
+    #[test]
     fn dictionary_names_are_safe_file_names() {
         assert_eq!(dictionary_name(" a/b:c. ").as_deref(), Some("abc"));
         assert_eq!(dictionary_name("com1"), None);

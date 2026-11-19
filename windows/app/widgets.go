@@ -5,7 +5,7 @@ import (
 )
 
 // 设置窗口采用现代商业软件的分层卡片设计：
-// 1. 卡片内部用留白与子块微色块组织层级，不用贯穿全宽的生硬线条；
+// 1. 同组设置之间用浅色细线分隔，子项保留缩进与微色块；
 // 2. 同级控件共用圆角、字阶和内边距；
 // 3. 只有真正放不下的操作组换行，不缩小文字或截掉操作。
 const (
@@ -143,7 +143,7 @@ func pageHeader(c *ui.Context, title, subtitle string) {
 	})
 }
 
-// section 是一组设置：小标题加一张卡片，卡片内部用留白和悬停底色代替生硬的全宽线条。
+// section 是一组设置：只在相邻项目之间画浅色细线，首尾不增加分隔线。
 func section(c *ui.Context, title string, fn func()) {
 	p := colors(c)
 	before := float32(18)
@@ -154,7 +154,8 @@ func section(c *ui.Context, title string, fn func()) {
 		if title != "" {
 			ui.Text(c, title).FontSize(textSize(c, 13)).FontWeight(600).TextColor(p.muted).Padding(0, 4).Wrap()
 		}
-		card := ui.Column(c).Padding(6, 0).Radius(panelRadius).Background(p.card).Border(1, p.border).Clip()
+		card := ui.Column(c).Padding(6, rowInset).
+			Radius(panelRadius).Background(p.card).Border(1, p.border).Clip()
 		if !c.Preferences().HighContrast {
 			alpha := float32(0.03)
 			if c.Theme().Dark {
@@ -162,7 +163,7 @@ func section(c *ui.Context, title string, fn func()) {
 			}
 			card.Shadow(0, 1, 3, 0, ui.RGBA(0, 0, 0, alpha))
 		}
-		card.Children(fn)
+		card.Children(func() { ui.Column(c).FillWidth().Gap(1).Dividers(1, p.border).Children(fn) })
 	})
 }
 
@@ -178,7 +179,7 @@ func texts(c *ui.Context, title, desc string) ui.Element {
 
 // row 是卡片里的一行：左边名字和说明，右边 control 画的控件。
 func row(c *ui.Context, title, desc string, control func()) {
-	ui.Row(c).Padding(11, rowInset).Gap(16).Wrap().AlignItems(ui.Center).MinHeight(58).Children(func() {
+	ui.Row(c).Padding(11, 0).Gap(16).Wrap().AlignItems(ui.Center).MinHeight(58).Children(func() {
 		texts(c, title, desc)
 		if control != nil {
 			ui.Row(c).Gap(8).Wrap().AlignItems(ui.Center).MinWidth(0).MaxWidthPercent(100).Shrink(1).Children(control)
@@ -188,8 +189,8 @@ func row(c *ui.Context, title, desc string, control func()) {
 
 // subRow 是开关打开后出现在下面、缩进一级的一行，以柔和内嵌微色块呈现从属关系。
 func subRow(c *ui.Context, title, desc string, control func()) {
-	ui.Column(c).FillWidth().Padding(2, 12).Children(func() {
-		ui.Row(c).FillWidth().Padding(10, rowInset-12, 10, subInset-12).Radius(controlRadius).Gap(16).Wrap().MinHeight(54).
+	ui.Column(c).FillWidth().Padding(2, 0).Children(func() {
+		ui.Row(c).FillWidth().Padding(10, 8, 10, subInset-rowInset).Radius(controlRadius).Gap(16).Wrap().MinHeight(54).
 			AlignItems(ui.Center).Background(colors(c).subtle).Children(func() {
 			texts(c, title, desc)
 			if control != nil {
@@ -226,13 +227,13 @@ func switchLine(c *ui.Context, title, desc string, value *bool, sub bool) bool {
 		})
 	}
 	if sub {
-		ui.Column(c).FillWidth().Padding(2, 12).Children(func() {
-			build(ui.Row(c).FillWidth().Padding(10, rowInset-12, 10, subInset-12).Radius(controlRadius).
+		ui.Column(c).FillWidth().Padding(2, 0).Children(func() {
+			build(ui.Row(c).FillWidth().Padding(10, 8, 10, subInset-rowInset).Radius(controlRadius).
 				Gap(16).Wrap().AlignItems(ui.Center).MinHeight(54).Background(colors(c).subtle))
 		})
 		return changed
 	}
-	build(ui.Row(c).FillWidth().Padding(11, rowInset).Gap(16).Wrap().AlignItems(ui.Center).MinHeight(58))
+	build(ui.Row(c).FillWidth().Padding(11, 0).Gap(16).Wrap().AlignItems(ui.Center).MinHeight(58))
 	return changed
 }
 

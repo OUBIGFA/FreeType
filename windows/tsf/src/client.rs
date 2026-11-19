@@ -34,7 +34,6 @@ struct Connection {
     pipe: HANDLE,
     event: HANDLE,
     buf: Vec<u8>,
-    timeout_ms: u32,
 }
 
 impl Drop for Connection {
@@ -114,13 +113,14 @@ enum Fail {
 }
 
 /// 等一个重叠操作完成；超时就取消。返回传输的字节数。
-fn finish(conn: &Connection, overlapped: &mut OVERLAPPED, started: windows::core::Result<()>) -> Result<u32, Fail> {
+fn finish(conn: &Connection, overlapped: &mut OVERLAPPED, started: windows::core::Result<()>, deadline: u64) -> Result<u32, Fail> {
     unsafe {
         if let Err(e) = started {
             if e.code() != ERROR_IO_PENDING.to_hresult() {
                 return Err(Fail::Broken);
             }
-            if WaitForSingleObject(conn.event, conn.timeout_ms) != WAIT_OBJECT_0 {
+            let remaining = deadline.saturating_sub(now_ms()).min(u32::MAX as u64) as u32;
+            if WaitForSingleObject(conn.event, remaining) != WAIT_OBJECT_0 {
                 let _ = CancelIoEx(conn.pipe, Some(overlapped));
                 let mut n = 0;
                 let _ = GetOverlappedResult(conn.pipe, overlapped, &mut n, true);
@@ -134,7 +134,7 @@ fn finish(conn: &Connection, overlapped: &mut OVERLAPPED, started: windows::core
 }
 
 impl Connection {
-    fn open(name: &str, timeout_ms: u32) -> Result<Self, windows::core::Error> {
+    fn open(name: &str, deadline: u64) -> Result<Self, windows::core::Error> {
         let name = HSTRING::from(name);
         unsafe {
             let mut attempt = CreateFileW(
@@ -147,7 +147,9 @@ impl Connection {
                 None,
             );
             if attempt.is_err() && GetLastError() == ERROR_PIPE_BUSY {
-                let _ = WaitNamedPipeW(&name, 200);
+                let remaining = deadline.saturating_sub(now_ms()).min(200) as u32;
+                // WaitNamedPipe 的 0 表示服务端默认时限，并非不等待。
+                if remaining > 0 { let _ = WaitNamedPipeW(&name, remaining); }
                 attempt = CreateFileW(
                     &name,
                     (GENERIC_READ | GENERIC_WRITE).0,
@@ -170,19 +172,19 @@ impl Connection {
                 pipe,
                 event,
                 buf: Vec::new(),
-                timeout_ms,
             })
         }
     }
 
-    fn write(&self, mut data: &[u8]) -> Result<(), Fail> {
+    fn write(&self, mut data: &[u8], deadline: u64) -> Result<(), Fail> {
         while !data.is_empty() {
+            if now_ms() >= deadline { return Err(Fail::Timeout); }
             let mut overlapped = OVERLAPPED {
                 hEvent: self.event,
                 ..Default::default()
             };
             let started = unsafe { WriteFile(self.pipe, Some(data), None, Some(&mut overlapped)) };
-            let n = finish(self, &mut overlapped, started)?;
+            let n = finish(self, &mut overlapped, started, deadline)?;
             if n == 0 {
                 return Err(Fail::Broken);
             }
@@ -191,20 +193,21 @@ impl Connection {
         Ok(())
     }
 
-    fn read_line(&mut self) -> Result<Vec<u8>, Fail> {
+    fn read_line(&mut self, deadline: u64) -> Result<Vec<u8>, Fail> {
         loop {
             if let Some(pos) = self.buf.iter().position(|&b| b == b'\n') {
                 let line = self.buf[..pos].to_vec();
                 self.buf.drain(..=pos);
                 return Ok(line);
             }
+            if now_ms() >= deadline { return Err(Fail::Timeout); }
             let mut chunk = [0u8; 8192];
             let mut overlapped = OVERLAPPED {
                 hEvent: self.event,
                 ..Default::default()
             };
             let started = unsafe { ReadFile(self.pipe, Some(&mut chunk), None, Some(&mut overlapped)) };
-            let n = finish(self, &mut overlapped, started)?;
+            let n = finish(self, &mut overlapped, started, deadline)?;
             if n == 0 {
                 return Err(Fail::Broken);
             }
@@ -212,9 +215,9 @@ impl Connection {
         }
     }
 
-    fn call(&mut self, request: &Request) -> Result<Response, Fail> {
-        self.write(&encode(request))?;
-        let line = self.read_line()?;
+    fn call(&mut self, request: &Request, deadline: u64) -> Result<Response, Fail> {
+        self.write(&encode(request), deadline)?;
+        let line = self.read_line(deadline)?;
         decode(&line).map_err(|_| Fail::Broken)
     }
 }
@@ -259,7 +262,7 @@ impl Client {
         }
     }
 
-    fn ensure(&mut self) -> bool {
+    fn ensure(&mut self, deadline: u64) -> bool {
         if self.connection.is_some() {
             return true;
         }
@@ -268,12 +271,12 @@ impl Client {
             crate::log::write("读不到当前用户", "管道名无法确定");
             return false;
         };
-        match Connection::open(&name, self.timeout_ms) {
+        match Connection::open(&name, deadline) {
             Ok(mut conn) => {
                 let hello = conn.call(&Request::Hello {
                     session: self.session,
                     app: crate::log::app_name(),
-                });
+                }, deadline);
                 match hello {
                     Ok(r) if r.ok => {
                         self.connection = Some(conn);
@@ -295,11 +298,13 @@ impl Client {
 
     /// 发一条请求。连不上、超时、出错都返回 None（调用方把键交还给应用）。
     pub fn call(&mut self, request: &Request) -> Option<Response> {
+        // 连接、握手、重连和分块应答共用一次期限，不能每个 I/O 都重新等 1.5 秒。
+        let deadline = now_ms() + u64::from(self.timeout_ms);
         for attempt in 0..2 {
-            if !self.ensure() {
+            if now_ms() >= deadline || !self.ensure(deadline) {
                 return None;
             }
-            let result = self.connection.as_mut()?.call(request);
+            let result = self.connection.as_mut()?.call(request, deadline);
             match result {
                 Ok(response) => {
                     if !response.ok {
@@ -334,5 +339,43 @@ impl Client {
     // Stand in for a disconnected server without contacting the active user session.
     pub(crate) fn without_server() -> Self {
         Self { name: None, ..Self::new() }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows::Win32::Storage::FileSystem::PIPE_ACCESS_DUPLEX;
+    use windows::Win32::System::Pipes::{ConnectNamedPipe, CreateNamedPipeW, PIPE_TYPE_BYTE, PIPE_WAIT};
+    use windows::Win32::Foundation::ERROR_PIPE_CONNECTED;
+
+    #[test]
+    fn partial_replies_share_one_request_deadline() {
+        let name = format!(r"\\.\pipe\FreeType-deadline-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+        let handle = unsafe { CreateNamedPipeW(&HSTRING::from(&name), PIPE_ACCESS_DUPLEX,
+            PIPE_TYPE_BYTE | PIPE_WAIT, 1, 4096, 4096, 0, None) };
+        assert!(!handle.is_invalid());
+        let raw = handle.0 as usize;
+        let worker = std::thread::spawn(move || unsafe {
+            let handle = HANDLE(raw as *mut c_void);
+            let connected = ConnectNamedPipe(handle, None);
+            assert!(connected.is_ok() || connected.unwrap_err().code() == ERROR_PIPE_CONNECTED.to_hresult());
+            let mut request = [0; 512];
+            let mut read = 0;
+            ReadFile(handle, Some(&mut request), Some(&mut read), None).unwrap();
+            for part in ["{", "\"ok\"", ":", "true", "}", "\n"] {
+                std::thread::sleep(std::time::Duration::from_millis(40));
+                let mut written = 0;
+                if WriteFile(handle, Some(part.as_bytes()), Some(&mut written), None).is_err() { break; }
+            }
+            let _ = CloseHandle(handle);
+        });
+        let deadline = now_ms() + 100;
+        let mut connection = Connection::open(&name, deadline).unwrap();
+        let response = connection.call(&Request::Status, deadline);
+        drop(connection);
+        worker.join().unwrap();
+        assert!(matches!(response, Err(Fail::Timeout)), "partial replies reset the deadline: {response:?}");
     }
 }

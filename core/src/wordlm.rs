@@ -63,6 +63,10 @@ impl WordLm {
         }
         let n = r.u32()? as usize;
         let m = r.u32()? as usize;
+        // 先按文件剩余字节约束计数，损坏的头部不能触发巨量分配。
+        if n == 0 || n as u64 * 9 + m as u64 * 8 + 4 > (data.len() - r.at) as u64 {
+            bail!("词级模型的计数与文件大小不符");
+        }
         let mut words = Vec::with_capacity(n);
         let mut ids = HashMap::with_capacity(n);
         for i in 0..n {
@@ -70,15 +74,26 @@ impl WordLm {
             let w = std::str::from_utf8(r.take(len)?)
                 .context("词表不是 UTF-8")?
                 .to_string();
-            ids.insert(w.clone(), i as u32);
+            if w.is_empty() || ids.insert(w.clone(), i as u32).is_some() {
+                bail!("词表含空词或重复词");
+            }
             words.push(w);
         }
         let backoff = r.f32s(n)?;
         let starts = r.u32s(n + 1)?;
         let curs = r.u32s(m)?;
         let scores = r.f32s(m)?;
-        if starts.last().copied() != Some(m as u32) || starts.windows(2).any(|w| w[0] > w[1]) {
+        if starts.first().copied() != Some(0) || starts.last().copied() != Some(m as u32)
+            || starts.windows(2).any(|w| w[0] > w[1]) || curs.iter().any(|&id| id as usize >= n) {
             bail!("二元组索引坏了");
+        }
+        for row in starts.windows(2) {
+            if curs[row[0] as usize..row[1] as usize].windows(2).any(|pair| pair[0] >= pair[1]) {
+                bail!("二元组编号未严格递增");
+            }
+        }
+        if backoff.iter().chain(&scores).any(|value| !value.is_finite()) {
+            bail!("词级模型含非有限分数");
         }
         if r.at != data.len() {
             bail!("文件末尾多了 {} 字节", data.len() - r.at);
@@ -183,7 +198,8 @@ struct Reader<'a> {
 
 impl<'a> Reader<'a> {
     fn take(&mut self, n: usize) -> Result<&'a [u8]> {
-        let s = self.d.get(self.at..self.at + n).context("文件截断")?;
+        let end = self.at.checked_add(n).context("文件边界溢出")?;
+        let s = self.d.get(self.at..end).context("文件截断")?;
         self.at += n;
         Ok(s)
     }
@@ -347,6 +363,26 @@ pub fn build(counts: &Counts, config: BuildConfig) -> Result<(Vec<u8>, usize, us
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejects_invalid_word_indexes_and_nonfinite_scores_before_querying() {
+        // Two words, one transition from <s> to 好. Offsets are part of WTLM v1.
+        let mut valid = Vec::from(*MAGIC);
+        for value in [VERSION, 2, 1] { valid.extend(value.to_le_bytes()); }
+        for word in ["<s>", "好"] {
+            valid.push(word.len() as u8);
+            valid.extend(word.as_bytes());
+        }
+        for value in [0.0f32, 0.0] { valid.extend(value.to_le_bytes()); }
+        for value in [0u32, 1, 1, 1] { valid.extend(value.to_le_bytes()); }
+        valid.extend(1.0f32.to_le_bytes());
+        assert_eq!(WordLm::from_bytes(&valid).unwrap().top_next("<s>", 1)[0].0, "好");
+        for (offset, bits) in [(44, 2u32), (32, 1), (24, f32::NAN.to_bits()), (48, f32::INFINITY.to_bits())] {
+            let mut invalid = valid.clone();
+            invalid[offset..offset + 4].copy_from_slice(&bits.to_le_bytes());
+            assert!(WordLm::from_bytes(&invalid).is_err(), "accepted corrupt WTLM field at {offset}");
+        }
+    }
 
     #[test]
     fn round_trip_and_scores() {

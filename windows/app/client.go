@@ -113,28 +113,37 @@ func serverExe(resources string) string {
 	return filepath.Join(resources, "bin", "FreeTypeServer.exe")
 }
 
-// ensureServer 在服务进程没跑时启动它，最多等 timeout。
+// ensureServer 在服务进程没跑时启动它，并等到词库就绪或报告载入错误。
+// 管道可连接并不表示引擎已就绪；过早结束会让设置页一直停在启动状态。
 func ensureServer(b Backend, resources string, timeout time.Duration) error {
-	if _, err := b.Call(op("status")); err == nil {
-		return nil
-	}
-	exe := serverExe(resources)
-	if _, err := os.Stat(exe); err != nil {
-		return fmt.Errorf("找不到输入法服务程序 %s", exe)
-	}
-	cmd := exec.Command(exe)
-	const detachedProcess = 0x00000008
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: detachedProcess}
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("启动输入法服务失败：%w", err)
-	}
-	_ = cmd.Process.Release()
 	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if _, err := b.Call(op("status")); err == nil {
-			return nil
+	response, err := b.Call(op("status"))
+	if err != nil {
+		exe := serverExe(resources)
+		if _, err := os.Stat(exe); err != nil {
+			return fmt.Errorf("找不到输入法服务程序 %s", exe)
+		}
+		cmd := exec.Command(exe)
+		const detachedProcess = 0x00000008
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: detachedProcess}
+		if err := cmd.Start(); err != nil {
+			return fmt.Errorf("启动输入法服务失败：%w", err)
+		}
+		_ = cmd.Process.Release()
+	}
+	for {
+		if err == nil && response.Status != nil {
+			if response.Status.Error != "" {
+				return fmt.Errorf("词库载入失败：%s", response.Status.Error)
+			}
+			if response.Status.Ready {
+				return nil
+			}
+		}
+		if !time.Now().Before(deadline) {
+			return errors.New("输入法服务未在规定时间内完成词库载入")
 		}
 		time.Sleep(100 * time.Millisecond)
+		response, err = b.Call(op("status"))
 	}
-	return errors.New("输入法服务启动后没有应答")
 }

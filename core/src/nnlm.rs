@@ -197,10 +197,14 @@ impl Nnlm {
         let mut take = |len: usize| -> Result<Vec<f32>> {
             let bytes = data.get(at..at + 2 * len).context("WTNN 权重不完整")?;
             at += 2 * len;
-            Ok(bytes
+            let values: Vec<f32> = bytes
                 .chunks_exact(2)
                 .map(|b| f16_to_f32(u16::from_le_bytes([b[0], b[1]])))
-                .collect())
+                .collect();
+            if values.iter().any(|value| !value.is_finite()) {
+                bail!("WTNN 权重里有非有限数");
+            }
+            Ok(values)
         };
         let wte = take(vocab_size * D)?;
         let wpe = take(MAX_POS * D)?;
@@ -223,8 +227,8 @@ impl Nnlm {
         }
         let lnf_g = take(D)?;
         let lnf_b = take(D)?;
-        if [&wte, &wpe, &lnf_g].iter().any(|w| w.iter().any(|v| !v.is_finite())) {
-            bail!("WTNN 权重里有非有限数");
+        if at != data.len() {
+            bail!("WTNN 文件末尾有多余数据");
         }
         Ok(Self {
             vocab,
@@ -539,12 +543,12 @@ fn f16_to_f32(h: u16) -> f32 {
 }
 
 fn u32_at(d: &[u8], at: usize) -> Result<u32> {
-    let b = d.get(at..at + 4).context("越界")?;
+    let b = d.get(at..at.checked_add(4).context("越界")?).context("越界")?;
     Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
 }
 
 fn u16_at(d: &[u8], at: usize) -> Result<u16> {
-    let b = d.get(at..at + 2).context("越界")?;
+    let b = d.get(at..at.checked_add(2).context("越界")?).context("越界")?;
     Ok(u16::from_le_bytes([b[0], b[1]]))
 }
 
@@ -613,7 +617,8 @@ impl<'a> Fb<'a> {
     /// 表的第 field 个字段的位置（没有这个字段返回 None）。
     fn field(&self, table: usize, field: usize) -> Result<Option<usize>> {
         let soff = self.u32(table)? as i32;
-        let vt = (table as i64 - soff as i64) as usize;
+        // FlatBuffers 的 vtable 偏移有符号；损坏输入不能回绕到 usize::MAX。
+        let vt = usize::try_from(table as i64 - soff as i64).context("vtable 越界")?;
         let vt_len = u16_at(self.d, vt)? as usize;
         let slot = 4 + 2 * field;
         if slot + 2 > vt_len {
@@ -623,7 +628,7 @@ impl<'a> Fb<'a> {
         Ok((off != 0).then_some(table + off))
     }
     fn deref(&self, at: usize) -> Result<usize> {
-        Ok(at + self.u32(at)? as usize)
+        at.checked_add(self.u32(at)? as usize).context("表偏移越界")
     }
     fn table_field(&self, table: usize, field: usize) -> Result<Option<usize>> {
         match self.field(table, field)? {
@@ -694,6 +699,9 @@ fn read_tflite_tensors(d: &[u8]) -> Result<HashMap<String, (Vec<usize>, Vec<f32>
             .chunks_exact(4)
             .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
             .collect();
+        if values.iter().any(|value| !value.is_finite()) {
+            bail!("TFLite 权重里有非有限数");
+        }
         out.insert(name, (shape, values));
     }
     Ok(out)
@@ -702,6 +710,16 @@ fn read_tflite_tensors(d: &[u8]) -> Result<HashMap<String, (Vec<usize>, Vec<f32>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn malformed_tflite_offsets_return_an_error_instead_of_panicking() {
+        let mut data = vec![1];
+        data.extend(8u32.to_le_bytes());
+        data.extend(4u32.to_le_bytes()); // Root table starts at byte 4.
+        data.extend(5u32.to_le_bytes()); // Its vtable would be at byte -1.
+        data.resize(16, 0);
+        assert!(Nnlm::from_bytes(&data).is_err());
+    }
 
     fn f32_to_f16(v: f32) -> u16 {
         // 测试里只用到 [-1, 1] 的规格化小数，截断就够
@@ -760,6 +778,15 @@ mod tests {
         let mut bad = blob.clone();
         bad[4] = 9;
         assert!(Nnlm::from_bytes(&bad).is_err());
+        // 模型导入必须校验每一层和最终偏置，不能让 NaN 到首次输入才污染排序。
+        for offset in [blob.len() - 2, blob.len() - 2 * D - 2] {
+            let mut bad = blob.clone();
+            bad[offset..offset + 2].copy_from_slice(&0x7e00u16.to_le_bytes());
+            assert!(Nnlm::from_bytes(&bad).is_err(), "accepted non-finite weight at {offset}");
+        }
+        let mut trailing = blob;
+        trailing.extend_from_slice(b"unexpected trailing data");
+        assert!(Nnlm::from_bytes(&trailing).is_err());
     }
 
     #[test]

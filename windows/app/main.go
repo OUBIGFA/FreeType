@@ -284,7 +284,14 @@ func main() {
 			log.Println("update data directory:", err)
 		}
 		go func() {
-			if err := ensureServer(a.client, a.resources, 10*time.Second); err != nil {
+			err := ensureServer(a.client, a.resources, 30*time.Second)
+			// 窗口可以先显示；载入结束后重新读状态，修正首次连接失败或未就绪的画面。
+			mygo.RunOnMain(func() {
+				if a.settings != nil {
+					a.settings.refresh()
+				}
+			})
+			if err != nil {
 				log.Println(err)
 				return
 			}

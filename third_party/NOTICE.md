@@ -27,6 +27,8 @@ FreeType 复用其 Rust 引擎、C ABI 和行为测试，并增加 Windows 服�
 
 本次 Windows 构建所用的已修改上游引擎与转换源码带有明确修改标识，具体差异可与该固定修订比较。原有署名、许可及归属声明保留；Apache-2.0 不授予上游商标权。默认词库、模型、OpenCC 和 Unicode 数据的独立许可不由这项代码授权代替。
 
+输入统计另外直接移植 WowType 修订 `bb2a04fd573f1e5f2444ee68f8f71b7ea429b3c5` 的 `settings/wowtype-config`：指标计算、六项概览、六行实体键盘、相对热度、趋势、类型与候选分类页面。FreeType 改用 Go/mygo 原生控件和图表、Windows 扫描码及现有日统计数据；保留今日时段、年度记录和明细，不展示尚未采集的模式与方案分布。该修订同样提供 MIT 或 Apache-2.0，选择 Apache-2.0；`third-party/ui/wowtype-keyboard@<修订>/` 保留许可全文、原始 README、修改声明和未修改源码节选。
+
 ### Rust 与 Go 模块
 
 - Rust 包由 `Cargo.lock` 固定；许可原文位于 `third-party/rust/<包名>@<版本>/`。包含 `windows` 系列绑定、Serde 和 Unicode 相关组件等。MIT、Apache、Unicode 等声明分别保留，不统一改写成一种许可。

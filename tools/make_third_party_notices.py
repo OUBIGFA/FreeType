@@ -163,6 +163,13 @@ def check_authorization(root=ROOT):
         raise ValueError("Upstream authorization declaration does not match its evidence")
     if code["distributionLicense"] not in code["licenseExpression"].split(" OR "):
         raise ValueError("Selected distribution license is not authorized upstream")
+    keyboard = record["wowtypeKeyboard"]
+    for evidence in [keyboard["readme"], keyboard["source"]]:
+        if sha256(root / evidence["file"]) != evidence["sha256"]:
+            raise ValueError("Keyboard authorization evidence changed: " + evidence["file"])
+    if (keyboard["declaration"] not in (root / keyboard["readme"]["file"]).read_text(encoding="utf-8")
+            or keyboard["distributionLicense"] not in keyboard["licenseExpression"].split(" OR ")):
+        raise ValueError("Keyboard source license is not authorized upstream")
     model = json.loads((root / "third_party/manifests/default-data.json").read_text(encoding="utf-8"))["languageModel"]
     if model["sha256"] != record["wordModel"]["sha256"] or model["license"] != record["wordModel"]["license"]:
         raise ValueError("Model changed; review its authorization before distribution")
@@ -255,6 +262,10 @@ def collect(output):
     licenses = ROOT / "third_party/licenses"
     components.append(copy_component(output, "engine:wowtype-core", authorization["wowtype"]["revision"], licenses,
                                      ["Apache-2.0-LICENSE.txt", "WowType-README.txt", "WowType-Cargo.toml.txt"]))
+    keyboard = authorization["wowtypeKeyboard"]
+    components.append(copy_component(output, "ui:wowtype-keyboard", keyboard["revision"], licenses,
+                                     ["Apache-2.0-LICENSE.txt", "WowType-STATS-README.txt", "WowType-KEYBOARD-NOTICE.txt"],
+                                     ROOT / keyboard["source"]["file"]))
     components.append(copy_component(output, "data:unicode-cldr", "wowtype-5656e136", licenses,
                                      ["Unicode-LICENSE.txt"], ROOT / authorization["unicode"]["source"]))
     model_notice = copy_component(output, "model:word-lm", authorization["wordModel"]["tag"],

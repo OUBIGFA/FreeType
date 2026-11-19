@@ -1,0 +1,19 @@
+FreeType typing statistics uses portions of WowType
+
+Source: https://github.com/Gloridust/WowType
+Revision: bb2a04fd573f1e5f2444ee68f8f71b7ea429b3c5
+File: settings/wowtype-config
+Original project: WowType, Gloridust and contributors
+
+The upstream README declares the code available under MIT OR Apache-2.0.
+FreeType chooses Apache-2.0. The complete license and the original README
+are included beside this notice. Dictionary and model licenses are separate.
+
+FreeType adapted stats_rows, stats_heat_level, stats_metrics,
+stats_scope_counts, stats_recent_days, stats_format_active, and the
+overview, keyboard, trend, character-kind and candidate-rank pages to Go/mygo.
+Changes include Windows Set-1 scan codes and the existing daily data format,
+standard mygo charts instead of GTK/Cairo, the FreeType palette, text scaling,
+horizontal scrolling, calendar-day arithmetic, and retained Windows views.
+Mode and scheme breakdowns are not shown because those counters are not collected.
+Unmodified source excerpts are included in source/.

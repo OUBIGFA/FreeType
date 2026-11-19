@@ -694,7 +694,7 @@ func (s *settings) shortcutsPage(c *ui.Context) {
 				{"v + 空格", "启用工具栏后，在全拼状态下打开剪贴板、常用语、符号和表情"},
 				{"Esc", "清空当前输入，或关闭工具栏、表情面板和上屏联想"},
 			} {
-				ui.Row(c).Padding(10, rowInset).Gap(16).Wrap().AlignItems(ui.Center).Children(func() {
+				ui.Row(c).Padding(10, 0).Gap(16).Wrap().AlignItems(ui.Center).Children(func() {
 					ui.Row(c).Width(172).MaxWidthPercent(100).Wrap().Gap(6).Children(func() {
 						for _, part := range strings.Split(k[0], "  ") {
 							keyCap(c, part)
@@ -775,7 +775,7 @@ func (s *settings) phrasesPage(c *ui.Context) {
 	pageHeader(c, "快捷短语", "启用实用功能中的快捷短语候选后，输入完整编码即可选用；编码仅含英文字母")
 	section(c, "添加", func() {
 		s.settingBlock(c, "phrases/添加快捷短语", func() {
-			ui.Column(c).Padding(12, rowInset, 14, rowInset).Gap(14).Children(func() {
+			ui.Column(c).Padding(12, 0, 14, 0).Gap(14).Children(func() {
 				ui.Row(c).Gap(12).Wrap().AlignItems(ui.Start).Children(func() {
 					ui.Field(c, "编码", func() { ui.TextInput(c, &s.newCode).Placeholder("例如 dz").FillWidth() }).
 						Grow(1).Basis(220).MinWidth(160)
@@ -784,7 +784,7 @@ func (s *settings) phrasesPage(c *ui.Context) {
 				})
 				ui.Field(c, "短语", func() { ui.TextArea(c, &s.newText).Height(72) }).Error(s.formError)
 				ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-					if ui.PrimaryButton(c, "添加").Clicked() {
+					if ui.PrimaryButton(c, "添加").Disabled(s.phrasesBusy).Clicked() {
 						s.addPhrase()
 					}
 				})
@@ -794,7 +794,7 @@ func (s *settings) phrasesPage(c *ui.Context) {
 	section(c, "批量导入、导出", func() {
 		s.settingRow(c, "phrases/导入或导出", func() {
 			checkbox(c, &s.replacePhrases, "替换现有快捷短语")
-			if ui.Button(c, "导入").Clicked() {
+			if ui.Button(c, "导入").Disabled(s.phrasesBusy).Clicked() {
 				s.importPhrases()
 			}
 			if ui.Button(c, "导出").Clicked() {
@@ -823,7 +823,7 @@ func (s *settings) phrasesPage(c *ui.Context) {
 			ui.List(c, nil, len(shown), func(k int) {
 				i := shown[k]
 				ph := s.phrases[i]
-				item := ui.Row(c).Height(phraseRow).Padding(0, rowInset).Gap(12).AlignItems(ui.Center)
+				item := ui.Row(c).Height(phraseRow).Padding(0, 0).Gap(12).AlignItems(ui.Center)
 				if item.Hovered() {
 					item.Background(colors(c).cardHover)
 				}
@@ -831,7 +831,7 @@ func (s *settings) phrasesPage(c *ui.Context) {
 					ui.Row(c).Width(96).Shrink(0).Children(func() { keyCap(c, ph.Code).Tooltip(ph.Code) })
 					ui.Text(c, preview(ph.Text)).Grow(1).Basis(0).MinWidth(0).Shrink(1).SingleLine().Tooltip(ph.Text)
 					ui.Textf(c, "%d", ph.Weight).Width(56).TextAlign(ui.End).FontFeatures("tnum").TextColor(colors(c).muted).FontSize(textSize(c, 13))
-					if ui.Button(c, "删除").Label(fmt.Sprintf("删除 %s %d", ph.Code, i+1)).Clicked() {
+					if ui.Button(c, "删除").Label(fmt.Sprintf("删除 %s %d", ph.Code, i+1)).Disabled(s.phrasesBusy).Clicked() {
 						remove = i
 					}
 				})
@@ -863,7 +863,7 @@ func (s *settings) learnedPage(c *ui.Context) {
 	s.unlockDialog(c)
 	section(c, "添加词", func() {
 		s.settingBlock(c, "learned/添加词", func() {
-			ui.Column(c).Padding(12, rowInset, 14, rowInset).Gap(14).Children(func() {
+			ui.Column(c).Padding(12, 0, 14, 0).Gap(14).Children(func() {
 				ui.Text(c, "中文词可留空拼音，由 FreeType 自动补充；多音字请填写拼音；英文词默认用小写单词作为输入码；中英混输词需填写输入码，例如 datag → 打 tag").FontSize(textSize(c, 13)).TextColor(colors(c).muted).LineHeight(1.45).Wrap()
 				ui.Row(c).Gap(12).Wrap().AlignItems(ui.End).Children(func() {
 					ui.Field(c, "词语", func() {
@@ -911,7 +911,7 @@ func (s *settings) learnedPage(c *ui.Context) {
 			}
 			ui.List(c, nil, len(words), func(i int) {
 				w := words[i]
-				item := ui.Row(c).Padding(10, rowInset).MinHeight(54).Gap(12).AlignItems(ui.Center)
+				item := ui.Row(c).Padding(10, 0).MinHeight(54).Gap(12).AlignItems(ui.Center)
 				if item.Hovered() {
 					item.Background(p.cardHover)
 				}
