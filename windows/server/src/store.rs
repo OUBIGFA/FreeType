@@ -342,20 +342,20 @@ impl Store {
         if imported.parsed.items.is_empty() && imported.foreign > 0 {
             // 英文词典（en.dict.yaml）、符号表：没有可以按拼音打出来的中文词条
             return Err(format!(
-                "文件里的 {} 条都不是中文词语。导入的词库只收带拼音的中文词条",
+                "文件中 {} 条均不是中文词语；词库仅接受带拼音的中文词条",
                 imported.foreign
             ));
         }
         let mut report = self.save_dictionary(&name, imported.parsed)?;
         let mut note = format!("识别为{}", imported.format.name());
         if imported.tables > 0 {
-            note.push_str(&format!("，连同 import_tables 里的 {} 个词典", imported.tables));
+            note.push_str(&format!("；包含 import_tables 中的 {} 个词典", imported.tables));
         }
         if imported.annotated > 0 {
-            note.push_str(&format!("；{} 条只有词语，已按常用读音自动注音（多音字可能不准）", imported.annotated));
+            note.push_str(&format!("；{} 条只有词语，已按常用读音补充拼音；多音字可能不准确", imported.annotated));
         }
         if imported.foreign > 0 {
-            note.push_str(&format!("；{} 条不是中文词语，没有收", imported.foreign));
+            note.push_str(&format!("；已跳过 {} 条非中文词语", imported.foreign));
         }
         report.note = Some(note);
         Ok(report)
@@ -364,9 +364,9 @@ impl Store {
     /// 把条目写成 `dicts\<name>.txt`。
     fn save_dictionary(&self, name: &str, parsed: Parsed<DictEntry>) -> Result<ImportReport, String> {
         if parsed.items.is_empty() {
-            let mut message = String::from("文件里没有可用的词条");
+            let mut message = String::from("文件中没有可用词条");
             if let Some(first) = parsed.errors.first() {
-                message.push_str(&format!("（第 {} 行：{}）", first.line, first.message));
+                message.push_str(&format!("；第 {} 行：{}", first.line, first.message));
             }
             return Err(message);
         }
@@ -527,7 +527,7 @@ mod tests {
         let report = store.import_dictionary(&main, "demo", &reading).unwrap();
         assert_eq!((report.added, report.skipped), (1, 0));
         let note = report.note.unwrap();
-        assert!(note.contains("Rime 词典") && note.contains("1 个词典") && note.contains("1 条不是中文词语"), "{note}");
+        assert!(note.contains("Rime 词典") && note.contains("1 个词典") && note.contains("已跳过 1 条非中文词语"), "{note}");
         assert_eq!(store.load_dictionaries()[0].1[0].word, "韵酒");
         // 只有英文词条的词典：说明原因，不存空词库
         let english = source.join("en.dict.yaml");

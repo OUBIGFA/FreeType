@@ -282,7 +282,7 @@ func (a *autoSync) run(now time.Time, manual bool) {
 		a.state.Count++
 	}
 	a.state.Busy = true
-	a.state.Message = "正在比较并同步最新备份…"
+	a.state.Message = "正在比较并同步最新备份"
 	a.state.Failed = false
 	err := a.saveLocked()
 	a.mu.Unlock()
@@ -350,7 +350,7 @@ func (a *autoSync) cycle(c syncSettings) (string, error) {
 	local := filepath.Join(work, "local.json")
 	resp, err := a.backend.Call(op("export_sync_settings", "path", local))
 	if err != nil {
-		return "", fmt.Errorf("生成同步快照失败：%w", err)
+		return "", fmt.Errorf("生成同步备份失败：%w", err)
 	}
 	hash, err := snapshotHash(local)
 	if err != nil {

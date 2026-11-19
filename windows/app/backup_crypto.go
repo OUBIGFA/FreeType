@@ -37,7 +37,7 @@ const (
 
 var (
 	errBackupPassword = errors.New("备份密码不正确，或者云端备份已损坏")
-	errBackupLocked   = errors.New("云端备份已加密。请在「云端同步」里填写上传它的电脑用的备份密码")
+	errBackupLocked   = errors.New("云端备份已加密；请在云端同步中填写该备份的密码")
 	errNoPassword     = errors.New("已开启备份加密，请先填写并保存备份密码")
 )
 

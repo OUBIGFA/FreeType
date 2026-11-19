@@ -548,10 +548,10 @@ fn open_menu(owner: HWND, item: Option<usize>) {
     if let Some(i) = item.filter(|_| data.view.forgettable) {
         if data.view.pin_slots.get(i).is_some_and(Option::is_some) {
             entries.push(("置顶".into(), data.click(CandidateAction::Pin { index: i, place: 1 })));
-            entries.push(("固定排位 ›".into(), Click::PinChoices { owner, index: i, revision: data.painted_revision }));
+            entries.push(("固定排位".into(), Click::PinChoices { owner, index: i, revision: data.painted_revision }));
         }
         if let Some(word) = data.view.candidates.get(i) {
-            entries.push((format!("删除「{word}」的记忆"), data.click(CandidateAction::Forget { index: i })));
+            entries.push((format!("删除 {word} 的学习记录"), data.click(CandidateAction::Forget { index: i })));
         }
     }
     entries.push(("打开 FreeType 设置".into(), Click::Settings));

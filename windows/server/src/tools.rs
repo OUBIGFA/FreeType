@@ -324,13 +324,13 @@ impl Tool {
     fn title(&self) -> String {
         let base = match self.page {
             Page::Menu => "工具栏".to_string(),
-            Page::Clipboard if !self.clipboard_on => "剪贴板 · 在设置「功能」里打开「记录剪贴板历史」".to_string(),
+            Page::Clipboard if !self.clipboard_on => "剪贴板 · 在实用功能中开启「记录剪贴板历史」后可用".to_string(),
             Page::Clipboard if self.items.is_empty() => "剪贴板 · 还没有记录".to_string(),
             Page::Clipboard => "剪贴板".to_string(),
-            Page::Phrases if self.items.is_empty() => "常用语 · 在设置「常用语」里添加".to_string(),
+            Page::Phrases if self.items.is_empty() => "常用语 · 请在常用语设置页添加内容".to_string(),
             Page::Phrases => "常用语".to_string(),
-            Page::Symbols => "符号 · 打拼音或英文搜".to_string(),
-            Page::Emoji => "表情 · 打拼音或英文搜".to_string(),
+            Page::Symbols => "符号 · 输入拼音或英文搜索".to_string(),
+            Page::Emoji => "表情 · 输入拼音或英文搜索".to_string(),
         };
         if self.query.is_empty() {
             base

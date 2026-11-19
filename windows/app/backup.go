@@ -17,11 +17,11 @@ var backupParts = []struct {
 	ID, Title, Detail string
 	fields            []string
 }{
-	{"settings", "设置", "设置页里的各个选项、中英文状态、悬浮状态栏的位置", []string{"config", "mode", "status_bar_position"}},
+	{"settings", "设置", "输入选项、中英文状态和悬浮状态栏位置", []string{"config", "mode", "status_bar_position"}},
 	{"dictionaries", "词库", "导入的词库和自定义主词库", []string{"dictionaries", "main_lexicon"}},
 	{"quick_phrases", "快捷短语", "", []string{"quick_phrases"}},
 	{"common_phrases", "常用语", "", []string{"common_phrases"}},
-	{"learning", "学习记录", "学到的词、输入习惯、最近用过的表情", []string{"learning", "recent_emoji"}},
+	{"learning", "学习记录", "学到的词、选词次数、搭配和最近使用的表情", []string{"learning", "recent_emoji"}},
 	{backupSyncPart, "同步账号和计划", "不含密码和密钥", []string{"sync_connection"}},
 }
 
@@ -60,10 +60,10 @@ func exportedSummary(response Response, parts []string) string {
 func (s *settings) backupSection(c *ui.Context) {
 	section(c, "一键导入导出", func() {
 		s.settingRow(c, "sync/全部设置和数据", func() {
-			if ui.Button(c, "导入…").Label("导入全部设置").Clicked() {
+			if ui.Button(c, "导入").Label("导入全部设置").Clicked() {
 				s.chooseSettingsBackup()
 			}
-			if ui.Button(c, "导出…").Label("导出全部设置").Clicked() {
+			if ui.Button(c, "导出").Label("导出全部设置").Clicked() {
 				if len(s.exportParts) != len(backupParts) {
 					s.exportParts = make([]bool, len(backupParts))
 					for i := range s.exportParts {
@@ -77,7 +77,7 @@ func (s *settings) backupSection(c *ui.Context) {
 	})
 	s.exportDialog(c)
 	s.unlockDialog(c)
-	switch ui.AlertDialog(c, &s.confirmRestore, "导入全部设置？", s.restoreSummary+"\n导入会用备份里的数据替换本机对应的数据；备份里不含的数据保持不变。请先导出当前数据，保存后再导入。", "取消", "导入并替换") {
+	switch ui.AlertDialog(c, &s.confirmRestore, "导入全部设置", s.restoreSummary+"\n用备份替换对应数据；未备份的数据保持不变；请先导出当前数据", "取消", "导入并替换") {
 	case 0:
 		s.restorePath, s.restoreSummary, s.restorePassword = "", "", ""
 	case 1:
@@ -92,7 +92,7 @@ func (s *settings) exportDialog(c *ui.Context) {
 	ui.Modal(c, &s.exportChoosing, func() {
 		ui.Column(c).Gap(14).Width(420).MaxWidthPercent(100).Children(func() {
 			ui.Text(c, "选择要导出的数据").FontSize(textSize(c, 17)).FontWeight(600)
-			ui.Text(c, "没勾选的数据不会写进备份文件。导入这份备份时，只替换它包含的数据。").Wrap().TextColor(colors(c).muted)
+			ui.Text(c, "只备份所选数据；导入时只替换备份中的数据").Wrap().TextColor(colors(c).muted)
 			ui.Column(c).Gap(10).Children(func() {
 				for i, part := range backupParts {
 					ui.Column(c).Key("export-" + part.ID).Gap(2).Children(func() {
@@ -103,18 +103,18 @@ func (s *settings) exportDialog(c *ui.Context) {
 					})
 				}
 			})
-			ui.Field(c, "备份密码（可选）", func() {
-				ui.TextInput(c, &s.exportPassword).Password().Placeholder("留空则不加密；设置后用 AES-256 加密备份").Label("导出备份密码").FillWidth()
+			ui.Field(c, "备份密码 可选", func() {
+				ui.TextInput(c, &s.exportPassword).Password().Placeholder("留空则不加密").Label("导出备份密码").FillWidth()
 			}).FillWidth()
 			none := len(s.chosenExportParts()) == 0
 			if none {
-				ui.Text(c, "请至少选择一项。").TextColor(c.Theme().Danger)
+				ui.Text(c, "请至少选择一项").TextColor(c.Theme().Danger)
 			}
 			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
 				if ui.Button(c, "取消").Label("取消导出").Clicked() {
 					s.exportChoosing, s.exportPassword = false, ""
 				}
-				if ui.PrimaryButton(c, "导出…").Label("导出选中的数据").Disabled(none).Clicked() {
+				if ui.PrimaryButton(c, "导出").Label("导出选中的数据").Disabled(none).Clicked() {
 					s.exportChoosing = false
 					s.export("export_settings", "导出全部设置", "FreeType 全部设置.json")
 				}
@@ -128,7 +128,7 @@ func (s *settings) unlockDialog(c *ui.Context) {
 	ui.Modal(c, &s.unlockingRestore, func() {
 		ui.Column(c).Gap(14).Width(400).MaxWidthPercent(100).Children(func() {
 			ui.Text(c, "输入备份密码").FontSize(textSize(c, 17)).FontWeight(600)
-			ui.Text(c, "备份文件「"+filepath.Base(s.lockedBackupPath)+"」已加密，请输入导出时设置的备份密码。").Wrap().TextColor(colors(c).muted)
+			ui.Text(c, "备份文件 "+filepath.Base(s.lockedBackupPath)+" 已加密；请输入导出时设置的备份密码").Wrap().TextColor(colors(c).muted)
 			ui.Field(c, "备份密码", func() {
 				ui.TextInput(c, &s.restorePassword).Password().Placeholder("备份密码").Label("导入备份密码").FillWidth()
 			}).FillWidth()
@@ -251,7 +251,7 @@ func (s *settings) inspectSettingsBackupFile(path, password string) func() {
 		s.restorePassword = password
 		s.restoreSummary = "文件：" + filepath.Base(path)
 		if connection != nil {
-			s.restoreSummary += "\n包含同步账号和计划。导入后会清空密码并暂停同步，请重新填写密码。"
+			s.restoreSummary += "\n包含同步账号和计划；导入后会清空密码并暂停同步，请重新填写密码"
 		}
 		if response.Report != nil && response.Report.Note != "" {
 			s.restoreSummary += "\n备份内容：" + response.Report.Note
@@ -347,7 +347,7 @@ func (s *settings) importSettingsBackup(path string) {
 				s.notice += "；同步账号已恢复，请重新填写密码并启用同步"
 			}
 			if response.Report != nil && response.Report.Note != "" {
-				s.notice += "（" + response.Report.Note + "）"
+				s.notice += "；" + response.Report.Note
 			}
 		}
 	})
@@ -461,7 +461,7 @@ func (s *settings) exportSettingsBackup(path string, parts []string, password st
 		}
 		for _, field := range part.fields {
 			if _, present := document[field]; present {
-				return response, fmt.Errorf("输入法服务还是旧版本，不能只导出选中的数据。请退出并重新打开 FreeType 后再试")
+				return response, fmt.Errorf("当前服务不支持部分导出；请退出并重新打开 FreeType 后重试")
 			}
 		}
 	}

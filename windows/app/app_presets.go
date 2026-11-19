@@ -50,7 +50,7 @@ func (s *settings) savePresetRules(rules []AppPreset) {
 func (s *settings) addPreset() {
 	app, ok := normalizePresetApp(s.newPresetApp)
 	if !ok {
-		s.presetError = "请输入有效的程序名，例如 code.exe。也可以填写程序的完整路径。"
+		s.presetError = "请输入有效的程序名，例如 code.exe；也可以填写程序的完整路径"
 		return
 	}
 	mode := s.newPresetMode
@@ -84,7 +84,7 @@ func (s *settings) appPresetSection(c *ui.Context) {
 			p := colors(c)
 			ui.Column(c).FillWidth().Padding(2, 12, 6, 12).Children(func() {
 				ui.Column(c).FillWidth().Padding(14, rowInset-12).Radius(controlRadius).Background(p.subtle).Gap(14).Children(func() {
-					ui.Text(c, "从其他程序切入时应用一次；在程序内部可手动切换。离开后恢复原来的模式，不影响其他程序和全局记忆。\n规则保存在 FreeType 用户设置中，重启后仍然有效。").
+					ui.Text(c, "进入指定程序时应用一次预设；可手动切换；离开后恢复原状态；其他程序和全局状态不受影响；重启后保留规则").
 						FontSize(textSize(c, 13)).LineHeight(1.45).TextColor(p.muted).Wrap()
 					ui.Row(c).Gap(12).Wrap().AlignItems(ui.Center).Children(func() {
 						if len(s.apps) > 0 {

@@ -136,24 +136,24 @@ var digitPunctRules = []struct {
 	Bit   int
 	Label string
 }{
-	{1 << 0, "顿号 、"},
-	{1 << 1, "冒号 ："},
-	{1 << 2, "逗号 ，"},
-	{1 << 3, "句号 。"},
-	{1 << 4, "分号 ；"},
-	{1 << 5, "问号 ？"},
-	{1 << 6, "感叹号 ！"},
-	{1 << 7, "双引号 “ ”"},
-	{1 << 8, "单引号 ‘ ’"},
-	{1 << 9, "圆括号 （ ）"},
-	{1 << 10, "方括号 【 】"},
-	{1 << 11, "书名号 《 》"},
-	{1 << 12, "直角引号 「 」"},
-	{1 << 13, "破折号 ——"},
-	{1 << 14, "省略号 ……"},
-	{1 << 15, "波浪号 ～"},
-	{1 << 16, "间隔号 ·"},
-	{1 << 17, "人民币 ￥"},
+	{1 << 0, "、 顿号"},
+	{1 << 1, "： 冒号"},
+	{1 << 2, "， 逗号"},
+	{1 << 3, "。 句号"},
+	{1 << 4, "； 分号"},
+	{1 << 5, "？ 问号"},
+	{1 << 6, "！ 感叹号"},
+	{1 << 7, "“ ” 双引号"},
+	{1 << 8, "‘ ’ 单引号"},
+	{1 << 9, "（ ） 圆括号"},
+	{1 << 10, "【 】 方括号"},
+	{1 << 11, "《 》 书名号"},
+	{1 << 12, "「 」 直角引号"},
+	{1 << 13, "—— 破折号"},
+	{1 << 14, "…… 省略号"},
+	{1 << 15, "～ 波浪号"},
+	{1 << 16, "· 间隔号"},
+	{1 << 17, "￥ 人民币"},
 }
 
 // AppPreset 是一次切入指定程序时要使用的中英文状态。
@@ -281,20 +281,20 @@ var (
 		{"xiaohe", "小鹤双拼"}, {"ziranma", "自然码"}, {"microsoft", "微软双拼"}, {"sogou", "搜狗双拼"},
 		{"abc", "智能 ABC"}, {"ziguang", "紫光双拼"}, {"pinyinjiajia", "拼音加加"},
 	}
-	candidateStyleChoices = []choice{{"pink", "粉色（默认）"}, {"blue", "蓝色"}, {"green", "微信绿"}, {"sogou", "搜狗样式（无底色块）"}}
-	shiftToggles          = []choice{{"both", "左右 Shift 都可以"}, {"left", "只用左 Shift"}, {"right", "只用右 Shift"}, {"off", "不用 Shift 切换"}}
-	selectKeys            = []choice{{"off", "不用"}, {"semicolon", "分号选第 2 个"}, {"quote", "分号、引号选第 2、3 个"}}
-	arrowKeys             = []choice{{"candidates", "移动候选高亮"}, {"caret", "在拼音里移动光标"}}
+	candidateStyleChoices = []choice{{"pink", "默认粉色"}, {"blue", "蓝色"}, {"green", "微信绿"}, {"sogou", "搜狗样式 无底色块"}}
+	shiftToggles          = []choice{{"both", "左 Shift 或右 Shift"}, {"left", "仅左 Shift"}, {"right", "仅右 Shift"}, {"off", "关闭 Shift 切换"}}
+	selectKeys            = []choice{{"off", "关闭"}, {"semicolon", "分号选第 2 项"}, {"quote", "分号、引号选第 2、3 项"}}
+	arrowKeys             = []choice{{"candidates", "移动候选高亮"}, {"caret", "移动拼音光标"}}
 	modes                 = []choice{{"chinese", "中文"}, {"english", "英文"}, {"global", "全局"}}
 	modeScopes            = []choice{{"global", "所有应用一致"}, {"app", "每个应用分别记住"}}
 	positions             = []choice{
 		{"top-left", "左上方"}, {"top", "正上方"}, {"top-right", "右上方"},
 		{"bottom-left", "左下方"}, {"bottom", "正下方"}, {"bottom-right", "右下方"},
 	}
-	hotkeysEmoji       = []choice{{"off", "不用"}, {"ctrl+shift+e", "Ctrl + Shift + E"}, {"ctrl+alt+e", "Ctrl + Alt + E"}}
-	hotkeysPunct       = []choice{{"off", "不用"}, {"ctrl+period", "Ctrl + ."}}
-	hotkeysTraditional = []choice{{"off", "不用"}, {"ctrl+shift+f", "Ctrl + Shift + F"}, {"ctrl+shift+t", "Ctrl + Shift + T"}}
-	hotkeysMode        = []choice{{"off", "不用"}, {"ctrl+space", "Ctrl + 空格"}}
+	hotkeysEmoji       = []choice{{"off", "关闭"}, {"ctrl+shift+e", "Ctrl + Shift + E"}, {"ctrl+alt+e", "Ctrl + Alt + E"}}
+	hotkeysPunct       = []choice{{"off", "关闭"}, {"ctrl+period", "Ctrl + ."}}
+	hotkeysTraditional = []choice{{"off", "关闭"}, {"ctrl+shift+f", "Ctrl + Shift + F"}, {"ctrl+shift+t", "Ctrl + Shift + T"}}
+	hotkeysMode        = []choice{{"off", "关闭"}, {"ctrl+space", "Ctrl + 空格"}}
 	pageSizes          = []string{"3", "4", "5", "6", "7", "8", "9", "10"}
 )
 

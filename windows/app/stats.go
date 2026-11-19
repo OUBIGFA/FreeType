@@ -42,7 +42,7 @@ func sumCounters(entries []uint64) (total uint64) {
 }
 
 func (s *settings) statsPage(c *ui.Context) {
-	pageHeader(c, "输入统计", "只在本机保存聚合计数，不记录正文、拼音或应用名称")
+	pageHeader(c, "输入统计", "只在这台电脑保存统计计数；不记录正文、拼音或应用名称")
 	if !s.loaded {
 		return
 	}
@@ -68,7 +68,7 @@ func (s *settings) statsPage(c *ui.Context) {
 			s.saveConfig()
 		}
 	})
-	if ui.AlertDialog(c, &s.confirmStatsClear, "清空输入统计？", "本机的全部输入统计将被删除。", "取消", "清空") == 1 {
+	if ui.AlertDialog(c, &s.confirmStatsClear, "清空输入统计", "删除这台电脑的全部输入统计", "取消", "清空") == 1 {
 		s.loadStats(true)
 	}
 	if len(s.stats) == 0 {
@@ -122,7 +122,7 @@ func (s *settings) statsPage(c *ui.Context) {
 	section(c, "候选位次", func() {
 		statsBars(c, ranks[:], func(i int) string {
 			if i == 10 {
-				return "11+"
+				return "11 以上"
 			}
 			return strconv.Itoa(i + 1)
 		})

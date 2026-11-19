@@ -33,7 +33,7 @@ func (s *settings) openLink(url string) {
 func (s *settings) aboutPage(c *ui.Context) {
 	pageHeader(c, "关于", "")
 	section(c, "", func() {
-		row(c, "FreeType "+s.version, "适用于 Windows 的中文输入法。支持全拼、双拼和中英混输，并根据你的选词习惯调整候选顺序。", nil)
+		row(c, "FreeType "+s.version, "支持全拼、双拼和中英混输；根据选词记录调整候选顺序", nil)
 		s.settingBlock(c, "about/GitHub", func() {
 			row(c, "GitHub", repositoryURL, func() {
 				ui.Icon(c, githubIcon).FontSize(textSize(c, 20))
@@ -68,8 +68,8 @@ func (s *settings) aboutPage(c *ui.Context) {
 				s.saveConfig()
 			}
 		} else {
-			s.settingRowValue(c, "about/自动更新", "正在读取更新设置…", nil)
-			s.settingRowValue(c, "about/更新安装后显示设置页", "正在读取更新设置…", nil)
+			s.settingRowValue(c, "about/自动更新", "正在读取更新设置", nil)
+			s.settingRowValue(c, "about/更新安装后显示设置页", "正在读取更新设置", nil)
 		}
 	})
 	section(c, "数据与日志", func() {

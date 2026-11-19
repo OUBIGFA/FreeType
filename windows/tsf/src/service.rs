@@ -1071,11 +1071,11 @@ fn button_menu(owner: HWND, x: i32, y: i32) -> Option<Request> {
     unsafe {
         let menu = CreatePopupMenu().ok()?;
         let items: [(u32, &str); 5] = [
-            (1, "切换中 / 英文"),
+            (1, "切换中英文"),
             (2, "中文 / 英文标点"),
             (3, "简体 / 繁体"),
             (4, "表情与符号"),
-            (5, "工具栏（剪贴板、常用语）"),
+            (5, "工具栏"),
         ];
         for (id, text) in items {
             let _ = AppendMenuW(menu, MF_STRING, id as usize, &windows::core::HSTRING::from(text));

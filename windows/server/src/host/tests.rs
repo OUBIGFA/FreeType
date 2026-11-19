@@ -1129,7 +1129,7 @@ fn empty_common_phrases_toolbar_does_not_fall_back_to_quick_phrases() {
     press(&mut host, 0x20);
     let frame = press(&mut host, '2' as u32);
     assert!(frame.candidates.is_empty(), "没有常用语时不能用快捷短语填充：{:?}", frame.candidates);
-    assert_eq!(frame.title.as_deref(), Some("常用语 · 在设置「常用语」里添加"));
+    assert_eq!(frame.title.as_deref(), Some("常用语 · 请在常用语设置页添加内容"));
     press(&mut host, keysym::ESCAPE);
     typing(&mut host, "dz");
     assert_eq!(press(&mut host, 0x20).commit.as_deref(), Some("海淀区"));
@@ -1953,7 +1953,7 @@ fn import_bare_words_and_add_user_word_use_lexicon_readings() {
     );
     let report = response.report.unwrap();
     assert_eq!(report.added, 2, "{:?}", report.errors);
-    assert!(report.note.unwrap().contains("自动注音"));
+    assert!(report.note.unwrap().contains("按常用读音补充拼音"));
     assert!(typing(&mut host, "shilici").candidates.iter().any(|c| c == "示例词"));
     press(&mut host, keysym::ESCAPE);
 

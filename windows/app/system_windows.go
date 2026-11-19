@@ -74,7 +74,7 @@ func (s *settings) defaultTipRow(c *ui.Context) {
 }
 
 func (s *settings) neuralModelRow(c *ui.Context) {
-	label := map[string]string{"bundled": "随包模型", "external": "外部导入模型"}[s.status.NeuralModel]
+	label := map[string]string{"bundled": "内置模型", "external": "导入模型"}[s.status.NeuralModel]
 	if label == "" {
 		label = "未加载"
 	}
@@ -82,11 +82,11 @@ func (s *settings) neuralModelRow(c *ui.Context) {
 		if ui.Button(c, "导入模型").Disabled(!s.status.Ready || s.openModel == nil || s.modelBusy).Clicked() {
 			s.changeNeuralModel(true)
 		}
-		if s.status.NeuralModel == "external" && ui.Button(c, "恢复随包模型").Disabled(s.modelBusy).Clicked() {
+		if s.status.NeuralModel == "external" && ui.Button(c, "恢复内置模型").Disabled(s.modelBusy).Clicked() {
 			s.confirmModelReset = true
 		}
 	})
-	if ui.AlertDialog(c, &s.confirmModelReset, "移除外部模型？", "移除 FreeType 保存的副本，原文件不会改变。", "取消", "移除") == 1 {
+	if ui.AlertDialog(c, &s.confirmModelReset, "移除外部模型", "移除 FreeType 保存的副本，原文件不会改变", "取消", "移除") == 1 {
 		s.changeNeuralModel(false)
 	}
 }

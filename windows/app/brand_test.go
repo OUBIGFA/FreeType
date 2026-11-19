@@ -117,7 +117,7 @@ func TestCustomBrandICOContainsEverySystemIconSize(t *testing.T) {
 func TestBrandAppearancePageOffersLiveSelection(t *testing.T) {
 	s, b := newTestSettings()
 	view := open(t, s, "候选窗与外观")
-	if !view.HasText("品牌图标") || !view.HasText("自定义…") {
+	if !view.HasText("品牌图标") || !view.HasText("自定义") {
 		t.Fatalf("缺少品牌图标选择：%q", view.Texts())
 	}
 	brand, _ := view.Find("品牌图标")
@@ -157,7 +157,7 @@ func TestBrandCustomImportSurvivesSourceChangesAndSettingsReload(t *testing.T) {
 		return nil
 	}
 	view := open(t, s, "候选窗与外观")
-	if err := view.Click("自定义…"); err != nil {
+	if err := view.Click("自定义"); err != nil {
 		t.Fatal(err)
 	}
 	view.Frame()
@@ -231,7 +231,7 @@ func TestBrandImportCancelErrorsAndSaveFailureKeepPreviousIcon(t *testing.T) {
 			applied := "default"
 			s.onBrandIcon = func(config Config) error { applied = config.BrandIcon; return nil }
 			view := open(t, s, "候选窗与外观")
-			if err := view.Click("自定义…"); err != nil {
+			if err := view.Click("自定义"); err != nil {
 				t.Fatal(err)
 			}
 			view.Frame()
@@ -328,7 +328,7 @@ func TestBrandAppearanceProductionViewAtWindowSizes(t *testing.T) {
 				if variant == "white" {
 					label = "白色"
 				}
-				for _, text := range []string{label, "自定义…"} {
+				for _, text := range []string{label, "自定义"} {
 					bounds, found := view.Find(text)
 					if !found || bounds.X < 236 || bounds.X+bounds.W > float32(size[0]) || bounds.Y+bounds.H > float32(size[1]) {
 						t.Fatalf("%s 深色=%v %v 的图标控件不完整：%s %+v", variant, dark, size, text, bounds)

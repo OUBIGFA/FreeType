@@ -112,7 +112,9 @@ flowchart LR
 
 字体默认是 Microsoft YaHei，设置里能换成系统里的任何字体，能改字号、每页个数和横排 / 竖排，设置页有预览。应用一时给不出光标位置（浏览器类应用打字时还没排好版）时，候选窗先放在上一次的位置或系统记的插入符处，排好版后再挪过去。
 
-设置页「候选窗与外观」最下面的「品牌外观」可选择默认、白色，或点击「自定义…」导入 PNG、JPEG、WebP。图像文件最大 10 MB，宽高各不超过 4096 像素；导入时保留比例与透明度，规范为 256 像素 PNG，并生成窗口、托盘和系统图标使用的各尺寸图像。图像内容随设置保存在用户数据目录，原文件移动后仍可显示，备份与同步也保留该图标。设置页、正在运行的设置窗口和托盘立即换图。
+设置页「候选窗与外观」最下面的「品牌外观」可选择默认、白色，或点击「自定义」导入 PNG、JPEG、WebP。图像文件最大 10 MB，宽高各不超过 4096 像素；导入时保留比例与透明度，规范为 256 像素 PNG，并生成窗口、托盘和系统图标使用的各尺寸图像。图像内容随设置保存在用户数据目录，原文件移动后仍可显示，备份与同步也保留该图标。设置页、正在运行的设置窗口和托盘立即换图。
+
+设置页在品牌图标选择下方提示「任务栏图标需重启资源管理器后生效」。
 
 Windows 任务栏的系统输入指示器从注册的 DLL/EXE 图标资源读取品牌图像，不能用传统语言栏的临时图像代替。更换时，短暂运行的管理员助手将选中的 ICO 写入 `Program Files\FreeType\brand\<图像 SHA-256>.dll` 的 `RT_GROUP_ICON` / `RT_ICON` 资源，再调用 [`ITfInputProcessorProfileMgr::RegisterProfile`](https://learn.microsoft.com/en-us/windows/win32/api/msctf/nf-msctf-itfinputprocessorprofilemgr-registerprofile) 更新图标来源，并发送系统和 TSF 刷新通知。资源模块只用于读取图像，不替换输入法代码，不切换输入法、不结束当前组字。图标资源含 16、20、24、32、40、48、64、96、128、256 像素；路径随图像摘要变化，使系统缓存区分不同图像。依据见 [Windows IME 图标要求](https://learn.microsoft.com/en-us/windows/apps/develop/input/input-method-editor-requirements#ime-branding-icon)。
 

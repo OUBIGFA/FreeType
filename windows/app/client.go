@@ -35,7 +35,7 @@ func currentUserSID() (string, error) {
 func newPipeClient() (*pipeClient, error) {
 	sid, err := currentUserSID()
 	if err != nil {
-		return nil, fmt.Errorf("读不到当前用户：%w", err)
+		return nil, fmt.Errorf("无法读取当前用户：%w", err)
 	}
 	suffix := ""
 	if inst := os.Getenv("FREETYPE_INSTANCE"); inst != "" {
@@ -65,7 +65,7 @@ func (p *pipeClient) Call(req Request) (Response, error) {
 			handle, err := windows.CreateFile(name, windows.GENERIC_READ|windows.GENERIC_WRITE,
 				0, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_OVERLAPPED, 0)
 			if err != nil {
-				return Response{}, fmt.Errorf("连不上输入法服务：%w", err)
+				return Response{}, fmt.Errorf("无法连接输入法服务：%w", err)
 			}
 			f := os.NewFile(uintptr(handle), p.path)
 			p.file, p.reader = f, bufio.NewReader(f)

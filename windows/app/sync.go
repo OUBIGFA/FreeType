@@ -393,12 +393,12 @@ func readDevicesAt(store remoteStore, strict bool) ([]syncDevice, error) {
 		device.ID = id
 		if _, _, valid := revisionOrder(device.Revision); !valid {
 			if strict {
-				return nil, errors.New("云端快照修订号无效，自动同步已停止")
+				return nil, errors.New("云端备份编号无效，自动同步已停止")
 			}
 			device.Revision = ""
 		}
 		if strict && (device.Modified < 0 || device.Uploaded <= 0 || (device.Hash != "" && (len(device.Hash) != 64 || device.Modified <= 0 || !deviceIDPattern.MatchString(device.Origin)))) {
-			return nil, errors.New("云端快照版本信息无效，自动同步已停止")
+			return nil, errors.New("云端备份版本信息无效，自动同步已停止")
 		}
 		devices = append(devices, device)
 	}
@@ -458,7 +458,7 @@ func downloadSnapshot(store remoteStore, device syncDevice, file string) error {
 	if first != nil {
 		return first
 	}
-	return errors.New("这台设备在远端没有快照")
+	return errors.New("这台电脑在云端没有备份")
 }
 
 // ---------- 设置页里的动作 ----------
@@ -552,7 +552,7 @@ func (s *settings) openStore(c syncSettings) (remoteStore, error) {
 }
 
 func (s *settings) testSync() {
-	s.syncTask("connection", "正在测试连接…", func(store remoteStore) (string, func(), error) {
+	s.syncTask("connection", "正在测试连接", func(store remoteStore) (string, func(), error) {
 		return "连接成功，可以上传和恢复", nil, store.Probe()
 	})
 }
@@ -571,7 +571,7 @@ func (s *settings) uploadSync() {
 	id := s.sync.DeviceID
 	config := s.sync
 	manager := s.autoSync
-	s.syncTask("transfer", "正在上传…", func(store remoteStore) (string, func(), error) {
+	s.syncTask("transfer", "正在上传", func(store remoteStore) (string, func(), error) {
 		file, err := tempSnapshot()
 		if err != nil {
 			return "", nil, err
@@ -584,7 +584,7 @@ func (s *settings) uploadSync() {
 		}
 		response, err := s.backend.Call(op(operation, "path", file))
 		if err != nil {
-			return "", nil, fmt.Errorf("生成快照失败：%w", err)
+			return "", nil, fmt.Errorf("生成备份失败：%w", err)
 		}
 		var version syncVersion
 		if manager != nil {
@@ -607,7 +607,7 @@ func (s *settings) uploadSync() {
 			return "", nil, err
 		}
 		devices, _ := listDevices(store)
-		return fmt.Sprintf("已上传（%s）", sizeText(device.Size)), func() {
+		return fmt.Sprintf("已上传；%s", sizeText(device.Size)), func() {
 			if devices != nil {
 				s.syncDevices, s.syncListed = devices, true
 			}
@@ -616,21 +616,21 @@ func (s *settings) uploadSync() {
 }
 
 func (s *settings) refreshSyncDevices() {
-	s.syncTask("transfer", "正在读取设备…", func(store remoteStore) (string, func(), error) {
+	s.syncTask("transfer", "正在读取设备", func(store remoteStore) (string, func(), error) {
 		devices, err := listDevices(store)
 		if err != nil {
 			return "", nil, err
 		}
-		message := fmt.Sprintf("远端有 %d 台设备的快照", len(devices))
+		message := fmt.Sprintf("云端有 %d 台电脑的备份", len(devices))
 		if len(devices) == 0 {
-			message = "远端还没有快照。先在一台电脑上点「立即上传」"
+			message = "云端还没有备份；请先在一台电脑上点击立即上传"
 		}
 		return message, func() { s.syncDevices, s.syncListed = devices, true }, nil
 	})
 }
 
 func (s *settings) restoreSync(device syncDevice) {
-	s.syncTask("transfer", "正在恢复…", func(store remoteStore) (string, func(), error) {
+	s.syncTask("transfer", "正在恢复", func(store remoteStore) (string, func(), error) {
 		file, err := tempSnapshot()
 		if err != nil {
 			return "", nil, err
@@ -643,7 +643,7 @@ func (s *settings) restoreSync(device syncDevice) {
 		if err != nil {
 			return "", nil, fmt.Errorf("合并失败：%w", err)
 		}
-		message := "已合并 " + deviceName(device) + " 的快照"
+		message := "已合并 " + deviceName(device) + " 的备份"
 		if response.Report != nil && response.Report.Note != "" {
 			message += "：" + response.Report.Note
 		}

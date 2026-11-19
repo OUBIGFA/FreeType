@@ -833,7 +833,7 @@ func TestSyncPageUploadsListsAndMergesThroughTheBackend(t *testing.T) {
 	if _, err := os.Stat(exported); !os.IsNotExist(err) {
 		t.Fatalf("临时快照没有删掉：%s", exported)
 	}
-	if len(store.files) != 1 || len(s.syncDevices) != 1 || !tt.HasText("（这台电脑）") {
+	if len(store.files) != 1 || len(s.syncDevices) != 1 || !tt.HasText(" · 这台电脑") {
 		t.Fatalf("上传后只应有一份备份，并列出这台电脑：%v %+v", store.files, s.syncDevices)
 	}
 	// 另一台电脑的快照：刷新后能看到，点恢复、确认后交给服务进程合并
@@ -862,7 +862,7 @@ func TestSyncPageUploadsListsAndMergesThroughTheBackend(t *testing.T) {
 	if b.last("merge_settings") == nil || b.last("import_settings") != nil {
 		t.Fatal("同步恢复应走合并，不是整份替换")
 	}
-	if !tt.HasText("已合并 家里的电脑 的快照") {
+	if !tt.HasText("已合并 家里的电脑 的备份") {
 		t.Fatalf("没有显示合并结果：%q", tt.Texts())
 	}
 	// 失败要显示原因

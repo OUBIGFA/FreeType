@@ -138,7 +138,7 @@ func (manager *updates) check(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if !manager.begin("正在检查更新…") {
+	if !manager.begin("正在检查更新") {
 		return errors.New("更新任务正在进行")
 	}
 	release, found, err := manager.updater.DetectLatest(ctx, selfupdate.ParseSlug("OUBIGFA/FreeType"))
@@ -195,7 +195,7 @@ func (manager *updates) download(ctx context.Context) (err error) {
 	if release == nil || !release.GreaterThan(manager.current) {
 		return errors.New("没有可下载的更新")
 	}
-	if !manager.begin("正在后台下载并校验更新…") {
+	if !manager.begin("正在后台下载并校验更新") {
 		return errors.New("更新任务正在进行")
 	}
 	defer func() {
@@ -298,7 +298,7 @@ func (manager *updates) verifyInstaller(pending pendingUpdate) error {
 func (manager *updates) install(directory string) error {
 	manager.operation.Lock()
 	defer manager.operation.Unlock()
-	if !manager.begin("正在启动更新安装器…") {
+	if !manager.begin("正在启动更新安装器") {
 		return errors.New("更新任务正在进行")
 	}
 	if err := manager.verifyPending(); err != nil {

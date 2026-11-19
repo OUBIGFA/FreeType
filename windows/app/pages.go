@@ -166,7 +166,7 @@ func (s *settings) statusCard(c *ui.Context) {
 			case s.status.Error != "":
 				ui.Text(c, "词库载入失败："+s.status.Error).TextColor(t.Danger).Wrap()
 			case !s.status.Ready:
-				ui.Text(c, "输入法服务正在载入词库…").TextColor(p.muted)
+				ui.Text(c, "输入法服务正在载入词库").TextColor(p.muted)
 			default:
 				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 					ui.Icon(c, statusCheck).FontSize(textSize(c, 15)).TextColor(t.Success)
@@ -258,9 +258,9 @@ func (s *settings) statusBarAppearance(c *ui.Context) (changed bool) {
 		value     *int
 		low, high float64
 	}{
-		{"缩放比例 (%)", &s.config.BarScale, 75, 150}, {"图标字号", &s.config.BarIconSize, 12, 23}, {"自动隐藏延时 (秒)", &s.config.BarHideSeconds, 1, 60},
+		{"缩放比例 / 百分比", &s.config.BarScale, 75, 150}, {"图标字号", &s.config.BarIconSize, 12, 23}, {"自动隐藏延时 / 秒", &s.config.BarHideSeconds, 1, 60},
 	} {
-		if field.title == "自动隐藏延时 (秒)" && !s.config.StatusBarAutohide {
+		if field.title == "自动隐藏延时 / 秒" && !s.config.StatusBarAutohide {
 			continue
 		}
 		subRow(c, field.title, "", func() {
@@ -378,11 +378,12 @@ func (s *settings) candidatesPage(c *ui.Context) {
 				choices = append(choices, choice{"custom", "自定义"})
 			}
 			changed = choose(c, "品牌图标", choices, &s.config.BrandIcon, 140) || changed
-			if ui.Button(c, "自定义…").Disabled(s.brandIconBusy).Clicked() {
+			if ui.Button(c, "自定义").Disabled(s.brandIconBusy).Clicked() {
 				s.chooseBrandIcon()
 			}
 		})
 	})
+	hint(c, "任务栏图标需重启资源管理器后生效")
 	if changed {
 		s.saveConfig()
 	}
@@ -651,7 +652,7 @@ func (s *settings) featuresPage(c *ui.Context) {
 		}
 	})
 	if s.config.PredictNext {
-		hint(c, "联想词来自随包语言模型和你自己的输入习惯：连着用过的搭配会排到前面，记录在「学到的词」的学习数据里，随学习备份一起导入导出。")
+		hint(c, "联想词来自内置语言模型和学习记录；常用搭配优先显示；搭配记录随学习备份导入导出")
 	}
 	s.appPresetSection(c)
 	if changed {
@@ -679,15 +680,15 @@ func (s *settings) shortcutsPage(c *ui.Context) {
 			changed = choose(c, "切换中文 / 英文", hotkeysMode, &s.config.HotkeyMode, 180) || changed
 		})
 	})
-	hint(c, "快捷键默认关闭。启用后，FreeType 会先接收该按键；应用中的同名快捷键将无法使用。")
+	hint(c, "快捷键默认关闭；启用后，FreeType 会先接收该按键；应用中的同名快捷键将无法使用")
 	section(c, "固定按键", func() {
 		s.settingBlock(c, "shortcuts/固定按键", func() {
 			for _, k := range [][2]string{
-				{"Shift", "切换中文 / 英文（可在「常规」里改）"},
-				{"空格 / 1–9 / 0", "空格选择当前候选；数字选择对应候选，每页有 10 项时，0 选择第 10 项；回车上屏原始输入"},
+				{"Shift", "切换中英文；可在常规中修改"},
+				{"空格 / 1–9 / 0", "空格选择当前候选；数字选择对应候选；每页有 10 项时，0 选择第 10 项；回车上屏原始输入"},
 				{"- =  PgUp PgDn", "翻页；其他翻页键可在「拼音与按键」中设置"},
 				{"← →  ↓", "移动候选；横排时 ↓ 展开更多候选"},
-				{"Ctrl + Delete", "删除光标处学错的词的记忆（也可以长按或右键候选）"},
+				{"Ctrl + Delete", "删除当前候选的学习记录；也可长按或右键候选"},
 				{"[ ]", "启用「以词定字」后，选择候选的第一个 / 最后一个字；设置为翻页键时用于翻页"},
 				{"v + 空格", "启用工具栏后，在全拼状态下打开剪贴板、常用语、符号和表情"},
 				{"Esc", "清空当前输入，或关闭工具栏、表情面板和上屏联想"},
@@ -721,16 +722,16 @@ func (s *settings) reportView(c *ui.Context) {
 }
 
 func (s *settings) dictsPage(c *ui.Context) {
-	pageHeader(c, "词库", "导入的词参与组词和排序，不会混进你学到的词")
+	pageHeader(c, "词库", "导入词库参与组词和排序；与学习记录分开保存")
 	section(c, "主词库", func() {
-		current := "白霜＋万象＋项目热词（默认）"
+		current := "默认；白霜＋万象＋项目热词"
 		if s.config.Lexicon != "" {
 			current = s.config.Lexicon
 		}
 		s.settingRowValue(c, "dicts/词库文件", current, func() {
-			if ui.Button(c, "选择文件…").Label("选择主词库文件").Clicked() && s.openTable != nil {
+			if ui.Button(c, "选择文件").Label("选择主词库文件").Clicked() && s.openTable != nil {
 				s.background(func() func() {
-					path := s.openTable("选择主词库（lexicon.tsv）")
+					path := s.openTable("选择主词库 TSV 文件")
 					if path == "" {
 						return nil
 					}
@@ -742,10 +743,10 @@ func (s *settings) dictsPage(c *ui.Context) {
 			}
 		})
 	})
-	hint(c, "默认使用白霜主词库、万象补充和项目热词。自定义主词库需使用 TSV 文件：每行包含拼音、词语和词频，列之间用制表符分隔。Rime 等词库可从下方「导入词库」导入。选择文件后，FreeType 会在后台载入词库；文件不存在时使用默认词库。")
+	hint(c, "默认词库包含白霜、万象补充和项目热词；自定义主词库使用 TSV，每行依次填写拼音、词语和词频，用制表符分隔；选择后在后台载入，文件不存在时使用默认词库；其他格式请使用下方的导入词库")
 	section(c, "导入词库", func() {
 		s.settingRow(c, "dicts/导入词库", func() {
-			if ui.PrimaryButton(c, "导入词库…").Clicked() {
+			if ui.PrimaryButton(c, "导入词库").Label("导入词库文件").Clicked() {
 				s.importDictionary()
 			}
 		})
@@ -770,7 +771,7 @@ func (s *settings) dictsPage(c *ui.Context) {
 }
 
 func (s *settings) phrasesPage(c *ui.Context) {
-	pageHeader(c, "快捷短语", "在「实用功能」中启用「快捷短语混入候选」后，输入完整编码即可选用短语。编码只使用英文字母。")
+	pageHeader(c, "快捷短语", "启用实用功能中的快捷短语候选后，输入完整编码即可选用；编码仅含英文字母")
 	section(c, "添加", func() {
 		s.settingBlock(c, "phrases/添加快捷短语", func() {
 			ui.Column(c).Padding(12, rowInset, 14, rowInset).Gap(14).Children(func() {
@@ -778,7 +779,7 @@ func (s *settings) phrasesPage(c *ui.Context) {
 					ui.Field(c, "编码", func() { ui.TextInput(c, &s.newCode).Placeholder("例如 dz").FillWidth() }).
 						Grow(1).Basis(220).MinWidth(160)
 					ui.Field(c, "权重", func() { ui.TextInput(c, &s.newWeight).Placeholder("10").FillWidth() }).
-						Description("同一编码有多条时，权重大的在前。").Grow(1).Basis(220).MinWidth(160)
+						Description("同一编码有多条时，权重大的在前").Grow(1).Basis(220).MinWidth(160)
 				})
 				ui.Field(c, "短语", func() { ui.TextArea(c, &s.newText).Height(72) }).Error(s.formError)
 				ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
@@ -791,18 +792,18 @@ func (s *settings) phrasesPage(c *ui.Context) {
 	})
 	section(c, "批量导入、导出", func() {
 		s.settingRow(c, "phrases/导入或导出", func() {
-			checkbox(c, &s.replacePhrases, "替换现有的")
-			if ui.Button(c, "导入…").Clicked() {
+			checkbox(c, &s.replacePhrases, "替换现有快捷短语")
+			if ui.Button(c, "导入").Clicked() {
 				s.importPhrases()
 			}
-			if ui.Button(c, "导出…").Clicked() {
+			if ui.Button(c, "导出").Clicked() {
 				s.export("export_quick_phrases", "导出快捷短语", "FreeType 快捷短语.txt")
 			}
 		})
 	})
 	s.reportView(c)
 	ui.Row(c).Margin(18, 0, 0, 0).Padding(0, 4).Gap(12).Wrap().AlignItems(ui.Center).Children(func() {
-		ui.Text(c, fmt.Sprintf("全部快捷短语（%d）", len(s.phrases))).FontSize(textSize(c, 13)).FontWeight(600).TextColor(colors(c).muted).Grow(1).Basis(180).Wrap()
+		ui.Text(c, fmt.Sprintf("快捷短语 %d 条", len(s.phrases))).FontSize(textSize(c, 13)).FontWeight(600).TextColor(colors(c).muted).Grow(1).Basis(180).Wrap()
 		ui.SearchField(c, &s.phraseQuery).Label("搜索编码或短语").Placeholder("搜索编码或短语").Width(240).MaxWidthPercent(100).Shrink(1)
 	})
 	section(c, "", func() {
@@ -813,7 +814,7 @@ func (s *settings) phrasesPage(c *ui.Context) {
 				if strings.TrimSpace(s.phraseQuery) != "" {
 					title = "没有匹配的快捷短语"
 				}
-				row(c, title, "在上方添加短语，或导入已有文件。", nil)
+				row(c, title, "在上方添加短语，或导入已有文件", nil)
 				return
 			}
 			remove := -1
@@ -842,18 +843,18 @@ func (s *settings) phrasesPage(c *ui.Context) {
 }
 
 func (s *settings) learnedPage(c *ui.Context) {
-	pageHeader(c, "学到的词", "查看和管理自动学习的词。选词次数和上下文搭配会影响候选排序；可在这里删除错误记录，也可长按候选或按 Ctrl+Delete 删除。")
+	pageHeader(c, "学到的词", "选词次数和搭配影响候选排序；可在此删除学习记录，也可长按候选或按 Ctrl + Delete 删除")
 	section(c, "", func() {
 		s.settingRow(c, "learned/学习备份", func() {
-			if ui.Button(c, "导入…").Clicked() {
+			if ui.Button(c, "导入").Clicked() {
 				s.importLearning()
 			}
-			if ui.Button(c, "导出…").Clicked() {
+			if ui.Button(c, "导出").Clicked() {
 				s.export("export_learning", "导出学习备份", "FreeType 学习备份.json")
 			}
 		})
 		s.settingRow(c, "learned/全部清空", func() {
-			if ui.Button(c, "全部清空…").Clicked() {
+			if ui.Button(c, "全部清空").Label("清空全部学习记录").Clicked() {
 				s.confirmClear = true
 			}
 		})
@@ -862,7 +863,7 @@ func (s *settings) learnedPage(c *ui.Context) {
 	section(c, "添加词", func() {
 		s.settingBlock(c, "learned/添加词", func() {
 			ui.Column(c).Padding(12, rowInset, 14, rowInset).Gap(14).Children(func() {
-				ui.Text(c, "中文词的拼音可留空，FreeType 会自动注音；多音字请填写拼音。英文词默认使用原词的小写作为输入码。中英混输词请填写实际输入码，如 datag → 打 tag。").FontSize(textSize(c, 13)).TextColor(colors(c).muted).LineHeight(1.45).Wrap()
+				ui.Text(c, "中文词可留空拼音，由 FreeType 自动补充；多音字请填写拼音；英文词默认用小写单词作为输入码；中英混输词需填写输入码，例如 datag → 打 tag").FontSize(textSize(c, 13)).TextColor(colors(c).muted).LineHeight(1.45).Wrap()
 				ui.Row(c).Gap(12).Wrap().AlignItems(ui.End).Children(func() {
 					ui.Field(c, "词语", func() {
 						ui.TextInput(c, &s.newWord).Placeholder("词语，例如 霜频阁").Label("词语").FillWidth()
@@ -880,13 +881,13 @@ func (s *settings) learnedPage(c *ui.Context) {
 			})
 		})
 	})
-	switch ui.AlertDialog(c, &s.confirmClear, "清空学习记录？", "将删除全部学习词条、选词次数和搭配。此操作需要学习备份才能恢复。", "取消", "清空") {
+	switch ui.AlertDialog(c, &s.confirmClear, "清空学习记录", "删除全部学习词条、选词次数和搭配；需导入学习备份才能恢复", "取消", "清空") {
 	case 1:
 		s.clearLearned()
 	}
 	words := s.filteredWords()
 	ui.Row(c).Margin(18, 0, 0, 0).Padding(0, 4).Gap(12).Wrap().AlignItems(ui.Center).Children(func() {
-		ui.Text(c, fmt.Sprintf("学到的词（%d）", len(s.words))).FontSize(textSize(c, 13)).FontWeight(600).TextColor(colors(c).muted).Grow(1).Basis(180).Wrap()
+		ui.Text(c, fmt.Sprintf("学到的词 %d 条", len(s.words))).FontSize(textSize(c, 13)).FontWeight(600).TextColor(colors(c).muted).Grow(1).Basis(180).Wrap()
 		if ui.Button(c, "刷新").Clicked() {
 			s.loadWords()
 		}
@@ -896,7 +897,7 @@ func (s *settings) learnedPage(c *ui.Context) {
 	section(c, "", func() {
 		s.settingBlock(c, "learned/词条列表", func() {
 			if !s.wordsLoaded {
-				row(c, "正在读取…", "", nil)
+				row(c, "正在读取", "", nil)
 				return
 			}
 			if len(words) == 0 {

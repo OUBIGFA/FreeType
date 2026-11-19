@@ -155,7 +155,7 @@ fn regsvr32_x86(path: &Path, unregister: bool) -> Result<(), String> {
     if status.success() {
         Ok(())
     } else {
-        Err(format!("regsvr32 注册 {} 失败（{status}）", path.display()))
+        Err(format!("regsvr32 注册 {} 失败；退出状态 {status}", path.display()))
     }
 }
 
@@ -174,7 +174,7 @@ fn set_server_path(server: &Path) -> Result<(), String> {
             None,
         );
         if status != ERROR_SUCCESS {
-            return Err(format!("无法写注册表（{}）", status.0));
+            return Err(format!("写入注册表失败；错误码 {}", status.0));
         }
         let value: Vec<u8> = HSTRING::from(server.as_os_str())
             .iter()
@@ -184,7 +184,7 @@ fn set_server_path(server: &Path) -> Result<(), String> {
         let status = RegSetValueExW(key, &HSTRING::from("ServerPath"), None, REG_SZ, Some(&value));
         let _ = RegCloseKey(key);
         if status != ERROR_SUCCESS {
-            return Err(format!("无法写注册表（{}）", status.0));
+            return Err(format!("写入注册表失败；错误码 {}", status.0));
         }
     }
     Ok(())
@@ -253,7 +253,7 @@ pub fn unregister_tsf() -> Result<(), String> {
     }
     let status = unsafe { RegDeleteTreeW(HKEY_LOCAL_MACHINE, &HSTRING::from(REGISTRY_KEY)) };
     if status != ERROR_SUCCESS && status != ERROR_FILE_NOT_FOUND {
-        errors.push(format!("无法删除注册表项（{}）", status.0));
+        errors.push(format!("删除注册表项失败；错误码 {}", status.0));
     }
     if errors.is_empty() {
         Ok(())

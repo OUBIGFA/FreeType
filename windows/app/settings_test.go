@@ -315,7 +315,7 @@ func TestTypingPageFuzzyGroups(t *testing.T) {
 		if control.Name == "左右方向键" && control.Focusable {
 			r := control.Bounds
 			tt.ClickAt(r.X+r.W/2, r.Y+r.H/2)
-			if err := tt.Click("在拼音里移动光标"); err != nil {
+			if err := tt.Click("移动拼音光标"); err != nil {
 				t.Fatal(err)
 			}
 			break
@@ -338,13 +338,13 @@ func TestTypingPagePunctuationOptions(t *testing.T) {
 	if !b.config.FullwidthPunct || !b.config.DigitHalfwidthPunct || !b.config.DigitPunctExceptions || b.config.DigitPunctFullwidth != digitPunctDefault || b.config.CornerQuotes {
 		t.Fatalf("标点默认配置不对：%+v", b.config)
 	}
-	for _, text := range []string{"数字标点保持半角", "数字后例外保持全角", "顿号 、", "冒号 ：", "双引号改用直角引号"} {
+	for _, text := range []string{"数字标点保持半角", "数字后例外保持全角", "、 顿号", "： 冒号", "双引号改用直角引号"} {
 		if !tt.HasText(text) {
 			t.Fatalf("没有显示「%s」：%q", text, tt.Texts())
 		}
 	}
 	// 勾选冒号作为数字后全角例外，开启双引号改用直角引号
-	if err := tt.Click("冒号 ："); err != nil {
+	if err := tt.Click("： 冒号"); err != nil {
 		t.Fatal(err)
 	}
 	if b.config.DigitPunctFullwidth&(1<<0) == 0 || b.config.DigitPunctFullwidth&(1<<1) == 0 {
@@ -361,7 +361,7 @@ func TestTypingPagePunctuationOptions(t *testing.T) {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	if b.config.DigitPunctExceptions || tt.HasText("顿号 、") {
+	if b.config.DigitPunctExceptions || tt.HasText("、 顿号") {
 		t.Fatalf("关掉数字后例外保持全角后不应再显示符号勾选：%+v", b.config)
 	}
 	if err := tt.Click("数字标点保持半角"); err != nil {
@@ -420,7 +420,7 @@ func TestDictionaryImportShowsReport(t *testing.T) {
 	s, b := newTestSettings()
 	s.openFile = func(string) string { return `C:\dl\常用词.txt` }
 	tt := open(t, s, "词库")
-	if err := tt.Click("导入词库…"); err != nil {
+	if err := tt.Click("导入词库文件"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
@@ -518,13 +518,13 @@ func TestCommonPhrasesPageImportsAndExportsJson(t *testing.T) {
 		return `C:\test\export.json`
 	}
 	tt := open(t, s, "常用语")
-	if err := tt.Click("导入…"); err != nil {
+	if err := tt.Click("导入"); err != nil {
 		t.Fatal(err)
 	}
 	if b.last("import_common_phrases")["path"] != `C:\test\common.json` || !tt.HasText("导入常用语") {
 		t.Fatalf("应导入并刷新常用语：%v %q", b.calls, tt.Texts())
 	}
-	if err := tt.Click("导出…"); err != nil {
+	if err := tt.Click("导出"); err != nil {
 		t.Fatal(err)
 	}
 	if b.last("export_common_phrases")["path"] != `C:\test\export.json` {
@@ -812,7 +812,7 @@ func TestLearnedWordsSearchDeleteAndClear(t *testing.T) {
 	s, b := newTestSettings()
 	tt := open(t, s, "学到的词")
 	tt.Frame()
-	if !tt.HasText("设置业") || !tt.HasText("学到的词（2）") {
+	if !tt.HasText("设置业") || !tt.HasText("学到的词 2 条") {
 		t.Fatalf("没有列出学到的词：%q", tt.Texts())
 	}
 	s.wordQuery = "shezhi"
@@ -827,7 +827,7 @@ func TestLearnedWordsSearchDeleteAndClear(t *testing.T) {
 	if b.last("forget_words") == nil || len(b.words) != 1 {
 		t.Fatalf("没有删掉：%+v", b.words)
 	}
-	if err := tt.Click("全部清空…"); err != nil {
+	if err := tt.Click("清空全部学习记录"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
@@ -873,7 +873,7 @@ func TestLearningBackupExportUsesJsonAndNotDictionaryExport(t *testing.T) {
 		return "C:/backup/learning.json"
 	}
 	tester := open(t, s, "学到的词")
-	if err := tester.Click("导出…"); err != nil {
+	if err := tester.Click("导出"); err != nil {
 		t.Fatal(err)
 	}
 	if filepath.Ext(suggested) != ".json" {
@@ -886,7 +886,7 @@ func TestLearningBackupExportUsesJsonAndNotDictionaryExport(t *testing.T) {
 	if backend.last("export_user_dictionary") != nil {
 		t.Fatal("完整备份不能只导出词表")
 	}
-	if !tester.HasText("已导出 2 条（包含词条、选词次数和搭配）") {
+	if !tester.HasText("已导出 2 条；包含词条、选词次数和搭配") {
 		t.Fatalf("导出结果应说明备份包含输入习惯：%q", tester.Texts())
 	}
 }
@@ -895,7 +895,7 @@ func TestLearningBackupExportCancelDoesNotCallServer(t *testing.T) {
 	s, backend := newTestSettings()
 	s.saveFile = func(string, string) string { return "" }
 	tester := open(t, s, "学到的词")
-	if err := tester.Click("导出…"); err != nil {
+	if err := tester.Click("导出"); err != nil {
 		t.Fatal(err)
 	}
 	if backend.last("export_learning") != nil {
@@ -907,7 +907,7 @@ func TestLearningBackupImportRefreshesWords(t *testing.T) {
 	state, backend := newTestSettings()
 	state.openFile = func(string) string { return "C:/backup/learning.json" }
 	tester := open(t, state, "学到的词")
-	if err := tester.Click("导入…"); err != nil {
+	if err := tester.Click("导入"); err != nil {
 		t.Fatal(err)
 	}
 	request := backend.last("import_learning")
@@ -915,7 +915,7 @@ func TestLearningBackupImportRefreshesWords(t *testing.T) {
 		t.Fatalf("没有请求导入完整学习记录：%v", request)
 	}
 	tester.Frame()
-	if !tester.HasText("恢复词") || !tester.HasText("学到的词（3）") {
+	if !tester.HasText("恢复词") || !tester.HasText("学到的词 3 条") {
 		t.Fatalf("导入后应刷新词条：%q", tester.Texts())
 	}
 	if !strings.Contains(strings.Join(tester.Texts(), " "), "学习记录已合并 3 条") {
@@ -927,7 +927,7 @@ func TestLearningBackupImportCancelDoesNotCallServer(t *testing.T) {
 	state, backend := newTestSettings()
 	state.openFile = func(string) string { return "" }
 	tester := open(t, state, "学到的词")
-	if err := tester.Click("导入…"); err != nil {
+	if err := tester.Click("导入"); err != nil {
 		t.Fatal(err)
 	}
 	if backend.last("import_learning") != nil {
@@ -937,8 +937,8 @@ func TestLearningBackupImportCancelDoesNotCallServer(t *testing.T) {
 
 func TestLearningBackupErrorsPreserveWords(t *testing.T) {
 	for _, test := range []struct{ operation, button string }{
-		{"export_learning", "导出…"},
-		{"import_learning", "导入…"},
+		{"export_learning", "导出"},
+		{"import_learning", "导入"},
 	} {
 		t.Run(test.operation, func(t *testing.T) {
 			state, backend := newTestSettings()
@@ -962,7 +962,7 @@ func TestLearningBackupButtonsFitMinimumWidth(t *testing.T) {
 	state.loadWords()
 	tester := ui.NewTester(state.view, 780, 540)
 	tester.Frame()
-	for _, label := range []string{"导入…", "导出…", "全部清空…"} {
+	for _, label := range []string{"导入", "导出", "清空全部学习记录"} {
 		bounds, found := tester.Find(label)
 		if !found || bounds.X < 0 || bounds.X+bounds.W > 780 || bounds.Y+bounds.H > 540 {
 			t.Fatalf("最小窗口中应能看到并使用 %s：%+v", label, bounds)
@@ -970,7 +970,7 @@ func TestLearningBackupButtonsFitMinimumWidth(t *testing.T) {
 	}
 	count := 0
 	for _, label := range tester.Texts() {
-		if label == "导出…" {
+		if label == "导出" {
 			count++
 		}
 	}
@@ -1102,7 +1102,7 @@ func TestNewSettingsLayoutsSnapshots(t *testing.T) {
 				{ID: s.sync.DeviceID, Hostname: "OFFICE-PC", Uploaded: 1794800000, Size: 1536000},
 				{ID: "fedcba9876543210fedcba9876543210", Hostname: "家里的电脑", Uploaded: 1794700000, Size: 820000},
 			}
-			s.syncMessage = "已上传（1.5 MB）"
+			s.syncMessage = "已上传；1.5 MB"
 			if sample.name == "sync-connection-min" {
 				s.syncMessage, s.syncMessageArea = "连接成功，可以上传和恢复", "connection"
 			}
@@ -1137,10 +1137,10 @@ func TestMainLexiconCanBeChangedAndReset(t *testing.T) {
 	s, b := newTestSettings()
 	s.openTable = func(string) string { return `D:\dict\wanxiang\lexicon.tsv` }
 	tt := open(t, s, "词库")
-	if !tt.HasText("白霜＋万象＋项目热词（默认）") {
+	if !tt.HasText("默认；白霜＋万象＋项目热词") {
 		t.Fatalf("没有显示默认词库：%q", tt.Texts())
 	}
-	if err := tt.Click("选择文件…"); err != nil {
+	if err := tt.Click("选择文件"); err != nil {
 		t.Fatal(err)
 	}
 	if b.config.Lexicon != `D:\dict\wanxiang\lexicon.tsv` {
@@ -1386,7 +1386,7 @@ func TestEncryptedLocalBackupExportAndUnlockOnImport(t *testing.T) {
 			t.Fatalf("加密备份不应出现明文 %s：%s", secret, encBytes)
 		}
 	}
-	if !strings.Contains(strings.Join(tt.Texts(), " "), "已导出全部设置和数据（已加密）") {
+	if !strings.Contains(strings.Join(tt.Texts(), " "), "已导出全部设置和数据；已加密") {
 		t.Fatalf("加密导出提示不对：%q", tt.Texts())
 	}
 

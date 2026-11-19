@@ -1122,7 +1122,7 @@ impl Host {
             return Response::error("词库还在载入，请稍后再试");
         };
         if let Err(e) = engine.add_user_word(&pinyin, &word, ADDED_WORD_FREQ) {
-            return Response::error(format!("加不进去：{e}"));
+            return Response::error(format!("添加词语失败：{e}"));
         }
         if let Err(error) = self.learned_changed() {
             return Response::error(error);
@@ -1199,7 +1199,7 @@ impl Host {
             Err(error) => return Response::error(format!("导入学习备份失败：{error:#}")),
         };
         if let Err(error) = self.learned_changed() {
-            return Response::error(format!("学习记录已合并，但尚未保存到磁盘：{error}。请修复后重新导入"));
+            return Response::error(format!("学习记录已合并，但保存失败：{error}；请修复后重新导入"));
         }
         Response {
             report: Some(ImportReport {
@@ -1235,7 +1235,7 @@ impl Host {
         if prepared.has(BackupPart::Learning) {
             engine.clear_learned();
             if let Err(error) = engine.import_learning(&prepared.data.learning.to_string()) {
-                return Response::error(format!("备份文件已恢复，但输入引擎尚未更新：{error:#}。请重新打开 FreeType"));
+                return Response::error(format!("备份已恢复，但输入引擎更新失败：{error:#}；请重新打开 FreeType"));
             }
             self.dirty = false;
             self.recent_emoji = prepared.data.recent_emoji.clone();
@@ -1427,7 +1427,7 @@ impl Host {
                 engine.install_nnlm(std::sync::Arc::new(model), target);
             } else {
                 let bundled = crate::resource_dir().join("nnlm.bin");
-                let model = Nnlm::load(&bundled).map_err(|e| format!("随包模型无法读取：{e:#}"))?;
+                let model = Nnlm::load(&bundled).map_err(|e| format!("内置模型读取失败：{e:#}"))?;
                 match std::fs::remove_file(&target) {
                     Ok(()) => {},
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},

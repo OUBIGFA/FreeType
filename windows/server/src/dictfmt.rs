@@ -605,7 +605,7 @@ fn parse_dictionary_with(
             let whole = Place { table: 0, line: 0 };
             for (i, table) in tables.iter().enumerate() {
                 let Some(bytes) = read_table(table) else {
-                    out.error(&[], whole, &format!("找不到 import_tables 里的 {table}.dict.yaml（应当和主词典放在一起）"));
+                    out.error(&[], whole, &format!("未找到 {table}.dict.yaml；请检查 import_tables 中的相对路径"));
                     continue;
                 };
                 let text = decode(&bytes);
@@ -614,7 +614,7 @@ fn parse_dictionary_with(
                         rime::collect(&text, &header, body, i + 1, &tables, &mut out);
                         read += 1;
                     }
-                    None => out.error(&[], whole, &format!("{table}.dict.yaml 不是 Rime 词典（没有 --- 到 ... 的文件头）")),
+                    None => out.error(&[], whole, &format!("{table}.dict.yaml 不是 Rime 词典；缺少由 --- 和 ... 包围的文件头")),
                 }
             }
         }
@@ -906,8 +906,8 @@ mod tests {
             errors(&got.parsed),
             vec![
                 (0, "cn_dicts/base 第 7 行：拼音无效"),
-                (0, "找不到 import_tables 里的 cn_dicts/missing.dict.yaml（应当和主词典放在一起）"),
-                (0, "cn_dicts/plain.dict.yaml 不是 Rime 词典（没有 --- 到 ... 的文件头）"),
+                (0, "未找到 cn_dicts/missing.dict.yaml；请检查 import_tables 中的相对路径"),
+                (0, "cn_dicts/plain.dict.yaml 不是 Rime 词典；缺少由 --- 和 ... 包围的文件头"),
             ]
         );
         // 没有路径可找时（只给了内容）：报出来，不当成功

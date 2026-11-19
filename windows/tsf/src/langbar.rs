@@ -240,7 +240,7 @@ impl ITfLangBarItem_Impl for ModeButton_Impl {
 
     fn GetTooltipString(&self) -> Result<BSTR> {
         let mode = self.state.borrow().mode;
-        Ok(BSTR::from(format!("FreeType：{}（单按 Shift 或点这里切换）", text_of(mode))))
+        Ok(BSTR::from(format!("FreeType：{}；点击切换中英文", text_of(mode))))
     }
 }
 

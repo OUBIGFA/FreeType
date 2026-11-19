@@ -38,7 +38,7 @@ func (s *settings) syncPage(c *ui.Context) {
 						if s.sync.Provider == "s3" {
 							ui.Field(c, "服务地址", func() {
 								ui.TextInput(c, &s.sync.S3Endpoint).Placeholder("https://s3.amazonaws.com").FillWidth()
-							}).Description("AWS S3、MinIO、Cloudflare R2、Backblaze B2、阿里云 OSS 等 S3 兼容服务的地址。")
+							}).Description("填写 S3 兼容服务地址，如 AWS S3、MinIO、R2 或 OSS")
 							ui.Row(c).Gap(12).Wrap().AlignItems(ui.Start).Children(func() {
 								ui.Field(c, "区域", func() { ui.TextInput(c, &s.sync.S3Region).Placeholder("us-east-1").FillWidth() }).
 									Grow(1).Basis(200).MinWidth(160)
@@ -46,7 +46,7 @@ func (s *settings) syncPage(c *ui.Context) {
 									Grow(1).Basis(200).MinWidth(160)
 							})
 							ui.Field(c, "目录", func() { ui.TextInput(c, &s.sync.S3Prefix).Placeholder("FreeType").FillWidth() }).
-								Description("统一保存在此目录下的 FreeType 文件夹中；留空则使用 FreeType。")
+								Description("统一保存在此目录下的 FreeType 文件夹中；留空则使用 FreeType")
 							ui.Row(c).Gap(12).Wrap().AlignItems(ui.Start).Children(func() {
 								ui.Field(c, "Access Key", func() { ui.TextInput(c, &s.sync.S3AccessKey).FillWidth() }).
 									Grow(1).Basis(220).MinWidth(180)
@@ -56,7 +56,7 @@ func (s *settings) syncPage(c *ui.Context) {
 						} else {
 							ui.Field(c, "地址", func() {
 								ui.TextInput(c, &s.sync.WebDAVURL).Placeholder("https://dav.jianguoyun.com/dav/FreeType").FillWidth()
-							}).Description("自动使用地址下的 FreeType 文件夹；已以 FreeType 结尾时直接使用。坚果云需填写应用密码。")
+							}).Description("数据保存在地址下的 FreeType 文件夹；地址已以 FreeType 结尾时直接使用；坚果云使用应用密码")
 							ui.Row(c).Gap(12).Wrap().AlignItems(ui.Start).Children(func() {
 								ui.Field(c, "账号", func() { ui.TextInput(c, &s.sync.WebDAVUser).FillWidth() }).
 									Grow(1).Basis(220).MinWidth(180)
@@ -66,7 +66,7 @@ func (s *settings) syncPage(c *ui.Context) {
 						}
 					})
 					if s.sync.Provider == "s3" {
-						checkbox(c, &s.sync.S3PathStyle, "路径风格地址（MinIO 等自建服务要勾选；AWS、R2 可以不勾）")
+						checkbox(c, &s.sync.S3PathStyle, "路径风格地址；MinIO 等自建服务需勾选，AWS 和 R2 可不勾选")
 					}
 					ui.Row(c).Gap(12).Wrap().AlignItems(ui.Center).Children(func() {
 						if ui.PrimaryButton(c, "保存并测试连接").Disabled(busy).Clicked() {
@@ -106,9 +106,9 @@ func (s *settings) syncPage(c *ui.Context) {
 					}).Grow(1).Basis(200).MinWidth(160)
 					if s.sync.Schedule == "daily" {
 						ui.Field(c, "每天时间", func() { ui.TextInput(c, &s.sync.DailyTime).Label("每天同步时间").Placeholder("21:00").Width(160) }).
-							Description("按本机时间，24 小时制。").Grow(1).Basis(200).MinWidth(160)
+							Description("按本机时间，24 小时制").Grow(1).Basis(200).MinWidth(160)
 					} else {
-						ui.Field(c, "间隔（分钟）", func() {
+						ui.Field(c, "间隔 / 分钟", func() {
 							value := float64(s.sync.IntervalMinutes)
 							if ui.NumberInput(c, &value, 1, 1440, 1).Label("同步间隔").Width(160).Changed() {
 								s.sync.IntervalMinutes = int(value)
@@ -122,14 +122,14 @@ func (s *settings) syncPage(c *ui.Context) {
 						if ui.NumberInput(c, &value, 0, 1440, 1).Label("每日最多次数").Width(160).Changed() {
 							s.sync.DailyLimit = int(value)
 						}
-					}).Description("0 表示不限；手动同步不受限。").Grow(1).Basis(200).MinWidth(160)
+					}).Description("0 表示不限；手动同步不受限").Grow(1).Basis(200).MinWidth(160)
 					ui.Field(c, "失败重试次数", func() {
 						value := float64(s.sync.RetryLimit)
 						if ui.NumberInput(c, &value, 0, 10, 1).Label("失败重试次数").Width(160).Changed() {
 							s.sync.RetryLimit = int(value)
 						}
 					}).Grow(1).Basis(180).MinWidth(160)
-					ui.Field(c, "每台设备保留备份", func() {
+					ui.Field(c, "每台电脑保留备份", func() {
 						value := float64(s.sync.KeepSnapshots)
 						if ui.NumberInput(c, &value, 1, 100, 1).Label("保留备份数").Width(160).Changed() {
 							s.sync.KeepSnapshots = int(value)
@@ -159,9 +159,9 @@ func (s *settings) syncPage(c *ui.Context) {
 			})
 		})
 	})
-	section(c, "设备快照", func() {
+	section(c, "电脑备份", func() {
 		s.settingBlock(c, "sync/上传与恢复", func() {
-			row(c, "上传与恢复", "上传会把当前的全部设置和数据存成这台电脑的一份快照；每台电脑保留最近 "+fmt.Sprint(s.sync.KeepSnapshots)+" 份", func() {
+			row(c, "上传与恢复", "上传当前全部设置和数据；每台电脑保留最近 "+fmt.Sprint(s.sync.KeepSnapshots)+" 份备份", func() {
 				if ui.Button(c, "刷新设备").Disabled(busy).Clicked() {
 					s.refreshSyncDevices()
 				}
@@ -171,20 +171,20 @@ func (s *settings) syncPage(c *ui.Context) {
 			})
 			ui.Column(c).Padding(0, rowInset).Children(func() { s.syncFeedback(c, "transfer") })
 			if s.syncListed && len(s.syncDevices) == 0 {
-				ui.Text(c, "远端还没有快照").TextColor(colors(c).muted).Wrap().Padding(6, rowInset, 12, rowInset)
+				ui.Text(c, "云端还没有备份").TextColor(colors(c).muted).Wrap().Padding(6, rowInset, 12, rowInset)
 			}
 			for _, device := range s.syncDevices {
 				device := device
 				name := deviceName(device)
 				if device.ID == s.sync.DeviceID {
-					name += "（这台电脑）"
+					name += " · 这台电脑"
 				}
 				detail := "最近上传：" + time.Unix(device.Uploaded, 0).Format("2006-01-02 15:04") + " · " + sizeText(device.Size)
 				ui.Column(c).Key("device-"+device.ID).FillWidth().Padding(4, 12).Children(func() {
 					ui.Row(c).FillWidth().Padding(12, rowInset-12).Radius(controlRadius).
 						Background(colors(c).subtle).Gap(16).Wrap().MinHeight(58).AlignItems(ui.Center).Children(func() {
 						texts(c, name, detail)
-						if ui.Button(c, "恢复…").Label("恢复 " + name).Disabled(busy).Clicked() {
+						if ui.Button(c, "恢复").Label("恢复 " + name).Disabled(busy).Clicked() {
 							s.syncRestore, s.confirmSyncRestore = device, true
 						}
 					})
@@ -198,16 +198,16 @@ func (s *settings) syncPage(c *ui.Context) {
 		}
 	})
 	if s.showSyncHelp {
-		hint(c, "数据只发往你填写的地址，不经过其他服务器。密码和密钥用 Windows 的数据保护加密后保存在本机，不会上传。\n"+
-			"备份加密默认关闭。开启后，上传的备份用备份密码加密（AES-256-GCM，密钥由密码经 PBKDF2 导出）；备份里的电脑名、上传时间和大小不加密。"+
-			"每台电脑要填同一个密码；密码不上传，忘记后已加密的备份无法打开。改密码以后，以前上传的备份仍要用旧密码打开。\n"+
-			"设备列表中的手动恢复是合并：把快照里的词库、快捷短语、常用语、学习记录并进本机，并采纳那台电脑上改过的设置；本机已有的内容不会被删除。"+
-			"因此在一台电脑上删掉的内容，合并另一台的快照后可能会回来。中英文状态、自定义主词库和悬浮状态栏位置各台电脑各自保留。\n"+
-			"自动同步按数据修改时间选择整份备份，较新版本会替换本机全部设置和数据（包括删除）；各台电脑请开启系统自动校时。恢复前的本机备份保存在 sync-backups。\n"+
-			"关闭设置窗口后自动同步继续运行；退出 FreeType 设置和托盘后停止。相同内容不会重复传输。")
+		hint(c, "同步数据只发送到所填地址；账号密码和密钥加密保存在这台电脑，不会上传\n"+
+			"备份加密默认关闭；开启后用备份密码加密数据；电脑名、上传时间和大小不加密\n"+
+			"所有电脑使用同一备份密码；备份密码不会上传；旧备份仍需旧密码；忘记密码后无法解密\n"+
+			"手动恢复会合并词库、快捷短语、常用语和学习记录，并采用备份中的设置；保留已有内容；已删除内容可能重新出现\n"+
+			"自动同步按数据修改时间，用较新备份替换全部设置和数据，包括删除记录；请开启系统自动校时；恢复前的备份保存在 sync-backups\n"+
+			"每台电脑保留自己的中英文状态、主词库路径和状态栏位置\n"+
+			"关闭设置窗口后继续同步；退出设置和托盘后停止同步；相同内容不重复传输")
 	}
-	title := "合并 " + deviceName(s.syncRestore) + " 的快照？"
-	switch ui.AlertDialog(c, &s.confirmSyncRestore, title, "将把这份快照并进本机当前的数据，本机已有的内容不会被删除。", "取消", "合并") {
+	title := "合并 " + deviceName(s.syncRestore) + " 的备份"
+	switch ui.AlertDialog(c, &s.confirmSyncRestore, title, "合并备份中的数据；保留这台电脑已有内容", "取消", "合并") {
 	case 1:
 		s.restoreSync(s.syncRestore)
 	}
@@ -228,7 +228,7 @@ func (s *settings) encryptionRows(c *ui.Context, busy bool) {
 		if ui.Button(c, "保存密码").Disabled(busy).Clicked() {
 			s.syncMessageArea = "encrypt"
 			if s.saveSync() {
-				s.syncMessage, s.syncFailed = "备份密码已保存。其他电脑要填同一个密码", false
+				s.syncMessage, s.syncFailed = "备份密码已保存；其他电脑要填同一个密码", false
 				if s.sync.EncryptPassword == "" {
 					s.syncMessage = "备份密码已清空"
 				}

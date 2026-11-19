@@ -71,9 +71,9 @@ func remoteError(action string, resp *http.Response) error {
 	}
 	switch resp.StatusCode {
 	case http.StatusUnauthorized, http.StatusForbidden:
-		return fmt.Errorf("%s失败：账号、密码或密钥不对，或者没有权限（HTTP %d）%s", action, resp.StatusCode, short(detail))
+		return fmt.Errorf("%s失败：账号、密码或密钥错误，或没有权限；HTTP %d %s", action, resp.StatusCode, short(detail))
 	case http.StatusInsufficientStorage:
-		return fmt.Errorf("%s失败：远端空间不足（HTTP 507）", action)
+		return fmt.Errorf("%s失败：远端空间不足；HTTP 507", action)
 	}
 	return fmt.Errorf("%s失败：HTTP %d %s", action, resp.StatusCode, short(detail))
 }
@@ -83,7 +83,7 @@ func short(detail string) string {
 		return ""
 	}
 	if r := []rune(detail); len(r) > 160 {
-		detail = string(r[:160]) + "…"
+		detail = string(r[:160]) + "；后续内容已省略"
 	}
 	return "：" + detail
 }
@@ -276,7 +276,7 @@ func (w *webdavStore) List(dir string) ([]remoteEntry, error) {
 	}
 	var result davMultistatus
 	if err := xml.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&result); err != nil {
-		return nil, fmt.Errorf("远端目录的应答看不懂：%w", err)
+		return nil, fmt.Errorf("无法解析远端目录响应：%w", err)
 	}
 	self := hrefPath(address)
 	var entries []remoteEntry
@@ -325,7 +325,7 @@ func (w *webdavStore) Probe() error {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusMultiStatus {
 		if resp.StatusCode == http.StatusNotFound {
-			return errors.New("连接失败：远端目录不存在，也建不出来。请先在网盘里建好这个文件夹")
+			return errors.New("连接失败：远端目录不存在且无法创建；请先在网盘中创建该文件夹")
 		}
 		return remoteError("连接", resp)
 	}
@@ -509,11 +509,11 @@ func (s *s3Store) do(method string, parts []string, query map[string]string, bod
 	}
 	if resp.StatusCode/100 == 3 {
 		defer resp.Body.Close()
-		hint := "区域或服务地址不对"
+		hint := "区域或服务地址错误"
 		if region := resp.Header.Get("x-amz-bucket-region"); region != "" {
-			hint += "，这个存储桶在 " + region
+			hint += "；存储桶区域为 " + region
 		}
-		return nil, fmt.Errorf("%s（HTTP %d）", hint, resp.StatusCode)
+		return nil, fmt.Errorf("%s；HTTP %d", hint, resp.StatusCode)
 	}
 	return resp, nil
 }
@@ -605,7 +605,7 @@ func (s *s3Store) list(dir string, limit int) ([]remoteEntry, error) {
 		err = xml.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&page)
 		resp.Body.Close()
 		if err != nil {
-			return nil, fmt.Errorf("远端目录的应答看不懂：%w", err)
+			return nil, fmt.Errorf("无法解析远端目录响应：%w", err)
 		}
 		for _, item := range page.Contents {
 			if name := strings.TrimPrefix(item.Key, prefix); name != "" && !strings.Contains(name, "/") {
@@ -645,7 +645,7 @@ func (s *s3Store) Probe() error {
 	// 能列不代表能写：放一个很小的对象再删掉
 	probe := []byte("FreeType")
 	if err := s.Put(".freetype-probe", bytes.NewReader(probe), int64(len(probe))); err != nil {
-		return fmt.Errorf("能读取存储桶，但写不进去：%w", err)
+		return fmt.Errorf("可读取存储桶，但无法写入：%w", err)
 	}
 	return s.Delete(".freetype-probe")
 }

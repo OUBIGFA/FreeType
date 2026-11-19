@@ -270,7 +270,7 @@ func describe(r *ImportReport, what string) (string, []string) {
 		msg += fmt.Sprintf("，跳过 %d 行", r.Skipped)
 	}
 	if r.Note != "" {
-		msg += "（" + r.Note + "）"
+		msg += "；" + r.Note
 	}
 	return msg, r.Errors
 }
@@ -327,7 +327,7 @@ func (s *settings) removeDictionary(name string) {
 			if err != nil {
 				s.notice = "删除失败：" + err.Error()
 			} else {
-				s.notice = "已删除「" + name + "」"
+				s.notice = "已删除 " + name
 			}
 			s.dicts = list.Dictionaries
 		}
@@ -363,7 +363,7 @@ func (s *settings) export(request, title, name string) {
 			if request != "export_settings" {
 				s.notice = fmt.Sprintf("已导出 %d 条", count)
 				if resp.Report != nil && resp.Report.Note != "" {
-					s.notice += "（" + resp.Report.Note + "）"
+					s.notice += "；" + resp.Report.Note
 				}
 			} else if len(parts) == len(backupParts) {
 				s.notice = "已导出全部设置和数据"
@@ -371,7 +371,7 @@ func (s *settings) export(request, title, name string) {
 				s.notice = "已导出选中的数据：" + exportedSummary(resp, parts)
 			}
 			if request == "export_settings" && password != "" {
-				s.notice += "（已加密）"
+				s.notice += "；已加密"
 			}
 		}
 	})
@@ -452,23 +452,23 @@ func (s *settings) addPhrase() {
 	if w := strings.TrimSpace(s.newWeight); w != "" {
 		n, err := strconv.Atoi(w)
 		if err != nil || n < 0 {
-			s.formError = "权重必须是非负整数。"
+			s.formError = "权重必须是 0 或正整数"
 			return
 		}
 		weight = n
 	}
 	switch {
 	case !validCode(code):
-		s.formError = "编码只能包含英文字母。"
+		s.formError = "编码只能包含英文字母"
 		return
 	case strings.TrimSpace(text) == "":
-		s.formError = "短语不能为空。"
+		s.formError = "短语不能为空"
 		return
 	}
 	s.formError = ""
 	phrases := append(append([]QuickPhrase(nil), s.phrases...), QuickPhrase{Code: code, Text: text, Weight: weight})
 	s.newCode, s.newText, s.newWeight = "", "", ""
-	s.savePhrases(phrases, "已添加「"+code+"」")
+	s.savePhrases(phrases, "已添加 "+code)
 }
 
 func (s *settings) removePhrase(i int) {
@@ -476,7 +476,7 @@ func (s *settings) removePhrase(i int) {
 		return
 	}
 	phrases := append(append([]QuickPhrase(nil), s.phrases[:i]...), s.phrases[i+1:]...)
-	s.savePhrases(phrases, "已删除「"+s.phrases[i].Code+"」")
+	s.savePhrases(phrases, "已删除 "+s.phrases[i].Code)
 }
 
 // loadWords 读学到的词。
@@ -505,9 +505,9 @@ func (s *settings) forgetWords(words []string) {
 			}
 			s.words = resp.UserWords
 			if len(words) == 1 {
-				s.notice = "已删除「" + words[0] + "」的记忆"
+				s.notice = "已删除 " + words[0] + " 的学习记录"
 			} else {
-				s.notice = fmt.Sprintf("已删除 %d 个词的记忆", len(words))
+				s.notice = fmt.Sprintf("已删除 %d 个词的学习记录", len(words))
 			}
 		}
 	})
@@ -517,7 +517,7 @@ func (s *settings) forgetWords(words []string) {
 func (s *settings) addWord() {
 	word, pinyin := strings.TrimSpace(s.newWord), strings.TrimSpace(s.newPinyin)
 	if word == "" {
-		s.wordError = "请填写词语。"
+		s.wordError = "请填写词语"
 		return
 	}
 	s.background(func() func() {
@@ -549,7 +549,7 @@ func (s *settings) clearLearned() {
 				return
 			}
 			s.words = nil
-			s.notice = "已清空学到的词和输入习惯"
+			s.notice = "已清空学习记录"
 		}
 	})
 }
