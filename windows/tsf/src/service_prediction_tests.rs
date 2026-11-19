@@ -13,17 +13,18 @@ use windows::Win32::UI::TextServices::*;
 fn unused<T>() -> Result<T> { Err(E_NOTIMPL.into()) }
 
 #[derive(Default)]
-#[implement(ITextStoreACP)]
+#[implement(ITextStoreACP, ITfContextOwnerCompositionSink)]
 struct Store {
     text: RefCell<Vec<u16>>,
     selection: Cell<TS_SELECTION_ACP>,
     sink: RefCell<Option<ITextStoreACPSink>>,
-    /// Like CUAS for IMM32 apps: only composition text lives here, app text never does.
+    /// Chromium and CUAS both advertise this; it does not describe text visibility.
     transitory: Cell<bool>,
     deny_read: Cell<bool>,
     /// CUAS forwards committed text to the app, then empties its document.
     commit_only: Cell<bool>,
     app_text: RefCell<Vec<u16>>,
+    composing: Cell<bool>,
 }
 
 impl Store {
@@ -63,7 +64,7 @@ impl ITextStoreACP_Impl for Store_Impl {
         }
         let sink = self.sink.borrow().clone().ok_or_else(|| windows::core::Error::from_hresult(E_FAIL))?;
         let result = unsafe { sink.OnLockGranted(TEXT_STORE_LOCK_FLAGS(flags)) }.err().map_or(S_OK, |e| e.code());
-        if self.commit_only.get() && flags & TS_LF_READWRITE.0 == TS_LF_READWRITE.0 && result.is_ok() {
+        if self.commit_only.get() && !self.composing.get() && flags & TS_LF_READWRITE.0 == TS_LF_READWRITE.0 && result.is_ok() {
             let size = self.text.borrow().len() as i32;
             if size > 0 {
                 self.app_text.borrow_mut().extend_from_slice(&self.text.borrow());
@@ -142,6 +143,18 @@ impl ITextStoreACP_Impl for Store_Impl {
     fn GetWnd(&self, _: u32) -> Result<HWND> { unused() }
 }
 
+impl ITfContextOwnerCompositionSink_Impl for Store_Impl {
+    fn OnStartComposition(&self, _: Ref<ITfCompositionView>) -> Result<BOOL> {
+        self.composing.set(true);
+        Ok(true.into())
+    }
+    fn OnUpdateComposition(&self, _: Ref<ITfCompositionView>, _: Ref<ITfRange>) -> Result<()> { Ok(()) }
+    fn OnEndComposition(&self, _: Ref<ITfCompositionView>) -> Result<()> {
+        self.composing.set(false);
+        Ok(())
+    }
+}
+
 struct Editor {
     manager: ITfThreadMgrEx,
     document: ITfDocumentMgr,
@@ -172,7 +185,7 @@ impl Drop for Editor {
     }
 }
 
-fn in_editor(test: impl FnOnce(Editor, Rc<RefCell<State>>, ITfKeyEventSink)) {
+fn in_editor(test: impl FnOnce(&Editor, Rc<RefCell<State>>, ITfKeyEventSink)) {
     let _desktop = crate::ui::render_tests::PrivateDesktop::new();
     struct Apartment;
     impl Drop for Apartment {
@@ -182,7 +195,7 @@ fn in_editor(test: impl FnOnce(Editor, Rc<RefCell<State>>, ITfKeyEventSink)) {
     let _apartment = Apartment;
     let editor = unsafe { Editor::new() };
     let instance = HINSTANCE(unsafe { GetModuleHandleW(None).unwrap() }.0);
-    let service = TextService::new(instance);
+    let service = TextService::new(instance).into_object();
     let state = service.state.clone();
     {
         let mut s = state.borrow_mut();
@@ -190,8 +203,19 @@ fn in_editor(test: impl FnOnce(Editor, Rc<RefCell<State>>, ITfKeyEventSink)) {
         s.window = CandidateWindow::new(instance);
         s.context = Some(editor.context.clone());
         s.client_id = editor.client;
+        s.sink = Some(service.to_interface::<ITfCompositionSink>());
     }
-    test(editor, state, service.into());
+    let weak = Rc::downgrade(&state);
+    ui::set_click_handler(Some(Box::new(move |click| on_click(&weak, click))));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        test(&editor, state.clone(), service.to_interface::<ITfKeyEventSink>());
+    }));
+    // Release real compositions and their sink cycle even when an assertion fails.
+    finish_prediction_space(&state, false, true);
+    apply(&state, Some(&editor.context), Frame::default(), true);
+    state.borrow_mut().sink = None;
+    ui::set_click_handler(None);
+    if let Err(error) = result { std::panic::resume_unwind(error); }
 }
 
 fn open_prediction(editor: &Editor, state: &Rc<RefCell<State>>, double: bool) -> u64 {
@@ -206,165 +230,229 @@ fn open_prediction(editor: &Editor, state: &Rc<RefCell<State>>, double: bool) ->
     1
 }
 
-#[test]
-fn prediction_double_space_uses_the_app_inserted_range_without_key_up() {
-    in_editor(|editor, state, _| {
-        // Chromium/Devin text stores advertise TS_SS_TRANSITORY but still expose
-        // the application's committed space through the text store.
-        editor.store.transitory.set(true);
-        let revision = open_prediction(&editor, &state, true);
-        let space = Key { keysym: 0x20, test: true, ..Key::default() };
-        let classify = |key, repeat, ms| prediction_space_key(&state, &editor.context, key, repeat, revision, ms);
-        // Repeated previews are not taps. The app receives the first space and reports a text change.
-        assert_eq!(classify(space, false, 1000), (space, true));
-        assert_eq!(classify(space, false, 1000), (space, true));
-        on_focus(&state, Some(&editor.document));
-        assert_eq!(shown_revision(&state), revision, "same input context keeps the visible page");
-        editor.store.app_insert(" ");
-        assert_eq!(classify(space, true, 1050), (space, true), "held Space is not a double tap");
-        assert_eq!(classify(space, false, 1100).0.keysym, keysym::SPACE_DOUBLE);
-        assert_eq!(classify(Key { test: false, ..space }, false, 1100).0.keysym, keysym::SPACE_DOUBLE);
-        apply(&state, Some(&editor.context), Frame {
-            handled: true, replace_space: true, commit: Some("下雨".into()), ..Frame::default()
-        }, true);
-        assert_eq!(String::from_utf16_lossy(&editor.store.text.borrow()), "今天下雨");
-    });
+fn press_space(editor: &Editor, state: &Rc<RefCell<State>>, ms: u32) -> Key {
+    let key = Key { keysym: 0x20, ..Key::default() };
+    let revision = shown_revision(state);
+    let (key, belongs) = prediction_space_key(state, &editor.context, key, false, revision, ms);
+    assert!(belongs);
+    key
+}
+
+fn choose_space(editor: &Editor, state: &Rc<RefCell<State>>, ms: u32, word: &str, next: Option<&str>) {
+    assert_eq!(press_space(editor, state, ms).keysym, keysym::SPACE_DOUBLE);
+    let revision = shown_revision(state) + 1;
+    apply(state, Some(&editor.context), Frame {
+        handled: true, replace_space: true, commit: Some(word.into()),
+        candidates: next.into_iter().map(str::to_owned).collect(),
+        predict: next.is_some(), predict_double_space: next.is_some(), cursor: next.map(|_| 0), page_revision: revision,
+        font_family: "Microsoft YaHei".into(), font_size: 18, ..Frame::default()
+    }, true);
 }
 
 #[test]
-fn prediction_double_space_continues_after_delayed_committed_text_notifications() {
-    in_editor(|editor, state, _| {
-        editor.store.transitory.set(true);
-        open_prediction(&editor, &state, true);
-        let space = Key { keysym: 0x20, test: true, ..Key::default() };
-        for (revision, word, next, expected) in [
-            (1, "天气", "不错", "今天天气"),
-            (2, "不错", "适合", "今天天气不错"),
-            (3, "适合", "散步", "今天天气不错适合"),
-        ] {
-            let start = editor.store.text.borrow().len() as i32;
-            let ms = revision as u32 * 1000;
-            assert_eq!(prediction_space_key(&state, &editor.context, space, false, revision, ms), (space, true));
-            editor.store.app_insert(" ");
-            assert_eq!(prediction_space_key(&state, &editor.context, space, false, revision, ms + 100).0.keysym, keysym::SPACE_DOUBLE);
-            apply(&state, Some(&editor.context), Frame {
-                handled: true, replace_space: true, commit: Some(word.into()), candidates: vec![next.into()],
-                predict: true, predict_double_space: true, cursor: Some(0), page_revision: revision + 1,
-                font_family: "Microsoft YaHei".into(), font_size: 18, ..Frame::default()
-            }, true);
-            assert_eq!(String::from_utf16_lossy(&editor.store.text.borrow()), expected);
-            assert!(state.borrow().space_replace.is_none(), "a readable app space must use the TSF range, not injected backspace");
-            // Chromium updates its text store again after OnLockGranted. A stale
-            // renderer snapshot followed by the committed suffix must not strand
-            // the next prediction's caret at the beginning of that suffix.
-            editor.store.app_replace(start, start + 2, "");
-            editor.store.app_insert(word);
-            assert_eq!(shown_revision(&state), revision + 1);
-        }
-    });
-}
-
-#[test]
-fn prediction_double_space_in_a_transitory_document_uses_distinct_down_messages() {
-    in_editor(|editor, state, _| {
-        editor.store.transitory.set(true);
-        let revision = open_prediction(&editor, &state, true);
-        let space = Key { keysym: 0x20, test: true, ..Key::default() };
-        let classify = |key, ms| prediction_space_key(&state, &editor.context, key, false, revision, ms);
-        // The app types the first space itself; the document never shows it.
-        assert_eq!(classify(space, 1000), (space, true));
-        assert_eq!(classify(space, 1000), (space, true), "a repeated preview of the same press is not a double tap");
-        assert_eq!(classify(space, 1100).0.keysym, keysym::SPACE_DOUBLE);
-        assert_eq!(classify(Key { test: false, ..space }, 1100).0.keysym, keysym::SPACE_DOUBLE);
-        assert_eq!(String::from_utf16_lossy(&editor.store.text.borrow()), "今天", "classification cannot change the document");
-    });
-}
-
-#[test]
-fn prediction_transitory_commit_does_not_require_a_backspace_key_up_callback() {
-    use windows::Win32::UI::WindowsAndMessaging::SetMessageExtraInfo;
+fn prediction_first_space_is_owned_before_any_application_key_is_dispatched() {
     in_editor(|editor, state, sink| unsafe {
         editor.store.transitory.set(true);
         editor.store.commit_only.set(true);
-        open_prediction(&editor, &state, true);
-        editor.store.app_text.borrow_mut().push(u16::from(b' '));
-        defer_space_replace(&state, &editor.context, Frame {
-            handled: true, replace_space: true, commit: Some("下雨".into()), ..Frame::default()
-        });
-        let previous = SetMessageExtraInfo(LPARAM(keys::OWN_INPUT_TAG as isize));
-        // IMM32 hosts need not offer key-up events. An owned Space after the
-        // Backspace pair completes the commit through normal key-down delivery.
-        let back = sink.OnTestKeyDown(&editor.context, WPARAM(0x08), LPARAM(0)).unwrap().as_bool();
-        let back_down = sink.OnKeyDown(&editor.context, WPARAM(0x08), LPARAM(0)).unwrap().as_bool();
-        // The app, not the composition-only document, handles the passed key.
-        if !back && !back_down { editor.store.app_text.borrow_mut().pop(); }
-        let preview = sink.OnTestKeyDown(&editor.context, WPARAM(0x20), LPARAM(0)).unwrap().as_bool();
-        let before = String::from_utf16_lossy(&editor.store.app_text.borrow());
-        let handled = sink.OnKeyDown(&editor.context, WPARAM(0x20), LPARAM(0)).unwrap().as_bool();
-        let duplicate = sink.OnKeyDown(&editor.context, WPARAM(0x20), LPARAM(0)).unwrap().as_bool();
-        SetMessageExtraInfo(previous);
-        assert!(!back && !back_down, "the app must receive the backspace before the commit marker");
-        assert!(preview && handled && duplicate, "the owned commit marker must not become an app space");
-        assert_eq!(before, "今天", "preview must not commit ahead of the app's backspace");
-        assert_eq!(String::from_utf16_lossy(&editor.store.app_text.borrow()), "今天下雨");
-        assert!(editor.store.text.borrow().is_empty(), "committed app text is absent from the CUAS document");
+        open_prediction(editor, &state, true);
+        // Both callbacks are production entry points. The host must never receive
+        // the first Space, so it has no raw character or Backspace to dispatch later.
+        for _ in 0..2 {
+            assert!(sink.OnTestKeyDown(&editor.context, WPARAM(0x20), LPARAM(0)).unwrap().as_bool());
+        }
+        assert!(editor.store.text.borrow().is_empty(), "previews cannot open a composition");
+        assert!(sink.OnKeyDown(&editor.context, WPARAM(0x20), LPARAM(0)).unwrap().as_bool());
+        assert_eq!(String::from_utf16_lossy(&editor.store.app_text.borrow()), "今天");
+        assert_eq!(String::from_utf16_lossy(&editor.store.text.borrow()), " ");
+        assert!(editor.store.composing.get(), "the real TSF owner must receive OnStartComposition");
+        assert!(!composing(&state), "the engine is still showing predictions, not editing pinyin");
     });
 }
 
 #[test]
-fn prediction_transitory_double_space_survives_unavailable_read_sessions() {
+fn prediction_transitory_commit_keeps_every_character_without_a_deferred_backspace() {
+    for word in ["好", "天气", "好运来", "𠮷", "👩‍💻"] {
+        in_editor(|editor, state, _| {
+            editor.store.transitory.set(true);
+            editor.store.commit_only.set(true);
+            open_prediction(editor, &state, true);
+            assert_eq!(press_space(editor, &state, 1000).keysym, 0x20);
+            assert_eq!(String::from_utf16_lossy(&editor.store.app_text.borrow()), "今天");
+            assert_eq!(String::from_utf16_lossy(&editor.store.text.borrow()), " ");
+            choose_space(editor, &state, 1100, word, None);
+            assert_eq!(String::from_utf16_lossy(&editor.store.app_text.borrow()), format!("今天{word}"));
+            assert!(editor.store.text.borrow().is_empty());
+            assert!(!editor.store.composing.get(), "the result is committed only by OnEndComposition");
+            assert!(state.borrow().space.is_none());
+        });
+    }
+}
+
+#[test]
+fn prediction_double_space_continues_across_native_and_composition_only_hosts() {
+    for composition_only in [false, true] {
+        in_editor(|editor, state, _| {
+            editor.store.transitory.set(true);
+            editor.store.commit_only.set(composition_only);
+            open_prediction(editor, &state, true);
+            for (ms, word, next, expected) in [
+                (1000, "天气", "不错", "今天天气"),
+                (2000, "不错", "适合", "今天天气不错"),
+                (3000, "适合", "散步", "今天天气不错适合"),
+            ] {
+                let start = editor.store.text.borrow().len() as i32;
+                assert_eq!(press_space(editor, &state, ms).keysym, 0x20);
+                choose_space(editor, &state, ms + 100, word, Some(next));
+                let buffer = if composition_only { &editor.store.app_text } else { &editor.store.text };
+                assert_eq!(String::from_utf16_lossy(&buffer.borrow()), expected);
+                if !composition_only {
+                    // A Chromium renderer may replay the committed suffix after
+                    // the edit session. Keep following its final caret position.
+                    editor.store.app_replace(start, start + 2, "");
+                    editor.store.app_insert(word);
+                }
+            }
+        });
+    }
+}
+
+#[test]
+fn prediction_single_tap_timeout_commits_exactly_one_space() {
     in_editor(|editor, state, _| {
-        editor.store.transitory.set(true);
-        let revision = open_prediction(&editor, &state, true);
-        editor.store.deny_read.set(true);
-        let space = Key { keysym: 0x20, test: true, ..Key::default() };
-        assert_eq!(prediction_space_key(&state, &editor.context, space, false, revision, 1000), (space, true));
-        assert_eq!(prediction_space_key(&state, &editor.context, space, false, revision, 1100).0.keysym, keysym::SPACE_DOUBLE);
+        editor.store.commit_only.set(true);
+        open_prediction(editor, &state, true);
+        press_space(editor, &state, 1000);
+        prediction_space_timeout(&state);
+        assert_eq!(String::from_utf16_lossy(&editor.store.app_text.borrow()), "今天", "an early/stale timer cannot end the double-tap window");
+        state.borrow_mut().space.as_mut().unwrap().deadline_ms = 0;
+        prediction_space_timeout(&state);
+        prediction_space_timeout(&state);
+        assert_eq!(String::from_utf16_lossy(&editor.store.app_text.borrow()), "今天 ");
+        assert!(!editor.store.composing.get());
     });
 }
 
 #[test]
-fn prediction_transitory_pending_commit_cannot_overwrite_new_input() {
-    use windows::Win32::UI::WindowsAndMessaging::SetMessageExtraInfo;
+fn prediction_space_window_timer_reaches_the_text_service() {
+    use windows::Win32::UI::WindowsAndMessaging::{PeekMessageW, DispatchMessageW, MSG, PM_REMOVE, WM_TIMER};
+    in_editor(|editor, state, _| unsafe {
+        editor.store.commit_only.set(true);
+        open_prediction(editor, &state, true);
+        press_space(editor, &state, 1000);
+        state.borrow_mut().space.as_mut().unwrap().deadline_ms = 0;
+        let hwnd = state.borrow().window.as_ref().unwrap().hwnd();
+        state.borrow().window.as_ref().unwrap().set_prediction_space_timeout(Some(1));
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while state.borrow().space.is_some() && std::time::Instant::now() < end {
+            let mut message = MSG::default();
+            if PeekMessageW(&mut message, Some(hwnd), WM_TIMER, WM_TIMER, PM_REMOVE).as_bool() {
+                DispatchMessageW(&message);
+            } else {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
+        assert_eq!(String::from_utf16_lossy(&editor.store.app_text.borrow()), "今天 ");
+        assert!(!editor.store.composing.get());
+    });
+}
+
+#[test]
+fn prediction_host_termination_finishes_the_owned_space_and_cancels_its_timer() {
     in_editor(|editor, state, sink| unsafe {
-        open_prediction(&editor, &state, true);
-        defer_space_replace(&state, &editor.context, Frame {
-            handled: true, replace_space: true, commit: Some("下雨".into()), ..Frame::default()
-        });
-        note_key_down(&state, WPARAM(0x4e), LPARAM(0));
-        state.borrow_mut().sink = Some(sink.cast().unwrap());
+        editor.store.commit_only.set(true);
+        open_prediction(editor, &state, true);
+        let service = ComObject::<TextService>::cast_from(&sink).unwrap();
+        press_space(editor, &state, 1000);
+        assert!(!service.can_reload(), "an owned space must finish before replacing the DLL");
+        let owner: ITfContextOwnerCompositionServices = editor.context.cast().unwrap();
+        owner.TerminateComposition(None::<&ITfCompositionView>).unwrap();
+        prediction_space_timeout(&state);
+        assert!(state.borrow().space.is_none());
+        assert!(!state.borrow().predicting);
+        assert_eq!(shown_revision(&state), 0);
+        assert_eq!(String::from_utf16_lossy(&editor.store.app_text.borrow()), "今天 ");
+        assert!(service.can_reload());
+    });
+}
+
+#[test]
+fn prediction_held_space_commits_the_first_space_and_passes_the_repeat() {
+    in_editor(|editor, state, sink| unsafe {
+        editor.store.commit_only.set(true);
+        open_prediction(editor, &state, true);
+        press_space(editor, &state, 1000);
+        let repeat = LPARAM(1 << 30);
+        assert!(sink.OnTestKeyDown(&editor.context, WPARAM(0x20), repeat).unwrap().as_bool());
+        assert!(!sink.OnKeyDown(&editor.context, WPARAM(0x20), repeat).unwrap().as_bool());
+        assert_eq!(String::from_utf16_lossy(&editor.store.app_text.borrow()), "今天 ");
+        assert!(state.borrow().space.is_none());
+        assert!(!editor.store.composing.get());
+    });
+}
+
+#[test]
+fn prediction_backspace_cancels_only_the_pending_space() {
+    in_editor(|editor, state, sink| unsafe {
+        editor.store.commit_only.set(true);
+        open_prediction(editor, &state, true);
+        press_space(editor, &state, 1000);
+        assert!(sink.OnTestKeyDown(&editor.context, WPARAM(0x08), LPARAM(0)).unwrap().as_bool());
+        assert!(sink.OnKeyDown(&editor.context, WPARAM(0x08), LPARAM(0)).unwrap().as_bool());
+        assert_eq!(String::from_utf16_lossy(&editor.store.app_text.borrow()), "今天");
+        assert!(editor.store.text.borrow().is_empty());
+        assert!(!editor.store.composing.get());
+    });
+}
+
+#[test]
+fn prediction_next_input_commits_the_space_without_overwriting_new_composition() {
+    in_editor(|editor, state, sink| unsafe {
+        editor.store.commit_only.set(true);
+        open_prediction(editor, &state, true);
+        press_space(editor, &state, 1000);
+        assert!(sink.OnTestKeyDown(&editor.context, WPARAM(0x4e), LPARAM(0)).unwrap().as_bool());
+        // With a disconnected test server, the next key is passed back after
+        // the pending space has been committed. A real response can then compose.
+        assert!(!sink.OnKeyDown(&editor.context, WPARAM(0x4e), LPARAM(0)).unwrap().as_bool());
         apply(&state, Some(&editor.context), Frame {
             handled: true, preedit: "n".into(), preedit_cursor: 1, ..Frame::default()
         }, true);
-        let previous = SetMessageExtraInfo(LPARAM(keys::OWN_INPUT_TAG as isize));
-        let back = sink.OnTestKeyDown(&editor.context, WPARAM(0x08), LPARAM(0)).unwrap().as_bool();
-        let marker = sink.OnKeyDown(&editor.context, WPARAM(0x20), LPARAM(0)).unwrap().as_bool();
-        SetMessageExtraInfo(previous);
-        let text = String::from_utf16_lossy(&editor.store.text.borrow());
-        let composing = composing(&state);
-        apply(&state, Some(&editor.context), Frame::default(), true);
-        state.borrow_mut().sink = None;
-        assert!(back && marker, "cancelled helper keys cannot reach the new input");
-        assert_eq!(text, "今天n");
-        assert!(composing, "the user's new composition must survive");
+        prediction_space_timeout(&state);
+        assert_eq!(String::from_utf16_lossy(&editor.store.app_text.borrow()), "今天 ");
+        assert_eq!(String::from_utf16_lossy(&editor.store.text.borrow()), "n");
+        assert!(composing(&state));
     });
 }
 
 #[test]
-fn prediction_double_space_respects_message_timing_and_ignores_previews() {
+fn prediction_double_space_owns_text_even_without_read_only_locks() {
     in_editor(|editor, state, _| {
         editor.store.transitory.set(true);
-        let revision = open_prediction(&editor, &state, true);
-        let space = Key { keysym: 0x20, test: true, ..Key::default() };
-        let classify = |ms, repeat| prediction_space_key(&state, &editor.context, space, repeat, revision, ms).0.keysym;
-        assert_eq!(classify(1000, false), 0x20);
-        assert_eq!(classify(1000, false), 0x20, "duplicate preview cannot count as another tap");
-        assert_eq!(classify(2000, false), 0x20, "a slow second tap begins a new pair");
-        assert_eq!(classify(2100, true), 0x20, "holding Space cannot select");
-        assert_eq!(classify(2100, false), keysym::SPACE_DOUBLE);
-        state.borrow_mut().space = None;
-        assert_eq!(classify(u32::MAX - 50, false), 0x20);
-        assert_eq!(classify(49, false), keysym::SPACE_DOUBLE, "Windows message time may wrap");
+        editor.store.commit_only.set(true);
+        open_prediction(editor, &state, true);
+        editor.store.deny_read.set(true);
+        press_space(editor, &state, 1000);
+        choose_space(editor, &state, 1100, "好运来", None);
+        assert_eq!(String::from_utf16_lossy(&editor.store.app_text.borrow()), "今天好运来");
+    });
+}
+
+#[test]
+fn prediction_double_space_respects_message_timing_and_duplicate_previews() {
+    in_editor(|editor, state, _| {
+        editor.store.commit_only.set(true);
+        open_prediction(editor, &state, true);
+        press_space(editor, &state, 1000);
+        let preview = Key { keysym: 0x20, test: true, ..Key::default() };
+        assert_eq!(prediction_space_key(&state, &editor.context, preview, false, 1, 1000).0.keysym, 0x20);
+        press_space(editor, &state, 1000);
+        assert_eq!(String::from_utf16_lossy(&editor.store.text.borrow()), " ", "a duplicate press cannot create two spaces");
+        assert_eq!(press_space(editor, &state, 2000).keysym, 0x20, "a slow tap commits the old space and starts a new pair");
+        assert_eq!(String::from_utf16_lossy(&editor.store.app_text.borrow()), "今天 ");
+        choose_space(editor, &state, 2100, "好", Some("天气"));
+        press_space(editor, &state, u32::MAX - 50);
+        choose_space(editor, &state, 49, "天气", None);
+        assert_eq!(String::from_utf16_lossy(&editor.store.app_text.borrow()), "今天 好天气");
     });
 }
 
@@ -384,30 +472,22 @@ fn prediction_single_space_uses_the_page_only_while_the_caret_matches() {
 #[test]
 fn prediction_double_space_does_not_replace_text_after_a_caret_move() {
     in_editor(|editor, state, _| {
-        let revision = open_prediction(&editor, &state, true);
-        let space = Key { keysym: 0x20, test: true, ..Key::default() };
-        assert_eq!(prediction_space_key(&state, &editor.context, space, false, revision, 1000).0, space);
-        editor.store.app_insert(" ");
-        assert_eq!(prediction_space_key(&state, &editor.context, space, false, revision, 1100).0.keysym, keysym::SPACE_DOUBLE);
+        open_prediction(editor, &state, true);
+        press_space(editor, &state, 1000);
         editor.store.move_caret(1);
-        let doc = editor.context.clone();
-        let verdict = Rc::new(Cell::new(None));
-        let result = verdict.clone();
-        edit(&editor.context, editor.client, true, move |ec| {
-            result.set(Some(replace_verified_space(&state, &doc, ec, &wide("下雨")).is_err()));
-            Ok(())
-        });
-        assert_eq!(verdict.get(), Some(true));
+        let space = Key { keysym: 0x20, test: true, ..Key::default() };
+        assert_eq!(prediction_space_key(&state, &editor.context, space, false, 1, 1100), (space, false));
         assert_eq!(String::from_utf16_lossy(&editor.store.text.borrow()), "今天 ");
+        assert_eq!(editor.store.selection.get().acpStart, 1, "ending a space must not move the user's caret back");
+        assert!(!editor.store.composing.get());
     });
 }
 
 #[test]
 fn prediction_does_not_follow_focus_to_another_input_context() {
     in_editor(|editor, state, sink| unsafe {
-        let revision = open_prediction(&editor, &state, true);
-        let space = Key { keysym: 0x20, test: true, ..Key::default() };
-        prediction_space_key(&state, &editor.context, space, false, revision, 1000);
+        open_prediction(editor, &state, true);
+        press_space(editor, &state, 1000);
         let other = editor.manager.CreateDocumentMgr().unwrap();
         let mut context = None;
         let mut cookie = 0;
@@ -419,6 +499,8 @@ fn prediction_does_not_follow_focus_to_another_input_context() {
         let esc_reaches_app = !sink.OnTestKeyDown(&context, WPARAM(0x1b), LPARAM(0)).unwrap().as_bool();
         other.Pop(TF_POPF_ALL).unwrap();
         assert!(closed && esc_reaches_app);
+        assert_eq!(String::from_utf16_lossy(&editor.store.text.borrow()), "今天 ");
+        assert!(state.borrow().space.is_none() && !editor.store.composing.get());
     });
 }
 

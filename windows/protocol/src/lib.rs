@@ -919,7 +919,7 @@ pub struct Frame {
     pub predict: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub predict_double_space: bool,
-    /// 双击选词时替换刚由应用插入且经 TSF 核对过的一个半角空格。
+    /// 双击选词时用完整联想词替换 Windows 宿主保留的第一个半角空格。
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub replace_space: bool,
     #[serde(default)]

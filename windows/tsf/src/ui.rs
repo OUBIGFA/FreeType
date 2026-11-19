@@ -51,6 +51,8 @@ const HINT_MS: u32 = 1000;
 /// 上屏联想显示着没人选：过这么久自己收起（见 [`Click::Dismiss`]）。
 const PREDICT_TIMER: usize = 4;
 const PREDICT_MS: u32 = 6000;
+/// 单次空格暂留在输入法编辑区，双击窗口结束后提交为普通空格。
+const PREDICTION_SPACE_TIMER: usize = 5;
 /// 按住多久算长按。
 const LONG_PRESS_MS: u32 = 500;
 /// 鼠标离开窗口（TrackMouseEvent）。
@@ -66,6 +68,8 @@ pub enum Click {
     Settings,
     /// 上屏联想一会儿没选：收起来（服务进程那边也结束联想，数字键、空格不再选词）。
     Dismiss,
+    /// 双击间隔结束，请文本服务提交仍保留着的单次空格。
+    PredictionSpaceTimeout,
 }
 
 thread_local! {
@@ -761,6 +765,11 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             }
             LRESULT(0)
         }
+        WM_TIMER if wparam.0 == PREDICTION_SPACE_TIMER => {
+            unsafe { let _ = KillTimer(Some(hwnd), PREDICTION_SPACE_TIMER); }
+            dispatch(Click::PredictionSpaceTimeout);
+            LRESULT(0)
+        }
         WM_TIMER if wparam.0 == HINT_TIMER => {
             unsafe {
                 let _ = KillTimer(Some(hwnd), HINT_TIMER);
@@ -909,6 +918,16 @@ impl CandidateWindow {
     pub fn request_caret_tick(&self) {
         unsafe {
             let _ = PostMessageW(Some(self.hwnd), WM_CARET_TICK, WPARAM(0), LPARAM(0));
+        }
+    }
+
+    /// 空格编辑区由文本服务拥有，窗口只负责投递一次超时通知。
+    pub fn set_prediction_space_timeout(&self, delay_ms: Option<u32>) {
+        unsafe {
+            match delay_ms {
+                Some(ms) => { SetTimer(Some(self.hwnd), PREDICTION_SPACE_TIMER, ms, None); }
+                None => { let _ = KillTimer(Some(self.hwnd), PREDICTION_SPACE_TIMER); }
+            }
         }
     }
 
