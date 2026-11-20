@@ -73,19 +73,17 @@ func (s *settings) addPreset() {
 
 func (s *settings) appPresetSection(c *ui.Context) {
 	section(c, "指定软件自动切换", func() {
-		changed := s.settingSwitch(c, "features/指定软件自动切换", false, &s.config.AppPresets)
-		if changed {
-			s.saveConfig()
-		}
-		if !s.config.AppPresets && !s.showSetting("features/指定软件规则") && !s.showSetting("features/指定软件规则列表") {
-			return
-		}
-		s.settingBlock(c, "features/指定软件规则", func() {
-			p := colors(c)
-			ui.Column(c).FillWidth().Padding(2, 12, 6, 12).Children(func() {
-				ui.Column(c).FillWidth().Padding(14, rowInset-12).Radius(controlRadius).Background(p.subtle).Gap(14).Children(func() {
+		showSub := s.config.AppPresets || s.showSetting("features/指定软件规则") || s.showSetting("features/指定软件规则列表")
+		settingGroup(c, func() {
+			if s.settingSwitch(c, "features/指定软件自动切换", false, &s.config.AppPresets) {
+				s.saveConfig()
+			}
+		}, showSub, func() {
+			s.settingBlock(c, "features/指定软件规则", func() {
+				p := colors(c)
+				subContent(c, func() {
 					ui.Text(c, "进入指定程序时应用一次预设；可手动切换；离开后恢复原状态；其他程序和全局状态不受影响；重启后保留规则").
-						FontSize(textSize(c, 13)).LineHeight(1.45).TextColor(p.muted).Wrap()
+						FontSize(textSize(c, 12.5)).LineHeight(1.45).TextColor(p.muted).Wrap()
 					ui.Row(c).Gap(12).Wrap().AlignItems(ui.Center).Children(func() {
 						if len(s.apps) > 0 {
 							options := []string{"手动输入"}
@@ -127,47 +125,48 @@ func (s *settings) appPresetSection(c *ui.Context) {
 						}
 					})
 					if s.presetError != "" {
-						ui.Text(c, s.presetError).FontSize(textSize(c, 13)).TextColor(c.Theme().Danger).Wrap()
+						ui.Text(c, s.presetError).FontSize(textSize(c, 12.5)).TextColor(c.Theme().Danger).Wrap()
 					}
 				})
 			})
-		})
-		s.settingBlock(c, "features/指定软件规则列表", func() {
-			remove := -1
-			change := -1
-			changeMode := ""
-			if len(s.config.AppPresetRules) == 0 {
-				ui.Text(c, "还没有指定软件规则").FontSize(textSize(c, 13)).TextColor(colors(c).muted).Padding(10, 0, 12, 0)
-			}
-			ui.List(c, nil, len(s.config.AppPresetRules), func(i int) {
-				rule := s.config.AppPresetRules[i]
-				mode := rule.Mode
-				item := ui.Row(c).Padding(10, 0).MinHeight(58).Gap(12).AlignItems(ui.Center)
-				if item.Hovered() {
-					item.Background(colors(c).cardHover)
+			s.settingBlock(c, "features/指定软件规则列表", func() {
+				remove := -1
+				change := -1
+				changeMode := ""
+				if len(s.config.AppPresetRules) == 0 {
+					ui.Text(c, "还没有指定软件规则").FontSize(textSize(c, 12.5)).TextColor(colors(c).muted).Padding(10, 0)
+					return
 				}
-				item.Children(func() {
-					ui.Column(c).Grow(1).Basis(0).MinWidth(0).Shrink(1).Gap(3).Children(func() {
-						ui.Text(c, rule.App).FontWeight(500).SingleLine()
-						ui.Text(c, "切入时："+nameOf(presetModes, mode)).FontSize(textSize(c, 13)).TextColor(colors(c).muted).Wrap()
+				ui.List(c, nil, len(s.config.AppPresetRules), func(i int) {
+					rule := s.config.AppPresetRules[i]
+					mode := rule.Mode
+					item := ui.Row(c).Padding(8, 0).MinHeight(50).Gap(12).AlignItems(ui.Center)
+					if item.Hovered() {
+						item.Background(colors(c).cardHover)
+					}
+					item.Children(func() {
+						ui.Column(c).Grow(1).Basis(0).MinWidth(0).Shrink(1).Gap(2).Children(func() {
+							ui.Text(c, rule.App).FontSize(textSize(c, 13.5)).FontWeight(500).SingleLine()
+							ui.Text(c, "切入时："+nameOf(presetModes, mode)).FontSize(textSize(c, 12.5)).TextColor(colors(c).muted).Wrap()
+						})
+						if choose(c, "模式", presetModes, &mode, 130) {
+							change, changeMode = i, mode
+						}
+						if ui.Button(c, "删除").Label("删除 " + rule.App).Clicked() {
+							remove = i
+						}
 					})
-					if choose(c, "模式", presetModes, &mode, 130) {
-						change, changeMode = i, mode
-					}
-					if ui.Button(c, "删除").Label("删除 " + rule.App).Clicked() {
-						remove = i
-					}
 				})
+				if change >= 0 {
+					rules := append([]AppPreset(nil), s.config.AppPresetRules...)
+					rules[change].Mode = changeMode
+					s.savePresetRules(rules)
+				} else if remove >= 0 {
+					rules := append([]AppPreset(nil), s.config.AppPresetRules[:remove]...)
+					rules = append(rules, s.config.AppPresetRules[remove+1:]...)
+					s.savePresetRules(rules)
+				}
 			})
-			if change >= 0 {
-				rules := append([]AppPreset(nil), s.config.AppPresetRules...)
-				rules[change].Mode = changeMode
-				s.savePresetRules(rules)
-			} else if remove >= 0 {
-				rules := append([]AppPreset(nil), s.config.AppPresetRules[:remove]...)
-				rules = append(rules, s.config.AppPresetRules[remove+1:]...)
-				s.savePresetRules(rules)
-			}
 		})
 	})
 }

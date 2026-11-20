@@ -84,12 +84,13 @@ func keyboardHeatColors(c *ui.Context, level int) (ui.Color, ui.Color) {
 		foreground := [5]string{"#b4b4be", "#f6e5f1", "#ffffff", "#18181b", "#18181b"}
 		return ui.Hex(background[level]), ui.Hex(foreground[level])
 	}
-	background := [5]string{"#f3f3f5", "#fae6f6", "#edbee4", "#c777b6", "#963b84"}
-	foreground := [5]string{"#65656f", "#4b2544", "#4b2544", "#271324", "#ffffff"}
+	background := [5]string{"#eceef2", "#fae6f6", "#edbee4", "#c777b6", "#963b84"}
+	foreground := [5]string{"#5a5a64", "#4b2544", "#4b2544", "#271324", "#ffffff"}
 	return ui.Hex(background[level]), ui.Hex(foreground[level])
 }
 
 func statsKeyboard(c *ui.Context, keys map[int]uint64) {
+	p := colors(c)
 	var total, peak uint64
 	var ranked []int
 	for scan, count := range keys {
@@ -105,10 +106,20 @@ func statsKeyboard(c *ui.Context, keys map[int]uint64) {
 		}
 		return cmp.Compare(a, b)
 	})
-	ui.Column(c).FillWidth().Padding(12, 0).Gap(14).Children(func() {
-		ui.Text(c, fmt.Sprintf("共 %d 次按键 · %d 个键位", total, len(ranked))).FontWeight(500)
+	ui.Column(c).FillWidth().Padding(14, 0).Gap(14).Children(func() {
+		ui.Row(c).FillWidth().Justify(ui.SpaceBetween).AlignItems(ui.Center).Wrap().Gap(8).Children(func() {
+			ui.Text(c, fmt.Sprintf("共 %d 次按键 · %d 个键位", total, len(ranked))).FontWeight(500).FontFeatures("tnum")
+			ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "少").FontSize(textSize(c, 12)).TextColor(p.muted)
+				for level := 0; level < 5; level++ {
+					bg, _ := keyboardHeatColors(c, level)
+					ui.Box(c).Size(12, 12).Radius(3).Background(bg)
+				}
+				ui.Text(c, "多").FontSize(textSize(c, 12)).TextColor(p.muted)
+			})
+		})
 		if total == 0 {
-			ui.Text(c, "暂无按键记录").TextColor(colors(c).muted)
+			ui.Text(c, "暂无按键记录").FontSize(textSize(c, 13)).TextColor(p.muted)
 		}
 		drawn := map[int]bool{}
 		viewport := ui.ScrollHorizontal(c).FillWidth()
@@ -123,7 +134,7 @@ func statsKeyboard(c *ui.Context, keys map[int]uint64) {
 			}
 		})
 		viewport.Children(func() {
-			ui.Column(c).Shrink(0).Gap(4*scale).Padding(8*scale).Radius(8*scale).Background(colors(c).subtle).Children(func() {
+			ui.Column(c).Shrink(0).Gap(4*scale).Padding(8*scale).Radius(8*scale).Background(p.subtle).Children(func() {
 				for rowIndex, row := range physicalKeyboard {
 					line := ui.Row(c).Gap(4*scale).Shrink(0)
 					if rowIndex == 0 {
@@ -140,7 +151,7 @@ func statsKeyboard(c *ui.Context, keys map[int]uint64) {
 							count := keys[key.scan]
 							bg, fg := keyboardHeatColors(c, keyboardHeatLevel(count, peak))
 							ui.Column(c).Label("键位："+key.label).Size(width, height).Shrink(0).Center().
-								Background(bg).Border(scale, colors(c).border).Radius(5*scale).
+								Background(bg).Border(scale, p.border).Radius(5*scale).
 								Tooltip(fmt.Sprintf("%s：%d 次", physicalKeyName(key.scan), count)).Children(func() {
 								ui.Text(c, key.label).FontSize(textSize(c, 12)*scale).FontWeight(500).TextColor(fg)
 							})
@@ -149,41 +160,41 @@ func statsKeyboard(c *ui.Context, keys map[int]uint64) {
 				}
 			})
 		})
-		ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "少").FontSize(textSize(c, 12)).TextColor(colors(c).muted)
-			for level := 0; level < 5; level++ {
-				bg, _ := keyboardHeatColors(c, level)
-				ui.Box(c).Size(14, 14).Radius(3).Background(bg)
-			}
-			ui.Text(c, "多；按当前范围最高次数分级").FontSize(textSize(c, 12)).TextColor(colors(c).muted)
-		})
 		var others []int
 		for _, scan := range ranked {
 			if !drawn[scan] {
 				others = append(others, scan)
 			}
 		}
+		keyChip := func(scan int) {
+			ui.Row(c).Gap(8).Padding(6, 10).Radius(controlRadius).Background(p.subtle).AlignItems(ui.Center).Children(func() {
+				bg, _ := keyboardHeatColors(c, keyboardHeatLevel(keys[scan], peak))
+				ui.Box(c).Size(10, 10).Radius(3).Background(bg)
+				ui.Text(c, physicalKeyName(scan)).FontSize(textSize(c, 13)).FontWeight(500)
+				ui.Text(c, fmt.Sprintf("%d 次", keys[scan])).FontSize(textSize(c, 12.5)).TextColor(p.muted).FontFeatures("tnum")
+			})
+		}
 		if len(others) > 0 {
-			ui.Text(c, "其他键").FontWeight(500)
-			ui.Row(c).Wrap().Gap(8).Children(func() {
-				for _, scan := range others {
-					ui.Row(c).Gap(8).Padding(6, 10).Radius(5).Background(colors(c).subtle).Children(func() {
-						bg, _ := keyboardHeatColors(c, keyboardHeatLevel(keys[scan], peak))
-						ui.Box(c).Size(10, 10).Radius(2).Background(bg)
-						ui.Text(c, physicalKeyName(scan))
-						ui.Text(c, fmt.Sprintf("%d 次", keys[scan])).TextColor(colors(c).muted)
-					})
-				}
+			ui.Column(c).FillWidth().Gap(8).Children(func() {
+				ui.Text(c, "其他键").FontSize(textSize(c, 13)).FontWeight(500).TextColor(p.muted)
+				ui.Row(c).Wrap().Gap(8).Children(func() {
+					for _, scan := range others {
+						keyChip(scan)
+					}
+				})
 			})
 		}
 		if len(ranked) > 0 {
-			ui.Text(c, "使用最多的键").FontWeight(500)
-			ui.Row(c).Wrap().Gap(16).Children(func() {
-				for _, scan := range ranked[:min(5, len(ranked))] {
-					ui.Text(c, fmt.Sprintf("%s  %d 次", physicalKeyName(scan), keys[scan])).FontSize(textSize(c, 13))
-				}
+			ui.Column(c).FillWidth().Gap(8).Children(func() {
+				ui.Text(c, "使用最多的键").FontSize(textSize(c, 13)).FontWeight(500).TextColor(p.muted)
+				ui.Row(c).Wrap().Gap(8).Children(func() {
+					for _, scan := range ranked[:min(5, len(ranked))] {
+						keyChip(scan)
+					}
+				})
 			})
 		}
-		ui.Text(c, "仅统计 FreeType 处理的按键；未接管的按键不会计数；窄窗口可横向滚动").FontSize(textSize(c, 12)).TextColor(colors(c).muted).Wrap()
+		ui.Text(c, "仅统计 FreeType 处理的按键；未接管的按键不会计数；按当前范围最高次数分级；窄窗口可横向滚动").
+			FontSize(textSize(c, 12)).TextColor(p.muted).Wrap()
 	})
 }

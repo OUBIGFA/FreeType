@@ -4,15 +4,14 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// 设置窗口采用现代商业软件的分层卡片设计：
-// 1. 同组设置之间用浅色细线分隔，子项保留缩进与微色块；
-// 2. 同级控件共用圆角、字阶和内边距；
+// 设置窗口采用分层卡片设计：
+// 1. 同组一级设置之间用浅色细线分隔，左右与正文对齐；
+// 2. 父项展开后的次级项统一收纳在柔和底色分组内，三级嵌套通过进一步缩进表达从属关系；
 // 3. 只有真正放不下的操作组换行，不缩小文字或截掉操作。
 const (
 	controlRadius float32 = 6
 	panelRadius   float32 = 10
 	rowInset      float32 = 20
-	subInset      float32 = 36
 )
 
 // 显式字号也跟随 Windows 的文字大小；Theme.Rem 已包含系统文字缩放。
@@ -65,24 +64,26 @@ func checkbox(c *ui.Context, checked *bool, label string) ui.Element {
 
 // palette 是界面用的几种颜色，跟随系统浅色 / 深色。
 type palette struct {
-	page, card, cardHover, border, muted, subtle, chosen ui.Color
+	page, card, cardHover, border, subBorder, muted, subtle, chosen ui.Color
 }
 
 func colors(c *ui.Context) palette {
 	if c.Preferences().HighContrast {
 		theme := c.Theme()
 		return palette{page: theme.Background, card: theme.Background, cardHover: theme.SurfaceHover,
-			border: theme.Text, muted: theme.TextMuted, subtle: theme.Background, chosen: theme.SurfacePressed}
+			border: theme.Text, subBorder: theme.Text, muted: theme.TextMuted, subtle: theme.Background, chosen: theme.SurfacePressed}
 	}
 	if c.Theme().Dark {
 		return palette{
 			page: ui.Hex("#161618"), card: ui.Hex("#222225"), cardHover: ui.Hex("#2a2a2e"),
-			border: ui.Hex("#323237"), muted: ui.Hex("#a1a1aa"), subtle: ui.Hex("#1b1b1e"), chosen: ui.Hex("#303036"),
+			border: ui.Hex("#323237"), subBorder: ui.Hex("#2b2b30"),
+			muted: ui.Hex("#a1a1aa"), subtle: ui.Hex("#1b1b1e"), chosen: ui.Hex("#303036"),
 		}
 	}
 	return palette{
 		page: ui.Hex("#f4f4f6"), card: ui.Hex("#ffffff"), cardHover: ui.Hex("#f8f8fa"),
-		border: ui.Hex("#e6e6eb"), muted: ui.Hex("#65656f"), subtle: ui.Hex("#f7f7f9"), chosen: ui.Hex("#e7e7ec"),
+		border: ui.Hex("#e6e6eb"), subBorder: ui.Hex("#e8e8ee"),
+		muted: ui.Hex("#65656f"), subtle: ui.Hex("#f5f6f8"), chosen: ui.Hex("#e7e7ec"),
 	}
 }
 
@@ -169,12 +170,62 @@ func section(c *ui.Context, title string, fn func()) {
 
 // texts 是一行左边的名字和说明。
 func texts(c *ui.Context, title, desc string) ui.Element {
-	return ui.Column(c).Grow(1).Basis(200).MinWidth(160).Shrink(1).Gap(3).Children(func() {
-		ui.Text(c, title).FontWeight(500).LineHeight(1.4).Wrap()
+	return textsWithSize(c, title, desc, 14, 13)
+}
+
+func subTexts(c *ui.Context, title, desc string) ui.Element {
+	return textsWithSize(c, title, desc, 13.5, 12.5)
+}
+
+func textsWithSize(c *ui.Context, title, desc string, titleSize, descSize float32) ui.Element {
+	return ui.Column(c).Grow(1).Basis(200).MinWidth(160).Shrink(1).Gap(2).Children(func() {
+		ui.Text(c, title).FontSize(textSize(c, titleSize)).FontWeight(500).LineHeight(1.4).Wrap()
 		if desc != "" {
-			ui.Text(c, desc).FontSize(textSize(c, 13)).TextColor(colors(c).muted).LineHeight(1.45).Wrap()
+			ui.Text(c, desc).FontSize(textSize(c, descSize)).TextColor(colors(c).muted).LineHeight(1.45).Wrap()
 		}
 	})
+}
+
+// settingGroup 把父级设置项与它的次级项包在同一个区块单元内，
+// 避免 section 的一级分隔线把父项和从属子项切开。
+func settingGroup(c *ui.Context, parent func(), hasSub bool, sub func()) {
+	ui.Column(c).FillWidth().Children(func() {
+		parent()
+		if hasSub && sub != nil {
+			subGroup(c, sub)
+		}
+	})
+}
+
+// subGroup 用统一柔和底色与缩进承接父级开关展开后的所有二级项，
+// 子项之间仅使用浅色细线分隔，不加侧边强调条，也不把每个子项画成孤立小卡片。
+func subGroup(c *ui.Context, fn func()) {
+	p := colors(c)
+	border := p.subBorder
+	if c.Preferences().HighContrast {
+		border = p.border
+	}
+	ui.Column(c).FillWidth().Padding(0, 0, 12, 0).Children(func() {
+		ui.Column(c).FillWidth().Padding(4, 14, 4, 16).Radius(controlRadius).Background(p.subtle).
+			Border(1, border).Clip().Children(func() {
+			ui.Column(c).FillWidth().Gap(1).Dividers(1, p.subBorder).Children(fn)
+		})
+	})
+}
+
+// nestedSubGroup 在二级分组内部呈现第三级从属关系：只用更深的左侧缩进与顶部细线，不加侧边条，也不叠加嵌套卡片。
+func nestedSubGroup(c *ui.Context, fn func()) {
+	p := colors(c)
+	ui.Column(c).FillWidth().Padding(0, 0, 6, 20).Children(func() {
+		ui.Column(c).FillWidth().Padding(2, 0, 0, 0).BorderWidth(1, 0, 0, 0).BorderColor(p.subBorder).Children(func() {
+			ui.Column(c).FillWidth().Gap(1).Dividers(1, p.subBorder).Children(fn)
+		})
+	})
+}
+
+// subContent 用于次级分组内的表单、勾选网格等非单行内容，保持统一上下留白。
+func subContent(c *ui.Context, fn func()) {
+	ui.Column(c).FillWidth().Padding(10, 0).Gap(12).Children(fn)
 }
 
 // row 是卡片里的一行：左边名字和说明，右边 control 画的控件。
@@ -187,16 +238,13 @@ func row(c *ui.Context, title, desc string, control func()) {
 	})
 }
 
-// subRow 是开关打开后出现在下面、缩进一级的一行，以柔和内嵌微色块呈现从属关系。
+// subRow 是次级分组里的一行：行高和字阶略轻于一级设置项，不重复套独立卡片。
 func subRow(c *ui.Context, title, desc string, control func()) {
-	ui.Column(c).FillWidth().Padding(2, 0).Children(func() {
-		ui.Row(c).FillWidth().Padding(10, 8, 10, subInset-rowInset).Radius(controlRadius).Gap(16).Wrap().MinHeight(54).
-			AlignItems(ui.Center).Background(colors(c).subtle).Children(func() {
-			texts(c, title, desc)
-			if control != nil {
-				ui.Row(c).Gap(8).Wrap().AlignItems(ui.Center).MinWidth(0).MaxWidthPercent(100).Shrink(1).Children(control)
-			}
-		})
+	ui.Row(c).FillWidth().Padding(8, 0).Gap(16).Wrap().MinHeight(46).AlignItems(ui.Center).Children(func() {
+		subTexts(c, title, desc)
+		if control != nil {
+			ui.Row(c).Gap(8).Wrap().AlignItems(ui.Center).MinWidth(0).MaxWidthPercent(100).Shrink(1).Children(control)
+		}
 	})
 }
 
@@ -207,9 +255,9 @@ func switchRow(c *ui.Context, title, desc string, value *bool) bool {
 
 func switchLine(c *ui.Context, title, desc string, value *bool, sub bool) bool {
 	changed := false
-	build := func(line ui.Element) {
+	build := func(line ui.Element, labelFn func(*ui.Context, string, string) ui.Element) {
 		line.Children(func() {
-			left := texts(c, title, desc).Cursor(ui.CursorPointer)
+			left := labelFn(c, title, desc).Cursor(ui.CursorPointer)
 			if left.Clicked() {
 				*value = !*value
 				changed = true
@@ -227,13 +275,10 @@ func switchLine(c *ui.Context, title, desc string, value *bool, sub bool) bool {
 		})
 	}
 	if sub {
-		ui.Column(c).FillWidth().Padding(2, 0).Children(func() {
-			build(ui.Row(c).FillWidth().Padding(10, 8, 10, subInset-rowInset).Radius(controlRadius).
-				Gap(16).Wrap().AlignItems(ui.Center).MinHeight(54).Background(colors(c).subtle))
-		})
+		build(ui.Row(c).FillWidth().Padding(8, 0).Gap(16).Wrap().AlignItems(ui.Center).MinHeight(46), subTexts)
 		return changed
 	}
-	build(ui.Row(c).FillWidth().Padding(11, 0).Gap(16).Wrap().AlignItems(ui.Center).MinHeight(58))
+	build(ui.Row(c).FillWidth().Padding(11, 0).Gap(16).Wrap().AlignItems(ui.Center).MinHeight(58), texts)
 	return changed
 }
 

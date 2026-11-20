@@ -223,24 +223,39 @@ func (s *settings) generalPage(c *ui.Context) {
 		s.settingRow(c, "general/切换键", func() {
 			changed = choose(c, "切换键", shiftToggles, &s.config.ShiftToggle, 200) || changed
 		})
-		s.settingRow(c, "general/默认状态", func() {
-			changed = choose(c, "默认状态", modes, &s.config.DefaultMode, 200) || changed
-		})
-		if s.config.DefaultMode != "global" || s.showSetting("general/中英文状态") {
-			s.settingRow(c, "general/中英文状态", func() {
+		settingGroup(c, func() {
+			s.settingRow(c, "general/默认状态", func() {
+				changed = choose(c, "默认状态", modes, &s.config.DefaultMode, 200) || changed
+			})
+		}, s.config.DefaultMode != "global" || s.showSetting("general/中英文状态"), func() {
+			s.settingSubRow(c, "general/中英文状态", func() {
 				changed = choose(c, "中英文状态", modeScopes, &s.config.ModeScope, 200) || changed
 			})
-		}
+		})
 	})
 	section(c, "状态提示", func() {
 		changed = s.settingSwitch(c, "general/显示托盘图标", false, &s.config.TrayIcon) || changed
-		changed = s.settingSwitch(c, "general/悬浮状态栏", false, &s.config.StatusBar) || changed
-		if s.config.StatusBar || s.showSetting("general/自动隐藏") {
-			changed = s.settingSwitch(c, "general/自动隐藏", true, &s.config.StatusBarAutohide) || changed
-		}
-		if s.config.StatusBar {
-			changed = s.statusBarAppearance(c) || changed
-		}
+		settingGroup(c, func() {
+			changed = s.settingSwitch(c, "general/悬浮状态栏", false, &s.config.StatusBar) || changed
+		}, s.config.StatusBar || s.showSetting("general/自动隐藏"), func() {
+			ui.Column(c).FillWidth().Children(func() {
+				changed = s.settingSwitch(c, "general/自动隐藏", true, &s.config.StatusBarAutohide) || changed
+				if s.config.StatusBar && s.config.StatusBarAutohide {
+					nestedSubGroup(c, func() {
+						subRow(c, "自动隐藏延时 / 秒", "", func() {
+							value := float64(s.config.BarHideSeconds)
+							if ui.NumberInput(c, &value, 1, 60, 1).Label("自动隐藏延时 / 秒").Width(120).Changed() {
+								s.config.BarHideSeconds = int(value)
+								changed = true
+							}
+						})
+					})
+				}
+			})
+			if s.config.StatusBar {
+				changed = s.statusBarAppearance(c) || changed
+			}
+		})
 		changed = s.settingSwitch(c, "general/切换状态时提示", false, &s.config.HintOnToggle) || changed
 		changed = s.settingSwitch(c, "general/切换输入框时提示", false, &s.config.HintOnFocus) || changed
 		s.settingRow(c, "general/提示位置", func() {
@@ -258,11 +273,8 @@ func (s *settings) statusBarAppearance(c *ui.Context) (changed bool) {
 		value     *int
 		low, high float64
 	}{
-		{"缩放比例 / 百分比", &s.config.BarScale, 75, 150}, {"图标字号", &s.config.BarIconSize, 12, 23}, {"自动隐藏延时 / 秒", &s.config.BarHideSeconds, 1, 60},
+		{"缩放比例 / 百分比", &s.config.BarScale, 75, 150}, {"图标字号", &s.config.BarIconSize, 12, 23},
 	} {
-		if field.title == "自动隐藏延时 / 秒" && !s.config.StatusBarAutohide {
-			continue
-		}
 		subRow(c, field.title, "", func() {
 			value := float64(*field.value)
 			if ui.NumberInput(c, &value, field.low, field.high, 1).Label(field.title).Width(120).Changed() {
@@ -495,18 +507,20 @@ func (s *settings) typingPage(c *ui.Context) {
 	}
 	changed := false
 	section(c, "拼音", func() {
-		changed = s.settingSwitch(c, "typing/双拼", false, &s.config.Shuangpin) || changed
-		if s.config.Shuangpin || s.showSetting("typing/双拼方案") || s.showSetting("typing/双拼展示键位") {
+		settingGroup(c, func() {
+			changed = s.settingSwitch(c, "typing/双拼", false, &s.config.Shuangpin) || changed
+		}, s.config.Shuangpin || s.showSetting("typing/双拼方案") || s.showSetting("typing/双拼展示键位"), func() {
 			s.settingSubRow(c, "typing/双拼方案", func() {
 				changed = choose(c, "双拼方案", schemes, &s.config.ShuangpinScheme, 180) || changed
 			})
 			changed = s.settingSwitch(c, "typing/双拼展示键位", true, &s.config.ShuangpinShowKeys) || changed
-		}
-		changed = s.settingSwitch(c, "typing/模糊音", false, &s.config.Fuzzy) || changed
-		if s.config.Fuzzy || s.showSetting("typing/模糊音分组") {
+		})
+		settingGroup(c, func() {
+			changed = s.settingSwitch(c, "typing/模糊音", false, &s.config.Fuzzy) || changed
+		}, s.config.Fuzzy || s.showSetting("typing/模糊音分组"), func() {
 			s.settingBlock(c, "typing/模糊音分组", func() {
-				ui.Column(c).FillWidth().Padding(2, 12, 6, 12).Children(func() {
-					ui.Row(c).FillWidth().Wrap().GapX(16).GapY(12).Padding(12, rowInset-12, 12, subInset-12).Radius(controlRadius).Background(colors(c).subtle).Children(func() {
+				subContent(c, func() {
+					ui.Row(c).FillWidth().Wrap().GapX(16).GapY(12).Children(func() {
 						for _, rule := range fuzzyRules {
 							on := s.config.FuzzyGroups&rule.Bit != 0
 							if checkbox(c, &on, rule.Label).Width(120).Changed() {
@@ -521,10 +535,11 @@ func (s *settings) typingPage(c *ui.Context) {
 					})
 				})
 			})
-		}
-		changed = s.settingSwitch(c, "typing/按错键纠错", false, &s.config.TypoCorrection) || changed
-		if s.config.TypoCorrection || s.showSetting("typing/纠错类型") {
-			s.settingRow(c, "typing/纠错类型", func() {
+		})
+		settingGroup(c, func() {
+			changed = s.settingSwitch(c, "typing/按错键纠错", false, &s.config.TypoCorrection) || changed
+		}, s.config.TypoCorrection || s.showSetting("typing/纠错类型") || s.showSetting("typing/纠错标记"), func() {
+			s.settingSubRow(c, "typing/纠错类型", func() {
 				ui.Row(c).Wrap().GapX(14).GapY(8).Children(func() {
 					for index, label := range []string{"乱序", "邻键", "漏字", "多字"} {
 						bit := 1 << index
@@ -536,10 +551,8 @@ func (s *settings) typingPage(c *ui.Context) {
 					}
 				})
 			})
-		}
-		if s.config.TypoCorrection || s.showSetting("typing/纠错标记") {
 			changed = s.settingSwitch(c, "typing/纠错标记", true, &s.config.TypoMark) || changed
-		}
+		})
 		changed = s.settingSwitch(c, "typing/显示更多生僻字", false, &s.config.RareChars) || changed
 	})
 	section(c, "选词与翻页", func() {
@@ -568,45 +581,55 @@ func (s *settings) typingPage(c *ui.Context) {
 		changed = s.settingSwitch(c, "typing/以词定字", false, &s.config.PickChar) || changed
 	})
 	section(c, "标点", func() {
-		changed = s.settingSwitch(c, "typing/中文标点", false, &s.config.FullwidthPunct) || changed
 		showDigitHalf := s.showSetting("typing/数字标点保持半角")
 		showDigitExcept := s.showSetting("typing/数字后例外保持全角")
 		showDigitSymbols := s.showSetting("typing/数字后保持全角的标点")
-		if s.config.FullwidthPunct || showDigitHalf || showDigitExcept || showDigitSymbols {
-			changed = s.settingSwitch(c, "typing/数字标点保持半角", true, &s.config.DigitHalfwidthPunct) || changed
-			if (s.config.FullwidthPunct && s.config.DigitHalfwidthPunct) || showDigitExcept || showDigitSymbols {
-				changed = s.settingSwitch(c, "typing/数字后例外保持全角", true, &s.config.DigitPunctExceptions) || changed
-				if (s.config.FullwidthPunct && s.config.DigitHalfwidthPunct && s.config.DigitPunctExceptions) || showDigitSymbols {
-					s.settingBlock(c, "typing/数字后保持全角的标点", func() {
-						ui.Column(c).FillWidth().Padding(2, 12, 6, 12).Children(func() {
-							ui.Row(c).FillWidth().Wrap().GapX(16).GapY(12).Padding(12, rowInset-12, 12, subInset-12).Radius(controlRadius).Background(colors(c).subtle).Children(func() {
-								for _, rule := range digitPunctRules {
-									on := s.config.DigitPunctFullwidth&rule.Bit != 0
-									if checkbox(c, &on, rule.Label).Width(max(132, textSize(c, 132))).Changed() {
-										if on {
-											s.config.DigitPunctFullwidth |= rule.Bit
-										} else {
-											s.config.DigitPunctFullwidth &^= rule.Bit
-										}
-										changed = true
-									}
-								}
-							})
+		settingGroup(c, func() {
+			changed = s.settingSwitch(c, "typing/中文标点", false, &s.config.FullwidthPunct) || changed
+		}, s.config.FullwidthPunct || showDigitHalf || showDigitExcept || showDigitSymbols, func() {
+			ui.Column(c).FillWidth().Children(func() {
+				changed = s.settingSwitch(c, "typing/数字标点保持半角", true, &s.config.DigitHalfwidthPunct) || changed
+				if (s.config.FullwidthPunct && s.config.DigitHalfwidthPunct) || showDigitExcept || showDigitSymbols {
+					nestedSubGroup(c, func() {
+						ui.Column(c).FillWidth().Children(func() {
+							changed = s.settingSwitch(c, "typing/数字后例外保持全角", true, &s.config.DigitPunctExceptions) || changed
+							if (s.config.FullwidthPunct && s.config.DigitHalfwidthPunct && s.config.DigitPunctExceptions) || showDigitSymbols {
+								nestedSubGroup(c, func() {
+									s.settingBlock(c, "typing/数字后保持全角的标点", func() {
+										subContent(c, func() {
+											ui.Row(c).FillWidth().Wrap().GapX(16).GapY(12).Children(func() {
+												for _, rule := range digitPunctRules {
+													on := s.config.DigitPunctFullwidth&rule.Bit != 0
+													if checkbox(c, &on, rule.Label).Width(max(132, textSize(c, 132))).Changed() {
+														if on {
+															s.config.DigitPunctFullwidth |= rule.Bit
+														} else {
+															s.config.DigitPunctFullwidth &^= rule.Bit
+														}
+														changed = true
+													}
+												}
+											})
+										})
+									})
+								})
+							}
 						})
 					})
 				}
-			}
-		}
+			})
+		})
 		changed = s.settingSwitch(c, "typing/双引号改用直角引号", false, &s.config.CornerQuotes) || changed
 		changed = s.settingSwitch(c, "typing/成对标点自动补全", false, &s.config.AutoPair) || changed
 		changed = s.settingSwitch(c, "typing/小键盘的点输入「.」", false, &s.config.NumpadDot) || changed
 	})
 	section(c, "中英文混排", func() {
-		changed = s.settingSwitch(c, "typing/中英文之间自动加空格", false, &s.config.Autospace) || changed
-		if s.config.Autospace || s.showSetting("typing/汉字和字母之间") || s.showSetting("typing/汉字和数字之间") {
+		settingGroup(c, func() {
+			changed = s.settingSwitch(c, "typing/中英文之间自动加空格", false, &s.config.Autospace) || changed
+		}, s.config.Autospace || s.showSetting("typing/汉字和字母之间") || s.showSetting("typing/汉字和数字之间"), func() {
 			changed = s.settingSwitch(c, "typing/汉字和字母之间", true, &s.config.AutospaceLetters) || changed
 			changed = s.settingSwitch(c, "typing/汉字和数字之间", true, &s.config.AutospaceDigits) || changed
-		}
+		})
 	})
 	if changed {
 		s.saveConfig()
@@ -621,14 +644,15 @@ func (s *settings) featuresPage(c *ui.Context) {
 	changed := false
 	section(c, "工具栏与表情", func() {
 		changed = s.settingSwitch(c, "features/v + 空格打开工具栏", false, &s.config.Toolbar) || changed
-		changed = s.settingSwitch(c, "features/记录剪贴板历史", false, &s.config.ClipboardHistory) || changed
-		if s.config.ClipboardHistory || s.showSetting("features/清空剪贴板历史") {
+		settingGroup(c, func() {
+			changed = s.settingSwitch(c, "features/记录剪贴板历史", false, &s.config.ClipboardHistory) || changed
+		}, s.config.ClipboardHistory || s.showSetting("features/清空剪贴板历史"), func() {
 			s.settingSubRow(c, "features/清空剪贴板历史", func() {
 				if ui.Button(c, "清空").Clicked() {
 					s.clearClipboard()
 				}
 			})
-		}
+		})
 		changed = s.settingSwitch(c, "features/推荐 emoji", false, &s.config.EmojiSuggest) || changed
 	})
 	section(c, "智能输入", func() {
@@ -641,17 +665,20 @@ func (s *settings) featuresPage(c *ui.Context) {
 		changed = s.settingSwitch(c, "features/输出繁体", false, &s.config.Traditional) || changed
 	})
 	section(c, "联想", func() {
-		changed = s.settingSwitch(c, "features/上屏联想", false, &s.config.PredictNext) || changed
-		if s.config.PredictNext || s.showSetting("features/数字键选联想词") || s.showSetting("features/空格选联想词") || s.showSetting("features/左右方向键选联想词") || s.showSetting("features/双击空格键选词") {
+		settingGroup(c, func() {
+			changed = s.settingSwitch(c, "features/上屏联想", false, &s.config.PredictNext) || changed
+		}, s.config.PredictNext || s.showSetting("features/数字键选联想词") || s.showSetting("features/空格选联想词") || s.showSetting("features/左右方向键选联想词") || s.showSetting("features/双击空格键选词"), func() {
 			changed = s.settingSwitch(c, "features/数字键选联想词", true, &s.config.PredictDigits) || changed
-			changed = s.settingSwitch(c, "features/空格选联想词", true, &s.config.PredictSpace) || changed
-			if s.config.PredictSpace || s.showSetting("features/双击空格键选词") {
-				ui.Column(c).FillWidth().Padding(0, 0, 0, 20).Children(func() {
-					changed = s.settingSwitch(c, "features/双击空格键选词", true, &s.config.PredictDoubleSpace) || changed
-				})
-			}
+			ui.Column(c).FillWidth().Children(func() {
+				changed = s.settingSwitch(c, "features/空格选联想词", true, &s.config.PredictSpace) || changed
+				if s.config.PredictSpace || s.showSetting("features/双击空格键选词") {
+					nestedSubGroup(c, func() {
+						changed = s.settingSwitch(c, "features/双击空格键选词", true, &s.config.PredictDoubleSpace) || changed
+					})
+				}
+			})
 			changed = s.settingSwitch(c, "features/左右方向键选联想词", true, &s.config.PredictArrows) || changed
-		}
+		})
 	})
 	if s.config.PredictNext {
 		hint(c, "联想词来自内置语言模型和学习记录；常用搭配优先显示；搭配记录随学习备份导入导出")

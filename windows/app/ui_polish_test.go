@@ -71,6 +71,23 @@ func TestSettingsRowsShareInsetsAndTitleAlignment(test *testing.T) {
 	}
 }
 
+func TestSettingsSubLevelsIndentProgressively(test *testing.T) {
+	state, _ := newTestSettings()
+	state.page = "features"
+	state.config.PredictNext, state.config.PredictSpace = true, true
+	view := ui.NewTester(state.view, 1000, 1400)
+	view.Frame()
+	parent, ok1 := view.Find("上屏联想")
+	child, ok2 := view.Find("空格选联想词")
+	grandchild, ok3 := view.Find("双击空格键选词")
+	if !ok1 || !ok2 || !ok3 {
+		test.Fatalf("联想层级设置项缺失：parent=%v child=%v grandchild=%v", ok1, ok2, ok3)
+	}
+	if !(parent.X < child.X && child.X < grandchild.X) {
+		test.Fatalf("一、二、三级设置标题应逐级缩进：parent=%.1f child=%.1f grandchild=%.1f", parent.X, child.X, grandchild.X)
+	}
+}
+
 func TestCandidateSelectionPaletteMatchesStylesInEveryAppearance(test *testing.T) {
 	for _, dark := range []bool{false, true} {
 		theme := ui.LightTheme()
