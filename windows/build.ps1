@@ -183,6 +183,12 @@ if ($Version -ne '0.0.1') {
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Destination) | Out-Null
         Copy-Item -LiteralPath (Join-Path $Root $Tracked) -Destination $Destination
     }
+    # Production view tests read the brand originals relative to the isolated app.
+    $TestAssets = Join-Path $Scratch 'assets'
+    New-Item -ItemType Directory -Force -Path $TestAssets | Out-Null
+    foreach ($Asset in 'freetype-logo.png', 'freetype-white-logo.png') {
+        Copy-Item -LiteralPath (Join-Path $Root "windows/assets/$Asset") -Destination (Join-Path $TestAssets $Asset)
+    }
     $ConfigPath = Join-Path $AppDir 'mygo.json'
     $Config = Get-Content -Raw -Encoding UTF8 $ConfigPath | ConvertFrom-Json
     $Config.version = $Version

@@ -122,7 +122,7 @@ fn cleanup(host: &Host) {
 }
 
 #[test]
-fn long_word_completion_marks_commits_and_persists_its_switch() {
+fn long_word_completion_shows_plain_candidates_commits_and_persists_its_switch() {
     let mut host = host("long-completion");
     host.install_engine(Ok(Engine::new(
         std::sync::Arc::new(wowtype_core::MemoryLexicon::from_tsv_str(
@@ -132,7 +132,7 @@ fn long_word_completion_marks_commits_and_persists_its_switch() {
     let frame = typing(&mut host, "zhonghuarenmin");
     assert_eq!(frame.candidates[0], "中华人民");
     assert_eq!(frame.candidates[1], "中华人民共和国");
-    assert_eq!(frame.badges[1], "补全");
+    assert!(frame.badges.is_empty(), "补全候选应和普通候选一样显示，不附加标记");
     assert!(frame.pin_slots[1].is_none());
     assert_eq!(press(&mut host, '2' as u32).commit.as_deref(), Some("中华人民共和国"));
     configure(&mut host, |config| config.long_word_completion = false);

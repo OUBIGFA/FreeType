@@ -74,7 +74,7 @@ class InputPerformanceTests(ServerFixture, unittest.TestCase):
                 frame = self.call(connection, "key", key={"keysym": ord(char), "modifiers": 0, "test": False})["frame"]
                 self.assertLess(time.perf_counter() - started, 1.0, "Completion approached the TSF 1.5-second timeout")
             self.assertEqual(frame["candidates"][1], expected)
-            self.assertEqual(frame["badges"][1], "补全")
+            self.assertFalse(frame["badges"][1] if frame["badges"] else "", "Completed words must display without a badge")
             commit = self.call(connection, "key", key={"keysym": ord("2"), "modifiers": 0, "test": False})["frame"]
             self.assertEqual(commit["commit"], expected)
         counters = subprocess.check_output(["powershell", "-NoProfile", "-Command",

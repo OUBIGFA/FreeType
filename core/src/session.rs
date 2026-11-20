@@ -376,7 +376,7 @@ pub struct Candidate {
     pub kind: CandidateKind,
     /// 纠错标志只供外壳显示，不参与上屏。
     pub corrected: bool,
-    /// 长词补全只用于提示，实际提交与学习使用完整词和完整读音。
+    /// 长词补全来源；上屏与学习使用完整词和完整读音，不作为显示标记。
     pub long_completion: bool,
     pub pin_key: Option<String>,
     pub pin_position: u8,

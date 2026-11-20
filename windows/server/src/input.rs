@@ -365,10 +365,9 @@ impl ClientState {
             let pin_badge = match env.config.pin_badge.as_str() {
                 "paperclip" => "📎", "pushpin" => "📌", "dot" => "•", _ => "",
             };
-            if env.config.typo_mark || !pin_badge.is_empty() || shown.iter().any(|c| c.long_completion) {
+            if env.config.typo_mark || !pin_badge.is_empty() {
                 out.frame.badges = shown.iter().map(|c| {
                     if c.pin_position > 0 { pin_badge.into() }
-                    else if c.long_completion { "补全".into() }
                     else if env.config.typo_mark && c.corrected { "*".into() }
                     else { String::new() }
                 }).collect();
