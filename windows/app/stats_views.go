@@ -111,7 +111,8 @@ func (s *settings) statsPage(c *ui.Context) {
 
 func (s *settings) statsOverview(c *ui.Context, m typingMetrics) {
 	section(c, "概览", func() {
-		ui.Grid(c).Columns(3).GapX(24).GapY(16).Padding(14, 0).Children(func() {
+		// 按各列内容定宽，把剩余宽度分给列间距，避免短列后面留下大片空白。
+		ui.Grid(c).FillWidth().ColumnTracks(ui.FitContent(), ui.FitContent(), ui.FitContent()).Justify(ui.SpaceBetween).GapX(24).GapY(16).Padding(14, 0).Children(func() {
 			best := ""
 			if m.bestDay != "" {
 				best = fmt.Sprintf("单日最多 %d 字符 · %s", m.bestChars, m.bestDay)

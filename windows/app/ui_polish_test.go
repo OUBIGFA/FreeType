@@ -80,17 +80,19 @@ func TestCandidateSelectionPaletteMatchesStylesInEveryAppearance(test *testing.T
 		for _, id := range []string{"pink", "blue", "green", "sogou"} {
 			style := candidateStyle(id, dark)
 			if id == "green" {
-				// 微信绿按指定外观保留绿底白字，单独核对；其他样式继续检查文字对比度。
-				if !style.block || style.fill != ui.Hex("#03dd6d") || style.text != ui.Hex("#ffffff") {
-					test.Errorf("dark=%v：微信绿预览必须使用 #03DD6D 绿底白字，得到 %+v", dark, style)
+				if !style.block || style.fill != ui.Hex("#03d468") || style.text != ui.Hex("#ffffff") {
+					test.Errorf("dark=%v：微信绿预览必须使用 #03D468 绿底白字，得到 %+v", dark, style)
 				}
-				continue
 			}
 			background := theme.Background
 			if style.block {
 				background = style.fill
 			}
 			minimum := 4.5
+			if id == "green" {
+				// 保留鲜亮绿底白字，同时防止对比度退回原先较浅的绿色。
+				minimum = 1.95
+			}
 			if contrast := colorContrast(style.text, background); contrast < minimum {
 				test.Errorf("%s dark=%v：候选文字对比度 %.2f:1，需至少 %.1f:1", id, dark, contrast, minimum)
 			}

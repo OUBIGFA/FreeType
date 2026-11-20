@@ -2,11 +2,64 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
 	"github.com/egoist/mygo/ui"
 )
+
+func TestStatsOverviewSpreadsColumnsToEqualSideInsets(t *testing.T) {
+	s, _ := newTestSettings()
+	m := typingMetrics{todayChars: 167, totalChars: 227, todayActive: 120000, totalActive: 180000, streak: 2, longestStreak: 2}
+	view := ui.NewTester(func(c *ui.Context) { s.statsOverview(c, m) }, 708, 300)
+	for _, width := range []int{708, 860, 708} {
+		view.SetSize(width, 300)
+		first, firstOK := view.Find("今日输入")
+		last, lastOK := view.Find("2 分钟")
+		if !firstOK || !lastOK {
+			t.Fatal("Overview must retain its first and last columns")
+		}
+		left, right := first.X, float32(width)-last.X-last.W
+		if math.Abs(float64(left-right)) > 2 {
+			t.Errorf("Overview columns leave unequal margins at width %d: left=%.1f right=%.1f", width, left, right)
+		}
+	}
+}
+
+func TestPhysicalKeyboardFillsWidthWithoutChangingKeyProportions(t *testing.T) {
+	view := ui.NewTester(func(c *ui.Context) { statsKeyboard(c, nil) }, 688, 700)
+	for _, width := range []int{688, 820, 688} {
+		view.SetSize(width, 700)
+		first, firstOK := view.Find("键位：Esc")
+		last, lastOK := view.Find("键位：Backspace")
+		letter, letterOK := view.Find("键位：A")
+		if !firstOK || !lastOK || !letterOK {
+			t.Fatal("Keyboard must retain its outside keys and letter keys")
+		}
+		left, right := first.X, float32(width)-last.X-last.W
+		if math.Abs(float64(left-right)) > 2 {
+			t.Errorf("Keyboard leaves unequal margins after resizing to %d: left=%.1f right=%.1f", width, left, right)
+		}
+		// The original 36-by-38 letter key must grow in both dimensions together.
+		if letter.W <= 36 || letter.H <= 38 || math.Abs(float64(letter.W/letter.H-36.0/38.0)) > .01 {
+			t.Errorf("Keyboard must grow uniformly at width %d: %+v", width, letter)
+		}
+		if view.FramePending() {
+			t.Fatal("Keyboard resize must settle without requesting frames continuously")
+		}
+	}
+	view.SetSize(448, 700)
+	letter, _ := view.Find("键位：A")
+	if letter.W != 36 || letter.H != 38 {
+		t.Fatalf("Narrow windows must keep the original readable key size: %+v", letter)
+	}
+	view.Scroll(220, letter.Y+letter.H/2, 10000, 0)
+	last, ok := view.Find("键位：F12")
+	if !ok || last.X < 0 || last.X+last.W > 448 {
+		t.Fatalf("Narrow keyboard must scroll to the final key: %+v", last)
+	}
+}
 
 func TestPhysicalKeyboardKeepsLongKeysAndExtendedKeyCounts(t *testing.T) {
 	keys := map[int]uint64{0x1e: 12, 0x39: 80, 0x0e: 4, 0x1c: 7, 0x11c: 3, 0x14b: 2}

@@ -111,16 +111,27 @@ func statsKeyboard(c *ui.Context, keys map[int]uint64) {
 			ui.Text(c, "暂无按键记录").TextColor(colors(c).muted)
 		}
 		drawn := map[int]bool{}
-		ui.ScrollHorizontal(c).FillWidth().Children(func() {
-			ui.Column(c).Shrink(0).Gap(4).Padding(8).Radius(8).Background(colors(c).subtle).Children(func() {
+		viewport := ui.ScrollHorizontal(c).FillWidth()
+		available := viewport.Bounds().W
+		// 六行均为 15 个单位；按可用宽度同时放大键帽、字和间隔。
+		// 窄窗口保留原尺寸及横向滚动，不压扁键帽或缩小文字。
+		scale := max(float32(1), available/(15*textSize(c, 40)-4+16))
+		viewport.Draw(func(_ *ui.Painter, bounds ui.Rect) {
+			// Bounds 是上一帧的尺寸；首次布局或窗口缩放后补一帧取得新宽度。
+			if bounds.W != available {
+				c.Invalidate()
+			}
+		})
+		viewport.Children(func() {
+			ui.Column(c).Shrink(0).Gap(4*scale).Padding(8*scale).Radius(8*scale).Background(colors(c).subtle).Children(func() {
 				for rowIndex, row := range physicalKeyboard {
-					line := ui.Row(c).Gap(4).Shrink(0)
+					line := ui.Row(c).Gap(4*scale).Shrink(0)
 					if rowIndex == 0 {
-						line.Margin(0, 0, 6, 0)
+						line.Margin(0, 0, 6*scale, 0)
 					}
 					line.Children(func() {
 						for _, key := range row {
-							width, height := key.units*textSize(c, 40)-4, textSize(c, 38)
+							width, height := (key.units*textSize(c, 40)-4)*scale, textSize(c, 38)*scale
 							if key.scan == 0 {
 								ui.Box(c).Size(width, height)
 								continue
@@ -129,9 +140,9 @@ func statsKeyboard(c *ui.Context, keys map[int]uint64) {
 							count := keys[key.scan]
 							bg, fg := keyboardHeatColors(c, keyboardHeatLevel(count, peak))
 							ui.Column(c).Label("键位："+key.label).Size(width, height).Shrink(0).Center().
-								Background(bg).Border(1, colors(c).border).Radius(5).
+								Background(bg).Border(scale, colors(c).border).Radius(5*scale).
 								Tooltip(fmt.Sprintf("%s：%d 次", physicalKeyName(key.scan), count)).Children(func() {
-								ui.Text(c, key.label).FontSize(textSize(c, 12)).FontWeight(500).TextColor(fg)
+								ui.Text(c, key.label).FontSize(textSize(c, 12)*scale).FontWeight(500).TextColor(fg)
 							})
 						}
 					})

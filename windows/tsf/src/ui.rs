@@ -158,7 +158,7 @@ fn theme(style: &str) -> Theme {
 // 显式接收外观，便于在不修改用户系统主题的情况下验证两套候选文字颜色。
 fn theme_for_appearance(style: &str, light: bool) -> Theme {
     let white = rgb(0xff, 0xff, 0xff);
-    let wechat_green = rgb(0x03, 0xdd, 0x6d);
+    let wechat_green = rgb(0x03, 0xd4, 0x68);
     // (底色块, 块上的字, 提示字色)
     let (accent, accent_text, emphasis) = match (style, light) {
         // 以前的蓝色

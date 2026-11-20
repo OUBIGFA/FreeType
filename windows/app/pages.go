@@ -405,8 +405,8 @@ func candidateStyle(id string, dark bool) selectedLook {
 		}
 		return selectedLook{true, ui.Hex("#2b6ce6"), ui.Hex("#ffffff")}
 	case "green":
-		// 微信绿在浅色与深色外观中都保留绿底白字。
-		return selectedLook{true, ui.Hex("#03dd6d"), ui.Hex("#ffffff")}
+		// 微信绿略微加深，让浅色与深色外观中的白字更清楚。
+		return selectedLook{true, ui.Hex("#03d468"), ui.Hex("#ffffff")}
 	case "sogou":
 		if dark {
 			return selectedLook{false, ui.Color{}, ui.Hex("#6c9eff")}

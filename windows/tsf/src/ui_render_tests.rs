@@ -27,7 +27,7 @@ fn candidate_text_palette_matches_styles_in_both_appearances() {
         for style in ["pink", "blue", "green", "sogou"] {
             let palette = theme_for_appearance(style, light);
             if style == "green" {
-                assert_eq!(palette.accent, Some(rgb(0x03, 0xdd, 0x6d)));
+                assert_eq!(palette.accent, Some(rgb(0x03, 0xd4, 0x68)));
                 assert_eq!(palette.accent_text, rgb(0xff, 0xff, 0xff));
             }
             for (name, text, background) in [
@@ -36,11 +36,8 @@ fn candidate_text_palette_matches_styles_in_both_appearances() {
                 ("text", palette.text, palette.background),
             ] {
                 let ratio = contrast(text, background);
-                // 微信绿按指定外观保留绿底白字；其余文字继续检查对比度。
-                if style == "green" && name == "selected" {
-                    continue;
-                }
-                let minimum = 4.5;
+                // 保留鲜亮绿底白字，同时防止对比度退回原先较浅的绿色。
+                let minimum = if style == "green" && name == "selected" { 1.95 } else { 4.5 };
                 assert!(ratio >= minimum, "{style} light={light} {name}: {ratio:.2}:1");
             }
         }

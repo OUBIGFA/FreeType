@@ -237,8 +237,8 @@
       "reason": "README 候选窗样式预览；来自 FreeType 生产界面渲染",
       "source": "FreeType Windows 生产视图（2026-11-20，mygo v0.10.0）",
       "license": "FreeType 项目文档截图，随项目使用",
-      "bytes": 19575,
-      "sha256": "9fc003c19f4ec994089eb185c62a5d4993b3b817e4935ca0725706f133de6e9e"
+      "bytes": 19562,
+      "sha256": "8df8d40bab9ae7f381233c15365616fb7be8d333af42713608e81fbde847c57d"
     },
     {
       "path": "windows/assets/readme/candidate-sogou.png",
