@@ -10,7 +10,7 @@ use windows::Win32::System::StationsAndDesktops::{
 use windows::Win32::System::Threading::GetCurrentThreadId;
 
 #[test]
-fn candidate_text_palette_is_readable_in_both_appearances() {
+fn candidate_text_palette_matches_styles_in_both_appearances() {
     fn luminance(color: COLORREF) -> f64 {
         let linear = |value: u32| {
             let value = f64::from(value) / 255.0;
@@ -28,6 +28,7 @@ fn candidate_text_palette_is_readable_in_both_appearances() {
             let palette = theme_for_appearance(style, light);
             if style == "green" {
                 assert_eq!(palette.accent, Some(rgb(0x03, 0xdd, 0x6d)));
+                assert_eq!(palette.accent_text, rgb(0xff, 0xff, 0xff));
             }
             for (name, text, background) in [
                 ("selected", palette.accent_text, palette.accent.unwrap_or(palette.background)),
@@ -35,7 +36,11 @@ fn candidate_text_palette_is_readable_in_both_appearances() {
                 ("text", palette.text, palette.background),
             ] {
                 let ratio = contrast(text, background);
-                let minimum = if style == "green" && name == "selected" { 9.5 } else { 4.5 };
+                // 微信绿按指定外观保留绿底白字；其余文字继续检查对比度。
+                if style == "green" && name == "selected" {
+                    continue;
+                }
+                let minimum = 4.5;
                 assert!(ratio >= minimum, "{style} light={light} {name}: {ratio:.2}:1");
             }
         }

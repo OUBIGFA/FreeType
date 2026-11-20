@@ -186,67 +186,67 @@
     },
     {
       "path": "windows/assets/readme/settings-general-installed.png",
-      "reason": "README 设置页实机截图；来自本机安装版 FreeType",
-      "source": "本机安装版 FreeType（2026-11-13）",
+      "reason": "README 设置页预览；生产视图离屏绘制，使用独立测试服务和默认设置",
+      "source": "FreeType Windows 生产视图（2026-11-20，mygo v0.10.0）",
       "license": "FreeType 项目文档截图，随项目使用",
-      "bytes": 87631,
-      "sha256": "ea331f7c0f9fc78640f80ce648fe4e25dce8fc9d8eef8560d9db9f3987180e38"
+      "bytes": 203347,
+      "sha256": "b6d57f185deb8505254d1874b091e038954cb3da159f78e6b7310abc8a9df96f"
     },
     {
       "path": "windows/assets/readme/settings-typing-installed.png",
-      "reason": "README 设置页实机截图；来自本机安装版 FreeType",
-      "source": "本机安装版 FreeType（2026-11-13）",
+      "reason": "README 设置页预览；生产视图离屏绘制，使用独立测试服务和默认设置",
+      "source": "FreeType Windows 生产视图（2026-11-20，mygo v0.10.0）",
       "license": "FreeType 项目文档截图，随项目使用",
-      "bytes": 86415,
-      "sha256": "42d4b77f92675ae7ec8e6b1d62157766ae60ba0f7186c17461e43488fc0bb07a"
+      "bytes": 212968,
+      "sha256": "82eb956785622eea0bbad31cf47ba7599082433e465bfa1eae86a1bc40fbae15"
     },
     {
       "path": "windows/assets/readme/settings-features-installed.png",
-      "reason": "README 设置页实机截图；来自本机安装版 FreeType",
-      "source": "本机安装版 FreeType（2026-11-13）",
+      "reason": "README 设置页预览；生产视图离屏绘制，使用独立测试服务和默认设置",
+      "source": "FreeType Windows 生产视图（2026-11-20，mygo v0.10.0）",
       "license": "FreeType 项目文档截图，随项目使用",
-      "bytes": 66267,
-      "sha256": "267df50545e55333470a4aaacb74f374e44bd8ba9568e27417f0e88cc3f5d598"
+      "bytes": 215329,
+      "sha256": "1ccd12cf7a7b2c99cd36b7724e9ea0a361f7e113ee7ba9e024e09484078cf13e"
     },
     {
       "path": "windows/assets/readme/settings-dicts-installed.png",
-      "reason": "README 设置页实机截图；来自本机安装版 FreeType",
-      "source": "本机安装版 FreeType（2026-11-13）",
+      "reason": "README 设置页预览；生产视图离屏绘制，使用独立测试服务和默认设置",
+      "source": "FreeType Windows 生产视图（2026-11-20，mygo v0.10.0）",
       "license": "FreeType 项目文档截图，随项目使用",
-      "bytes": 50653,
-      "sha256": "4d467fdf082876955ba70b3467585cd832934de5a83c04d9fc8dcb13128af1d5"
+      "bytes": 136309,
+      "sha256": "5c9ff4cbeaeba5aaba0ad2bce633579bb90625fd5822f7e0504132dce0c69d4d"
     },
     {
       "path": "windows/assets/readme/candidate-pink.png",
       "reason": "README 候选窗样式预览；来自 FreeType 生产界面渲染",
-      "source": "FreeType Windows 界面（2026-11-13）",
+      "source": "FreeType Windows 生产视图（2026-11-20，mygo v0.10.0）",
       "license": "FreeType 项目文档截图，随项目使用",
-      "bytes": 5035,
-      "sha256": "c4aa9fa4abaa289346300acef7075979f50b720e5ff61b81b826e50db4c906a4"
+      "bytes": 19429,
+      "sha256": "3ab6fd64c160f7b3c72a4612a219e5ecf4b99da38745925646a56d95eda90d21"
     },
     {
       "path": "windows/assets/readme/candidate-blue.png",
       "reason": "README 候选窗样式预览；来自 FreeType 生产界面渲染",
-      "source": "FreeType Windows 界面（2026-11-13）",
+      "source": "FreeType Windows 生产视图（2026-11-20，mygo v0.10.0）",
       "license": "FreeType 项目文档截图，随项目使用",
-      "bytes": 5118,
-      "sha256": "2ceed6c9b26bf816cda05073ed1a839fa963e4ec847b49720c89a8f86a88e6f5"
+      "bytes": 19530,
+      "sha256": "2f8426d4242235e664076286e07eb75e48fd347a64cf8b48b6aff57779172f46"
     },
     {
       "path": "windows/assets/readme/candidate-green.png",
       "reason": "README 候选窗样式预览；来自 FreeType 生产界面渲染",
-      "source": "FreeType Windows 界面（2026-11-13）",
+      "source": "FreeType Windows 生产视图（2026-11-20，mygo v0.10.0）",
       "license": "FreeType 项目文档截图，随项目使用",
-      "bytes": 5100,
-      "sha256": "8323fdd3bba4e5112b0f349499eada9a65ad11b21a263239f0c623bf50534cb6"
+      "bytes": 19575,
+      "sha256": "9fc003c19f4ec994089eb185c62a5d4993b3b817e4935ca0725706f133de6e9e"
     },
     {
       "path": "windows/assets/readme/candidate-sogou.png",
       "reason": "README 候选窗样式预览；来自 FreeType 生产界面渲染",
-      "source": "FreeType Windows 界面（2026-11-13）",
+      "source": "FreeType Windows 生产视图（2026-11-20，mygo v0.10.0）",
       "license": "FreeType 项目文档截图，随项目使用",
-      "bytes": 4764,
-      "sha256": "56d96243393fbdafe637629f34a43fa55e574892f450fd314db2ea48648c513c"
+      "bytes": 19046,
+      "sha256": "f132670c35db398e5beb982f0e602b686203f3e3d7e025da613375a143bb2b2b"
     }
   ]
 }

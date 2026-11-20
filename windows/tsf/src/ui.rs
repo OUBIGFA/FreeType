@@ -164,9 +164,9 @@ fn theme_for_appearance(style: &str, light: bool) -> Theme {
         // 以前的蓝色
         ("blue", true) => (Some(rgb(0x2b, 0x6c, 0xe6)), white, rgb(0x2b, 0x6c, 0xe6)),
         ("blue", false) => (Some(rgb(0x3d, 0x7f, 0xf0)), rgb(0x18, 0x18, 0x1b), rgb(0x6c, 0x9e, 0xff)),
-        // 浅色主题的单字提示用深绿，保持在白底上的对比度。
-        ("green", true) => (Some(wechat_green), rgb(0x18, 0x18, 0x1b), rgb(0x06, 0x82, 0x4a)),
-        ("green", false) => (Some(wechat_green), rgb(0x18, 0x18, 0x1b), wechat_green),
+        // 微信绿候选保留绿底白字；浅色主题的单字提示仍用深绿。
+        ("green", true) => (Some(wechat_green), white, rgb(0x06, 0x82, 0x4a)),
+        ("green", false) => (Some(wechat_green), white, wechat_green),
         // 搜狗那样：没有底色块，选中的字是蓝色
         ("sogou", true) => (None, rgb(0x1d, 0x66, 0xdf), rgb(0x1d, 0x66, 0xdf)),
         ("sogou", false) => (None, rgb(0x6c, 0x9e, 0xff), rgb(0x6c, 0x9e, 0xff)),
