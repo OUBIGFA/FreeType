@@ -22,9 +22,9 @@ LangString FT_REGISTER_FAILED ${LANG_SIMPCHINESE} "输入法注册失败；请�
 LangString FT_REGISTER_FAILED ${LANG_TRADCHINESE} "輸入法註冊失敗；請重新執行安裝程式並允許系統管理員操作"
 LangString FT_REGISTER_FAILED ${LANG_ENGLISH} "Input method registration failed； run setup again and allow administrator access"
 
-LangString FT_STOP_FAILED ${LANG_SIMPCHINESE} "无法关闭安装目录中的 FreeType；文件尚未替换；请关闭 FreeType 后重试安装"
-LangString FT_STOP_FAILED ${LANG_TRADCHINESE} "無法關閉安裝目錄中的 FreeType；檔案尚未取代；請關閉 FreeType 後重試安裝"
-LangString FT_STOP_FAILED ${LANG_ENGLISH} "Cannot close FreeType in the installation folder； files were not replaced； close FreeType and run setup again"
+LangString FT_STOP_FAILED ${LANG_SIMPCHINESE} "无法停止 FreeType 或释放安装文件；文件尚未替换；请关闭占用程序后重试安装"
+LangString FT_STOP_FAILED ${LANG_TRADCHINESE} "無法停止 FreeType 或釋放安裝檔案；檔案尚未取代；請關閉佔用程式後重試安裝"
+LangString FT_STOP_FAILED ${LANG_ENGLISH} "Cannot stop FreeType or release its installation files； files were not replaced； close the program using them and run setup again"
 
 LangString FT_START_FAILED ${LANG_SIMPCHINESE} "输入法服务未启动或词库未加载；更新未完成，待更新记录已保留；请查看服务日志后重试安装"
 LangString FT_START_FAILED ${LANG_TRADCHINESE} "輸入法服務未啟動或詞庫未載入；更新未完成，待更新記錄已保留；請查看服務日誌後重試安裝"
@@ -97,7 +97,7 @@ Function ${Prefix}FreeTypePrepare
     StrCpy $0 "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
   System::Call 'Kernel32::SetEnvironmentVariable(t "FREETYPE_INSTALL_DIR", t "$INSTDIR")'
   System::Call 'Kernel32::SetEnvironmentVariable(t "FREETYPE_INSTALL_SCRIPT", t "$PLUGINSDIR\prepare-install.ps1")'
-  nsExec::ExecToLog /TIMEOUT=30000 '"$0" -NoProfile -NonInteractive -Command "& ([scriptblock]::Create([IO.File]::ReadAllText($$env:FREETYPE_INSTALL_SCRIPT)))"'
+  nsExec::ExecToLog /TIMEOUT=60000 '"$0" -NoProfile -NonInteractive -Command "& ([scriptblock]::Create([IO.File]::ReadAllText($$env:FREETYPE_INSTALL_SCRIPT)))"'
   Pop $0
   System::Call 'Kernel32::SetEnvironmentVariable(t "FREETYPE_INSTALL_DIR", t "")'
   System::Call 'Kernel32::SetEnvironmentVariable(t "FREETYPE_INSTALL_SCRIPT", t "")'

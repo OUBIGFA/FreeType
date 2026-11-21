@@ -31,6 +31,10 @@ class InstallerPreparationTests(unittest.TestCase):
         source = cls.scratch / "process.cs"
         source.write_text(
             'using System.Threading; public static class Fixture {'
+            ' [System.Runtime.InteropServices.DllImport("advapi32.dll", SetLastError=true)]'
+            ' static extern bool SetKernelObjectSecurity(System.IntPtr handle, uint info, byte[] descriptor);'
+            ' [System.Runtime.InteropServices.DllImport("kernel32.dll")]'
+            ' static extern System.IntPtr GetCurrentProcess();'
             ' public static int Main(string[] args) {'
             ' if (args.Length > 0 && args[0] == "--stop") {'
             ' System.IO.File.WriteAllText(System.IO.Path.Combine('
@@ -48,7 +52,20 @@ class InstallerPreparationTests(unittest.TestCase):
             ' System.IO.File.WriteAllText(System.IO.Path.Combine('
             ' System.AppDomain.CurrentDomain.BaseDirectory, name),'
             ' "1|" + string.Join(" ", args)); return 0; }'
-            ' Thread.Sleep(Timeout.Infinite); return 0; } }',
+            ' if (args.Length > 0 && args[0] == "--ignore-stop") { Thread.Sleep(Timeout.Infinite); return 0; }'
+            ' if (args.Length > 0 && args[0] == "--limited-query") {'
+            # Match the relevant elevated-process boundary without a UAC prompt: the
+            # installer can query/wait, but cannot read modules or terminate the fixture.
+            ' string sid = System.Security.Principal.WindowsIdentity.GetCurrent().User.Value;'
+            ' var sd = new System.Security.AccessControl.RawSecurityDescriptor("D:P(A;;0x101000;;;" + sid + ")");'
+            ' byte[] bytes = new byte[sd.BinaryLength]; sd.GetBinaryForm(bytes, 0);'
+            ' if (!SetKernelObjectSecurity(GetCurrentProcess(), 4, bytes)) return 19;'
+            ' string root = System.AppDomain.CurrentDomain.BaseDirectory;'
+            ' System.IO.File.WriteAllText(System.IO.Path.Combine(root, "limited-ready.txt"), "ready");'
+            ' while (!System.IO.File.Exists(System.IO.Path.Combine(root, "stop-requested.txt"))) Thread.Sleep(10);'
+            ' return 0; }'
+            ' string stop = System.IO.Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory, "stop-requested.txt");'
+            ' while (!System.IO.File.Exists(stop)) Thread.Sleep(10); return 0; } }',
             encoding="utf-8",
         )
         subprocess.run(
@@ -79,24 +96,36 @@ class InstallerPreparationTests(unittest.TestCase):
                 process.terminate()
             process.wait(timeout=10)
 
-    def start(self, path):
+    def start(self, path, *arguments):
         path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(self.fixture, path)
-        process = subprocess.Popen([str(path)], creationflags=subprocess.CREATE_NO_WINDOW)
+        process = subprocess.Popen([str(path), *arguments], creationflags=subprocess.CREATE_NO_WINDOW)
         self.processes.append(process)
         return process
 
-    def run_preparation(self, extra="", expected_code=0, environment=None):
+    def run_preparation(self, extra="", expected_code=0, environment=None, install_dir=None):
         installer = self.directory / "preparation.exe"
         script = self.directory / "preparation.nsi"
+        include = self.directory / "preparation-include.nsh"
+        log = self.directory / "preparation-log.txt"
+        # Capture the same helper output shown in the installer's details pane, so
+        # silent regression failures retain their real PowerShell error message.
+        content = INCLUDE.read_text(encoding="utf-8").replace("nsExec::ExecToLog /TIMEOUT=60000",
+                                                            "nsExec::ExecToStack /TIMEOUT=60000", 1)
+        marker = "  Pop $0\n  System::Call 'Kernel32::SetEnvironmentVariable(t \"FREETYPE_INSTALL_DIR\", t \"\")'"
+        content = content.replace(marker, '  Pop $0\n  Pop $1\n' +
+                                  f'  FileOpen $2 "{log}" w\n  FileWriteUTF16LE $2 "$0$\\r$\\n$1"\n  FileClose $2\n' +
+                                  marker.split("\n", 1)[1])
+        include.write_text(content, encoding="utf-8-sig")
+        shutil.copyfile(INCLUDE.with_name("prepare-install.ps1"), include.with_name("prepare-install.ps1"))
         script.write_text(
             'Unicode true\nRequestExecutionLevel user\nSilentInstall silent\n'
-            f'Name "FreeType preparation test"\nOutFile "{installer}"\nInstallDir "{self.target}"\n'
+            f'Name "FreeType preparation test"\nOutFile "{installer}"\nInstallDir "{install_dir or self.target}"\n'
             '!include "MUI2.nsh"\n'
             '!insertmacro MUI_LANGUAGE "SimpChinese"\n'
             '!insertmacro MUI_LANGUAGE "TradChinese"\n'
             '!insertmacro MUI_LANGUAGE "English"\n'
-            + self.guard_define + f'!include "{INCLUDE}"\n'
+            + self.guard_define + f'!include "{include}"\n'
             'Section\n' + extra +
             'FileOpen $0 "$INSTDIR\\prepared.txt" w\nFileWrite $0 "ready"\nFileClose $0\nSectionEnd\n',
             encoding="utf-8-sig",
@@ -107,7 +136,8 @@ class InstallerPreparationTests(unittest.TestCase):
             [str(installer), "/S"], capture_output=True, timeout=45,
             env={**os.environ, **(environment or {})},
         )
-        self.assertEqual(result.returncode, expected_code, result.stdout + result.stderr)
+        diagnostic = log.read_text(encoding="utf-16-le") if log.exists() else str(result.stdout + result.stderr)
+        self.assertEqual(result.returncode, expected_code, diagnostic)
         if expected_code == 0:
             self.assertEqual((self.target / "prepared.txt").read_text(), "ready")
         else:
@@ -127,6 +157,74 @@ class InstallerPreparationTests(unittest.TestCase):
 
     def test_fresh_install_does_not_require_running_processes(self):
         self.run_preparation()
+
+    def installation_alias(self):
+        alias = self.directory / "安装目录联接 & alias"
+        subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+             "New-Item -ItemType Junction -Path $env:FT_TEST_ALIAS -Target $env:FT_TEST_TARGET | Out-Null"],
+            env={**os.environ, "FT_TEST_ALIAS": str(alias), "FT_TEST_TARGET": str(self.target)},
+            check=True, capture_output=True, timeout=10,
+        )
+        return alias
+
+    def test_junction_installation_stops_the_same_physical_executable(self):
+        tray = self.start(self.target / "FreeType.exe")
+        server = self.start(self.target / "bin" / "FreeTypeServer.exe")
+        unrelated = self.start(self.directory / "other" / "FreeType.exe")
+        alias = self.installation_alias()
+        self.assertTrue(os.path.samefile(alias / "FreeType.exe", self.target / "FreeType.exe"))
+        self.run_preparation(install_dir=alias)
+        self.assertIsNotNone(tray.poll(), "A junction must not hide the tray from preparation")
+        self.assertIsNotNone(server.poll(), "A junction must not hide the server from preparation")
+        self.assertIsNone(unrelated.poll(), "A different installation must stay running")
+        self.assertEqual((self.target / "bin" / "stop-requested.txt").read_text(), "requested")
+
+    def test_limited_query_server_is_stopped_without_reading_its_modules(self):
+        server = self.start(self.target / "bin" / "FreeTypeServer.exe", "--limited-query")
+        ready = self.target / "bin" / "limited-ready.txt"
+        deadline = time.monotonic() + 5
+        while not ready.exists() and time.monotonic() < deadline:
+            self.assertIsNone(server.poll(), "The restricted fixture exited before becoming ready")
+            time.sleep(0.02)
+        self.assertTrue(ready.exists())
+        query = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+             "(Get-CimInstance Win32_Process -Filter ('ProcessId=' + $env:FT_TEST_PID)).ExecutablePath"],
+            env={**os.environ, "FT_TEST_PID": str(server.pid)},
+            check=True, capture_output=True, timeout=10,
+        )
+        self.assertFalse(query.stdout.strip(), "The fixture must reproduce the unavailable CIM path")
+        self.run_preparation(install_dir=self.installation_alias())
+        self.assertEqual(server.poll(), 0, "The service must exit normally after saving, without forced termination")
+        self.assertEqual((self.target / "bin" / "stop-requested.txt").read_text(), "requested")
+
+    def test_service_that_does_not_exit_blocks_copying_without_being_killed(self):
+        server = self.start(self.target / "bin" / "FreeTypeServer.exe", "--ignore-stop")
+        self.run_preparation(expected_code=2)
+        self.assertIsNone(server.poll(), "An unconfirmed shutdown must not force-kill a service with possible unsaved data")
+        self.assertEqual((self.target / "bin" / "stop-requested.txt").read_text(), "requested")
+
+    def test_locked_executable_stops_preparation_before_any_copy(self):
+        import ctypes
+        from ctypes import wintypes
+
+        server = self.target / "bin" / "FreeTypeServer.exe"
+        server.parent.mkdir()
+        shutil.copyfile(self.fixture, server)
+        original = server.read_bytes()
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+                                      wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        kernel.CreateFileW.restype = wintypes.HANDLE
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        handle = kernel.CreateFileW(str(server), 0x80000000, 1, None, 3, 0, None)
+        self.assertNotEqual(handle, wintypes.HANDLE(-1).value)
+        try:
+            self.run_preparation(expected_code=2)
+            self.assertEqual(server.read_bytes(), original, "Failed preparation must preserve the installed executable")
+        finally:
+            kernel.CloseHandle(handle)
 
     def test_enable_failure_stops_installation_before_reporting_success(self):
         (self.target / "bin").mkdir()
