@@ -1,5 +1,5 @@
 {
-  "lockSha256": "ad6e819e58808b1446ee7c2eefabcb8471887314d656ec4f767374f4e61cb013",
+  "lockSha256": "e26b8b38b69ab25a4120f2b2343bf9b924f6b038f76c78e638628925f626ba6e",
   "packages": [
     {
       "name": "aho-corasick",

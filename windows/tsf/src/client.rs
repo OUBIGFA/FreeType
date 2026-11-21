@@ -46,6 +46,8 @@ impl Drop for Connection {
 }
 
 pub struct Client {
+    #[cfg(test)]
+    test_host: Option<freetype_server::host::Host>,
     name: Option<String>,
     connection: Option<Connection>,
     last_spawn: Option<u64>,
@@ -225,6 +227,8 @@ impl Connection {
 impl Client {
     pub fn new() -> Self {
         Self {
+            #[cfg(test)]
+            test_host: None,
             name: current_user_sid().map(|sid| pipe_name(&sid)),
             connection: None,
             last_spawn: None,
@@ -298,6 +302,8 @@ impl Client {
 
     /// 发一条请求。连不上、超时、出错都返回 None（调用方把键交还给应用）。
     pub fn call(&mut self, request: &Request) -> Option<Response> {
+        #[cfg(test)]
+        if let Some(host) = &mut self.test_host { return Some(host.handle(1, request.clone())); }
         // 连接、握手、重连和分块应答共用一次期限，不能每个 I/O 都重新等 1.5 秒。
         let deadline = now_ms() + u64::from(self.timeout_ms);
         for attempt in 0..2 {
@@ -339,6 +345,12 @@ impl Client {
     // Stand in for a disconnected server without contacting the active user session.
     pub(crate) fn without_server() -> Self {
         Self { name: None, ..Self::new() }
+    }
+
+    /// Exercise the real input engine and TSF callbacks without the user's server or data.
+    #[cfg(test)]
+    pub(crate) fn with_test_host(host: freetype_server::host::Host) -> Self {
+        Self { test_host: Some(host), ..Self::without_server() }
     }
 }
 

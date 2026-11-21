@@ -2,8 +2,8 @@
 //!
 //! 每个用到输入法的线程有一个实例。按键流程：
 //!
-//! 1. `OnTestKeyDown`：把键翻成键码，带 `test` 问服务进程要不要；
-//! 2. `OnKeyDown`：真正按下（没在组字时先读光标前的几个字一起发过去），拿到应答后开一个
+//! 1. `OnTestKeyDown`：把键翻成键码，没在组字时读光标前文字，带 `test` 问服务进程要不要；
+//! 2. `OnKeyDown`：真正按下，复用预询问的上文（直接按下时才读取），拿到应答后开一个
 //!    同步编辑会话改文档（上屏、更新编辑区、光标），再按编辑区的位置摆候选窗；
 //! 3. 单按 Shift（按下到松开之间没有别的键，没和 Ctrl/Alt/Win 一起按）切换中英文：系统第一次
 //!    报这次松开时就切换（`OnTestKeyUp` 或 `OnKeyUp`，见 [`key_released`]），不吃这个键。
@@ -81,6 +81,12 @@ struct PredictionSpace {
     deadline_ms: u64,
 }
 
+struct KeyPreview {
+    key: Key,
+    context: ITfContext,
+    before: Option<String>,
+}
+
 struct State {
     /// 激活代次：停用后排队中的编辑会话不能继续操作文档或报告旧焦点。
     generation: u64,
@@ -94,6 +100,8 @@ struct State {
     composition: Option<ITfComposition>,
     /// 最近一次按键、得到焦点的文档（候选窗点击时用）。
     context: Option<ITfContext>,
+    /// 预询问与正式按下共用同一份上文；临时输入框上屏后可能已清空 TSF 文档。
+    key_preview: Option<KeyPreview>,
     client: Client,
     shift: ShiftTap,
     /// 成对标点上屏后还没挪的光标（等用户松开 Shift）。
@@ -174,6 +182,7 @@ impl TextService {
                 layout_cookie: None,
                 composition: None,
                 context: None,
+                key_preview: None,
                 client: Client::new(),
                 shift: ShiftTap::default(),
                 caret_move: None,
@@ -403,6 +412,7 @@ fn set_sensitive(state: &Rc<RefCell<State>>, active: bool) {
     }
     if active {
         let mut state = state.borrow_mut();
+        state.key_preview = None;
         state.undo = None;
         state.space = None;
         state.prediction_escape = PredictionEscape::Free;
@@ -799,6 +809,14 @@ fn read_before(state: &Rc<RefCell<State>>, context: &ITfContext) -> Option<Strin
     });
     let text = out.borrow_mut().take();
     text
+}
+
+fn key_before(state: &Rc<RefCell<State>>, context: &ITfContext) -> Option<String> {
+    let wants = !composing(state) && {
+        let s = state.borrow();
+        s.mode == Mode::Chinese || s.want_before
+    };
+    if wants { read_before(state, context) } else { None }
 }
 
 fn watch_backspace(state: &Rc<RefCell<State>>, context: Option<&ITfContext>, vk: u16) {
@@ -1229,6 +1247,7 @@ fn resume_composition(state: &Rc<RefCell<State>>, context: ITfContext) {
 /// （[`resume_composition`]）。以前一律收起候选窗，第一个字母就像直接成了英文。
 /// 焦点暂时落空（`focus` 是 None）时只收起候选窗，编辑区不动，回来以后同样接着显示。
 fn on_focus(state: &Rc<RefCell<State>>, focus: Option<&ITfDocumentMgr>) {
+    state.borrow_mut().key_preview = None;
     let context = focus.and_then(|doc| unsafe { doc.GetTop().ok() });
     // A rich editor can reassert the same focus during the commit, before
     // the prediction has even painted. Don't clear the new page or its range.
@@ -1336,6 +1355,7 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
         }
         s.composition = None;
         s.context = None;
+        s.key_preview = None;
         s.busy = false;
         s.predicting = false;
         s.prediction_caret = None;
@@ -1426,6 +1446,7 @@ fn key_released(state: &Rc<RefCell<State>>, context: Option<&ITfContext>, wparam
     if own_input() {
         return;
     }
+    state.borrow_mut().key_preview = None;
     if vk == 0x08 { confirm_backspace(state, context); }
     if keys::is_modifier(vk) && state.borrow().caret_move.is_some() {
         caret_tick(state);
@@ -1503,6 +1524,7 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
     fn OnSetFocus(&self, foreground: BOOL) -> Result<()> {
         if !foreground.as_bool() {
             dismiss_prediction(&self.state);
+            self.state.borrow_mut().key_preview = None;
             self.state.borrow_mut().prediction_escape = PredictionEscape::Free;
             if let Some(window) = &self.state.borrow().window {
                 window.hide();
@@ -1512,6 +1534,7 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
     }
 
     fn OnTestKeyDown(&self, pic: Ref<ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
+        self.state.borrow_mut().key_preview = None;
         if own_input() {
             return own_key_down(&self.state);
         }
@@ -1542,10 +1565,20 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
             prediction_space_key(&self.state, context, key, repeat, shown_revision(&self.state), ms)
         });
         if prediction_space && key.keysym == 0x20 && self.state.borrow().predict_double_space { return Ok(true.into()); }
+        // 在决定接管按键前读取上文。若等到 OnKeyDown 才读，CUAS 的空文档会让
+        // 自动空格从“接管并上屏”变成“放行”，重命名等输入框会丢掉这一次按键。
+        let before = pic.as_ref().filter(|_| !prediction_space).and_then(|context| key_before(&self.state, context));
         let revision = shown_revision(&self.state);
-        let frame = call(&self.state, &Request::PhysicalKey { key, before: None, scan: 0, shown_revision: Some(revision) });
+        let frame = call(&self.state, &Request::PhysicalKey { key, before: before.clone(), scan: 0, shown_revision: Some(revision) });
         if let Some(frame) = &frame {
             note_preview(&self.state, frame);
+            if frame.handled {
+                if let Some(context) = pic.as_ref() {
+                    self.state.borrow_mut().key_preview = Some(KeyPreview {
+                        key: Key { test: false, ..key }, context: context.clone(), before,
+                    });
+                }
+            }
             // A passed-through key won't get OnKeyDown. The server has
             // already put the prediction aside; don't leave the old popup.
             if !frame.handled && !frame.predict { clear_prediction(&self.state); }
@@ -1554,6 +1587,7 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
     }
 
     fn OnKeyDown(&self, pic: Ref<ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
+        let preview = self.state.borrow_mut().key_preview.take();
         if own_input() {
             return own_key_down(&self.state);
         }
@@ -1583,11 +1617,6 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
             return Ok(composing(&self.state).into());
         };
         if prediction_escape_down(&self.state, Some(&context), key, repeat) { return Ok(true.into()); }
-        // 没在组字时带上光标前的字（标点、自动加空格看它）
-        let wants_before = {
-            let s = self.state.borrow();
-            !composing(&self.state) && (s.mode == Mode::Chinese || s.want_before)
-        };
         if let Some(action) = verified_pair_key(&self.state, Some(&context), key) {
             if let Some(mut frame) = call(&self.state, &Request::ClosePair) {
                 frame.pair_edit = Some(action);
@@ -1597,9 +1626,11 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         }
         let (key, prediction_space) = prediction_space_key(&self.state, &context, key, repeat, shown_revision(&self.state), ms);
         if prediction_space && key.keysym == 0x20 && self.state.borrow().predict_double_space { return Ok(true.into()); }
-        let before = if wants_before && !prediction_space {
-            read_before(&self.state, &context)
-        } else { None };
+        let before = if prediction_space { None } else {
+            preview.filter(|preview| preview.key == key && same_object(&preview.context, &context))
+                .map(|preview| preview.before)
+                .unwrap_or_else(|| key_before(&self.state, &context))
+        };
         let scan = ((lparam.0 >> 16) & 0x1ff) as u16;
         let revision = shown_revision(&self.state);
         let frame = match call(&self.state, &Request::PhysicalKey { key, before, scan, shown_revision: Some(revision) }) {

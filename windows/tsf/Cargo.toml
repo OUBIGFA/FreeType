@@ -17,6 +17,10 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 freetype-protocol = { path = "../protocol" }
 
+[dev-dependencies]
+freetype-server = { path = "../server" }
+wowtype-core = { path = "../../core", default-features = false }
+
 [target.'cfg(windows)'.dependencies.windows]
 version = "0.62.2"
 features = [

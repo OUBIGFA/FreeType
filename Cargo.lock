@@ -273,10 +273,12 @@ version = "0.0.1"
 dependencies = [
  "embed-resource",
  "freetype-protocol",
+ "freetype-server",
  "unicode-segmentation",
  "windows 0.62.2",
  "windows-core 0.62.2",
  "windows-numerics",
+ "wowtype-core",
 ]
 
 [[package]]

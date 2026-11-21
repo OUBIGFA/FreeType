@@ -230,6 +230,73 @@ fn open_prediction(editor: &Editor, state: &Rc<RefCell<State>>, double: bool) ->
     1
 }
 
+fn commit_test_word(editor: &Editor, state: &Rc<RefCell<State>>, sink: &ITfKeyEventSink) {
+    let data = std::env::temp_dir().join(format!("freetype-digit-{}-{}", std::process::id(), unsafe { GetCurrentThreadId() }));
+    let mut host = freetype_server::host::Host::new(freetype_server::store::Store::new(data));
+    let lexicon = wowtype_core::MemoryLexicon::from_tsv_str("ce shi\t测试\t1000\n").unwrap();
+    host.install_engine(Ok(wowtype_core::Engine::new(
+        std::sync::Arc::new(lexicon), std::sync::Arc::new(wowtype_core::BigramLm::default()))));
+    host.connect(1, "explorer.exe".into());
+    assert!(!host.config().predict_next, "此回归不依赖上屏联想");
+    state.borrow_mut().client = Client::with_test_host(host);
+    for vk in [b'C', b'E', b'S', b'H', b'I', b' '] {
+        let key = WPARAM(usize::from(vk));
+        unsafe {
+            assert!(sink.OnTestKeyDown(&editor.context, key, LPARAM(0)).unwrap().as_bool());
+            assert!(sink.OnKeyDown(&editor.context, key, LPARAM(0)).unwrap().as_bool());
+        }
+    }
+}
+
+#[test]
+fn first_digit_after_commit_keeps_the_key_claim_in_composition_only_hosts() {
+    for composition_only in [false, true] {
+        // Both the number row and keypad use the same host-context boundary.
+        for vk in (0x30..=0x39).chain([0x60, 0x69]) {
+            in_editor(|editor, state, sink| unsafe {
+                editor.store.transitory.set(composition_only);
+                editor.store.commit_only.set(composition_only);
+                commit_test_word(editor, &state, &sink);
+                let buffer = if composition_only { &editor.store.app_text } else { &editor.store.text };
+                assert_eq!(String::from_utf16_lossy(&buffer.borrow()), "测试");
+                let digit = char::from(b'0' + if vk >= 0x60 { vk - 0x60 } else { vk - 0x30 });
+                for count in 1..=2 {
+                    let key = WPARAM(usize::from(vk));
+                    let preview = sink.OnTestKeyDown(&editor.context, key, LPARAM(0)).unwrap().as_bool();
+                    assert_eq!(sink.OnTestKeyDown(&editor.context, key, LPARAM(0)).unwrap().as_bool(), preview,
+                        "宿主重复预询问不能改变接管结果");
+                    if preview {
+                        assert!(sink.OnKeyDown(&editor.context, key, LPARAM(0)).unwrap().as_bool(),
+                            "{digit} 预询问已接管，正式按下却放行；composition_only={composition_only}");
+                    } else if composition_only {
+                        // CUAS keeps the app's committed text outside its temporary TSF document.
+                        editor.store.app_text.borrow_mut().extend(wide(&digit.to_string()));
+                    } else {
+                        editor.store.app_insert(&digit.to_string());
+                    }
+                    let gap = if composition_only { "" } else { " " };
+                    assert_eq!(String::from_utf16_lossy(&buffer.borrow()), format!("测试{gap}{}", digit.to_string().repeat(count)));
+                }
+            });
+        }
+    }
+}
+
+#[test]
+fn digit_claim_survives_a_host_that_allows_reading_only_after_preview() {
+    in_editor(|editor, state, sink| unsafe {
+        editor.store.commit_only.set(true);
+        commit_test_word(editor, &state, &sink);
+        editor.store.deny_read.set(true);
+        let zero = WPARAM(usize::from(b'0'));
+        assert!(sink.OnTestKeyDown(&editor.context, zero, LPARAM(0)).unwrap().as_bool());
+        editor.store.deny_read.set(false);
+        assert!(sink.OnKeyDown(&editor.context, zero, LPARAM(0)).unwrap().as_bool(),
+            "预询问读不到正文时，正式按下仍须保留已接管的按键");
+        assert_eq!(String::from_utf16_lossy(&editor.store.app_text.borrow()), "测试 0");
+    });
+}
+
 fn press_space(editor: &Editor, state: &Rc<RefCell<State>>, ms: u32) -> Key {
     let key = Key { keysym: 0x20, ..Key::default() };
     let revision = shown_revision(state);
