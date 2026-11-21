@@ -150,6 +150,8 @@ FunctionEnd
 
 !macro customInstall
   InitPluginsDir
+  ; 旧版在安装目录留下的默认词库快照（约 100 MB）；现在默认词库改用编译索引，不再读它。
+  Delete "$INSTDIR\data\lexicon.tsv.wcache"
   Delete "$PLUGINSDIR\freetype-register.ok"
   IfFileExists "$PLUGINSDIR\freetype-register.ok" register_failed 0
   ExecShellWait "runas" "$INSTDIR\bin\FreeTypeServer.exe" '--register-tsf "$INSTDIR\bin" --marker "$PLUGINSDIR\freetype-register.ok"' SW_HIDE

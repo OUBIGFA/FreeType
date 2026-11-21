@@ -213,6 +213,8 @@ pub struct Engine {
     /// 字级神经语言模型（微信输入法的 nlrgpt2，本机有才加载），给整句候选重排。
     nnlm: RwLock<Option<Arc<nnlm::Nnlm>>>,
     nnlm_path: RwLock<Option<std::path::PathBuf>>,
+    /// 束搜索查表结果的跨按键缓存，见 [`lexicon::MemoLexicon`]。
+    lookup_memo: lexicon::LookupMemo,
 }
 
 impl Engine {
@@ -237,7 +239,20 @@ impl Engine {
             english: RwLock::new(Arc::new(HashMap::new())),
             nnlm: RwLock::new(None),
             nnlm_path: RwLock::new(None),
+            lookup_memo: lexicon::LookupMemo::default(),
         }
+    }
+
+    /// 束搜索用的带缓存视图。缓存键含词库代数和视图参数（模糊音分组、惩罚），
+    /// 学到新词、导入词库或改模糊音设置后旧结果自动作废。
+    fn memo_view<'a>(&'a self, inner: &'a dyn Lexicon, fuzzy: bool) -> lexicon::MemoLexicon<'a> {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        (self.lexicon.generation(), fuzzy).hash(&mut hasher);
+        if fuzzy {
+            (self.config.fuzzy_groups, self.config.fuzzy_penalty.to_bits()).hash(&mut hasher);
+        }
+        lexicon::MemoLexicon { inner, memo: &self.lookup_memo, salt: hasher.finish() }
     }
 
     /// 加载微信输入法的字级神经语言模型（`nlrgpt2_nnlm.bin`），返回字表大小。
@@ -1034,6 +1049,8 @@ impl Engine {
         } else {
             self.lexicon.as_ref()
         };
+        let memo = self.memo_view(lexicon, self.config.fuzzy);
+        let lexicon: &dyn Lexicon = &memo;
         let words = crate::beam::first_words(
             &graph,
             lexicon,
@@ -1104,6 +1121,8 @@ impl Engine {
         } else {
             self.lexicon.as_ref()
         };
+        let memo = self.memo_view(lexicon, self.config.fuzzy);
+        let lexicon: &dyn Lexicon = &memo;
         let words = crate::beam::all_first_words(&graph, lexicon, &self.config.beam, max);
         if words.is_empty() {
             return Ok(());
@@ -1507,6 +1526,8 @@ impl Engine {
         } else {
             self.lexicon.as_ref()
         };
+        let memo = self.memo_view(lexicon, fuzzy);
+        let lexicon: &dyn Lexicon = &memo;
         let start = self.start_word();
         let pairs = self
             .pairs

@@ -79,6 +79,16 @@ fn query_key(query: &[SyllableQuery]) -> Option<Vec<u8>> {
     })))
 }
 
+/// Format version plus size and modification time (100 ns on NTFS) of both files.
+fn verified_identity(source: &Path, index: &Path) -> Option<String> {
+    let stamp = |path: &Path| -> Option<String> {
+        let meta = fs::metadata(path).ok()?;
+        let modified = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
+        Some(format!("{} {}", meta.len(), modified.as_nanos()))
+    };
+    Some(format!("FTD1 {} {} {}", cache_version(), stamp(index)?, stamp(source)?))
+}
+
 fn u32_at(bytes: &[u8], pos: usize) -> u32 {
     u32::from_le_bytes(bytes[pos..pos + 4].try_into().unwrap())
 }
@@ -180,6 +190,33 @@ impl MappedLexicon {
     /// Validate through buffered reads so startup does not fault the entire mapping
     /// into the working set. Windows denies in-place writers while this file is mapped.
     pub fn open(source: &Path, index_path: &Path) -> Result<Self> {
+        Self::open_checked(source, index_path, true)
+    }
+
+    /// Like [`MappedLexicon::open`], but reading both files in full for their CRCs costs
+    /// about 300 MiB of disk I/O, which dominated startup right after logon (13-26 s).
+    /// After one complete check, `record` stores the size and modification time of both
+    /// files. Later opens with the same identities only check the header and bounds;
+    /// any replacement (installer, compiler or user) changes the identity and triggers
+    /// the full check again. Silent in-place corruption with an unchanged timestamp is
+    /// not detected; the shipped index is immutable and replaced only by rename.
+    pub fn open_verified(source: &Path, index_path: &Path, record: &Path) -> Result<Self> {
+        let identity = verified_identity(source, index_path);
+        let trusted = identity.as_ref().is_some_and(|identity| {
+            fs::read_to_string(record).is_ok_and(|saved| saved.trim() == identity)
+        });
+        let lexicon = Self::open_checked(source, index_path, !trusted)?;
+        if let (false, Some(identity)) = (trusted, identity) {
+            // Failing to remember the result only costs another full check next time.
+            if let Some(parent) = record.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            let _ = crate::learn::write_atomic(record, identity);
+        }
+        Ok(lexicon)
+    }
+
+    fn open_checked(source: &Path, index_path: &Path, full: bool) -> Result<Self> {
         let mut options = File::options();
         options.read(true);
         #[cfg(windows)]
@@ -190,20 +227,24 @@ impl MappedLexicon {
         let mut file = options.open(index_path)?;
         let len = file.metadata()?.len();
         ensure!(len >= (HEADER + 4) as u64, "词库索引不完整");
-        let crc = checksum((&mut file).take(len - 4))?;
-        let mut expected = [0; 4];
-        file.read_exact(&mut expected)?;
-        ensure!(crc == u32::from_le_bytes(expected), "词库索引校验失败");
+        if full {
+            let crc = checksum((&mut file).take(len - 4))?;
+            let mut expected = [0; 4];
+            file.read_exact(&mut expected)?;
+            ensure!(crc == u32::from_le_bytes(expected), "词库索引校验失败");
+        }
         // Compilers publish immutable files by rename; no writable mapping is created.
         let file = unsafe { Mmap::map(&file)? };
         ensure!(
             &file[..4] == MAGIC && u32_at(&file, 4) == cache_version(),
             "词库索引版本不匹配"
         );
-        ensure!(
-            checksum(File::open(source)?)? == u32_at(&file, 8),
-            "词库索引与源文件不匹配"
-        );
+        if full {
+            ensure!(
+                checksum(File::open(source)?)? == u32_at(&file, 8),
+                "词库索引与源文件不匹配"
+            );
+        }
         let count = u32_at(&file, 12) as usize;
         let total = f64::from_le_bytes(file[16..24].try_into()?);
         let entries_end = u32_at(&file, 24) as usize;
@@ -316,6 +357,24 @@ impl Lexicon for MappedLexicon {
         let fst = self.index.as_fst();
         let mut node = fst.root();
         for byte in key {
+            let Some(transition) = node.find_input(byte) else {
+                return false;
+            };
+            node = fst.node(node.transition_addr(transition));
+        }
+        !node.is_empty()
+    }
+
+    fn has_longer_fuzzy(&self, query: &[SyllableQuery]) -> bool {
+        if query.is_empty() {
+            return false;
+        }
+        let Some(key) = crate::lexicon::fuzzy_query_key(query) else {
+            return false;
+        };
+        let fst = self.index.as_fst();
+        let mut node = fst.root();
+        for byte in fuzzy_key(key.into_iter()) {
             let Some(transition) = node.find_input(byte) else {
                 return false;
             };

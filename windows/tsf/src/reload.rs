@@ -110,6 +110,19 @@ struct State {
     active: Option<(ITfThreadMgr, u32, u32)>,
     root: PathBuf,
     window: Option<HWND>,
+    /// 上次已处理完的 current.txt 的修改时间和大小；没变就不再打开文件。
+    seen: Option<(u64, u32)>,
+}
+
+/// 只读目录项里的修改时间和大小，不打开文件（每个输入线程每秒一次，打开文件会触发杀毒扫描）。
+fn file_stamp(path: &Path) -> Option<(u64, u32)> {
+    use windows::Win32::Storage::FileSystem::{GetFileAttributesExW, GetFileExInfoStandard, WIN32_FILE_ATTRIBUTE_DATA};
+    let mut data = WIN32_FILE_ATTRIBUTE_DATA::default();
+    unsafe {
+        GetFileAttributesExW(&HSTRING::from(path.as_os_str()), GetFileExInfoStandard, &mut data as *mut _ as *mut c_void).ok()?;
+    }
+    let time = u64::from(data.ftLastWriteTime.dwHighDateTime) << 32 | u64::from(data.ftLastWriteTime.dwLowDateTime);
+    Some((time, data.nFileSizeLow))
 }
 
 #[implement(ITfTextInputProcessorEx)]
@@ -128,6 +141,7 @@ impl ReloadableService {
                 current: Some(current),
                 active: None,
                 window: None,
+                seen: None,
             })),
             instance,
             _dll: DllRef::new(),
@@ -154,20 +168,28 @@ impl Drop for ReloadableService {
 }
 
 fn refresh(state: &Rc<RefCell<State>>) -> Result<()> {
+    let marker = state.borrow().root.join("current.txt");
+    let stamp = file_stamp(&marker);
+    if stamp.is_some() && stamp == state.borrow().seen {
+        return Ok(());
+    }
     let (path, activation) = {
-        let s = state.borrow();
+        let mut s = state.borrow_mut();
         let Some(current) = &s.current else {
             return Ok(());
         };
-        let Ok(revision) = std::fs::read_to_string(s.root.join("current.txt")) else {
+        let Ok(revision) = std::fs::read_to_string(&marker) else {
             return Ok(());
         };
         let Some(path) = component_path(&s.root, revision.trim()) else {
             return Err(E_FAIL.into());
         };
-        if path == current.path
-            || !unsafe { (current.can_reload)(current.service.as_raw()) }.as_bool()
-        {
+        if path == current.path {
+            s.seen = stamp;
+            return Ok(());
+        }
+        // 正在组字等不能交接时不记下时间，下一秒再试。
+        if !unsafe { (current.can_reload)(current.service.as_raw()) }.as_bool() {
             return Ok(());
         }
         (path, s.active.clone())
@@ -194,7 +216,11 @@ fn refresh(state: &Rc<RefCell<State>>) -> Result<()> {
             }
         }
     }
-    state.borrow_mut().current = Some(next);
+    {
+        let mut s = state.borrow_mut();
+        s.current = Some(next);
+        s.seen = stamp;
+    }
     crate::log::write("输入法组件已更新", &path.display().to_string());
     Ok(())
 }

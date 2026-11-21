@@ -424,6 +424,7 @@ fn collect_spans(
         &mut found,
         config,
         rare,
+        per_span,
     );
 
     // 同一个结束位置内按「词典代价 + 纠错代价」排序截断。
@@ -481,6 +482,7 @@ fn collect_dfs(
     out: &mut Vec<Span>,
     config: &BeamConfig,
     rare: bool,
+    per_span: usize,
 ) {
     for edge in graph.edges_from(pos) {
         let edge_typos = typos + usize::from(edge.typo);
@@ -502,24 +504,21 @@ fn collect_dfs(
         }
         let abbrev = keys.iter().filter(|q| q.is_jianpin()).count();
         let jianpin = abbrev > 0;
+        // 一次查表的词结束位置相同、纠错和补全扣分也相同，collect_spans 最后每个结束位置只留
+        // per_span 个不同的词，所以由词库先按同一顺序截断（见 Lexicon::lookup_ranked）。
         // 生僻字只给打全了、没纠错的全拼（shi 列全 shi 的字）；sh、s 这种简拼和补全不带它们，
         // 不然每打一个声母都要排几千个字
-        let mut entries = if rare && !jianpin && edge.completion == 0 && edge_typos == 0 {
-            lexicon.lookup(keys)
-        } else {
-            lexicon.lookup_common(keys)
-        };
-        if !config.rare_ext_chars && keys.len() == 1 {
-            entries.retain(|e| !e.is_ext_char());
-        }
+        let all = rare && !jianpin && edge.completion == 0 && edge_typos == 0;
+        let skip_ext = !config.rare_ext_chars && keys.len() == 1;
+        let entries = lexicon.lookup_ranked(keys, all, skip_ext, per_span);
         let pinyin = if entries.is_empty() {
             String::new()
         } else {
             pinyin_of(keys)
         };
-        for entry in entries {
+        for (lexical, entry) in entries {
             out.push(Span {
-                lexical: lexicon.cost(&entry),
+                lexical,
                 word: BeamWord {
                     text: entry.word,
                     pinyin: pinyin.clone(),
@@ -550,6 +549,7 @@ fn collect_dfs(
                 out,
                 config,
                 rare,
+                per_span,
             );
         }
         keys.truncate(before);

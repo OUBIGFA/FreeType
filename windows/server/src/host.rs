@@ -41,6 +41,8 @@ const MAX_CANDIDATES: usize = 1000;
 const RECENT_EMOJI: usize = 32;
 /// 自己加的词的词频（学到的词里算高的，排在前面）。
 const ADDED_WORD_FREQ: f64 = 50_000.0;
+/// 词库还在载入时编辑区上方的说明；载好后下一个键就有候选。
+pub(crate) const LOADING_TITLE: &str = "词库载入中；稍候即可选词";
 
 /// 桌面上的状态栏要显示的。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -156,28 +158,40 @@ pub fn lexicon_path(resources: &Path, configured: &str) -> PathBuf {
 
 /// 载入引擎（慢：几秒），在后台线程里调。`lexicon` 是设置里的词库路径（空串用默认的）。
 pub fn load_engine(resources: &Path, store_dir: &Path, lexicon: &str) -> Result<Engine, String> {
+    // 开机时各项读盘互相争抢，分段用时写进日志，便于判断哪一步慢。
+    let mut stages = Vec::new();
+    let mut started = std::time::Instant::now();
+    let mut stage = |name: &str| {
+        stages.push(format!("{name} {} ms", started.elapsed().as_millis()));
+        started = std::time::Instant::now();
+    };
     let lexicon_path = lexicon_path(resources, lexicon);
     let index = resources.join("lexicon.ftd");
     let lexicon: std::sync::Arc<dyn wowtype_core::Lexicon> =
         if lexicon_path == resources.join("lexicon.tsv") && index.exists() {
-            std::sync::Arc::new(wowtype_core::lexicon::MappedLexicon::open(&lexicon_path, &index)
+            // 完整校验只在安装、更新或文件变化后做一次，结果按文件身份记在本机缓存目录。
+            let record = crate::local_dir().join("cache").join("lexicon.verified");
+            std::sync::Arc::new(wowtype_core::lexicon::MappedLexicon::open_verified(&lexicon_path, &index, &record)
                 .map_err(|e| format!("默认词库索引载入失败（{}）：{e:#}", index.display()))?)
         } else {
             // Existing TSV-only installations and user-selected dictionaries remain readable.
             std::sync::Arc::new(wowtype_core::MemoryLexicon::from_tsv_path_cached(&lexicon_path)
                 .map_err(|e| format!("词库载入失败（{}）：{e:#}", lexicon_path.display()))?)
         };
+    stage("词库");
     let lm: std::sync::Arc<dyn wowtype_core::LanguageModel> =
         match wowtype_core::lm::load_lm(resources.join("words.lm")) {
             Ok(lm) => lm,
             Err(_) => std::sync::Arc::new(wowtype_core::BigramLm::default()),
         };
+    stage("语言模型");
     let engine = Engine::new(lexicon, lm);
     // 模糊音和默认开启的纠错兜底都使用此索引。必须在后台载入阶段建好，
     // 否则 ready 后的首次按键仍会遍历整份词库，可能超过 TSF 的 1.5 秒等待上限。
     engine.prepare_fuzzy();
     let _ = engine.load_english(resources.join("english.txt"));
     let _ = engine.load_conversion(resources.join("s2t.tsv"));
+    stage("索引与字表");
     let store = Store::new(store_dir.to_path_buf());
     for (path, history) in [(store.user_dict_path(), false), (store.history_path(), true)] {
         if !path.exists() { continue; }
@@ -191,6 +205,7 @@ pub fn load_engine(resources: &Path, store_dir: &Path, lexicon: &str) -> Result<
             crate::log("检测到损坏的学习文件，已保留 .bad 副本");
         }
     }
+    stage("学习记录");
     // 用户导入的模型优先；不可用时仍可使用随安装包发布的固定模型。
     let external = store.dir().join("wetype").join("nlrgpt2_nnlm.bin");
     for model in [external, resources.join("nnlm.bin")] {
@@ -200,6 +215,8 @@ pub fn load_engine(resources: &Path, store_dir: &Path, lexicon: &str) -> Result<
             Err(error) => crate::log(&format!("整句增强模型载入失败：{error:#}")),
         }
     }
+    stage("整句模型");
+    crate::log(&format!("载入分段：{}", stages.join("，")));
     Ok(engine)
 }
 
@@ -714,6 +731,10 @@ impl Host {
     }
 
     fn style(&self, frame: &mut Frame, mode: Mode) {
+        // 开机后词库还没载好时只能原样上屏字母；空着的候选窗要说明原因，不让人以为卡住了。
+        if self.engine.is_none() && !frame.preedit.is_empty() && frame.candidates.is_empty() && frame.title.is_none() {
+            frame.title = Some(LOADING_TITLE.into());
+        }
         frame.mode = mode;
         frame.chinese_punct = self.config.fullwidth_punct;
         frame.traditional = self.config.traditional;

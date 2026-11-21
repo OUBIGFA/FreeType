@@ -53,7 +53,9 @@ struct Layer {
 struct State {
     kv: Vec<f32>, // [LAYERS][2][D]
     y: Vec<f32>,  // [D]
-    lse: f32,
+    /// 整个词表的 log-sum-exp（约占一步前向的四成）。上文中间各字的状态只用来接着往后算，
+    /// 不用它，所以第一次需要这个前缀之后的字概率时才算。
+    lse: Option<f32>,
     used: u64,
 }
 
@@ -304,8 +306,8 @@ impl Nnlm {
         let mut total = 0.0f64;
         for &tok in tokens {
             self.ensure(&mut cache, &seq);
-            let state = cache.states.get(&seq).expect("刚算过");
-            total += (self.logit(tok, &state.y) - state.lse) as f64;
+            let state = cache.states.get_mut(&seq).expect("刚算过");
+            total += (self.logit(tok, &state.y) - self.lse(state)) as f64;
             seq.push(tok);
         }
         if cache.states.len() > CACHE_CAP {
@@ -325,10 +327,10 @@ impl Nnlm {
         };
         cache.clock += 1;
         self.ensure(&mut cache, prefix);
-        let Some(state) = cache.states.get(prefix) else {
+        let Some(state) = cache.states.get_mut(prefix) else {
             return 0.0;
         };
-        let lp = self.logit(self.token(ch), &state.y) - state.lse;
+        let lp = self.logit(self.token(ch), &state.y) - self.lse(state);
         if cache.states.len() > CACHE_CAP {
             cache.evict();
         }
@@ -342,10 +344,11 @@ impl Nnlm {
         };
         cache.clock += 1;
         self.ensure(&mut cache, prefix);
-        let state = cache.states.get(prefix).expect("刚算过");
+        let state = cache.states.get_mut(prefix).expect("刚算过");
+        let lse = self.lse(state);
         let inverse: HashMap<u32, char> = self.vocab.iter().map(|(&c, &i)| (i, c)).collect();
         let mut all: Vec<(u32, f32)> = (0..self.vocab_size as u32)
-            .map(|t| (t, self.logit(t, &state.y) - state.lse))
+            .map(|t| (t, self.logit(t, &state.y) - lse))
             .collect();
         all.sort_by(|a, b| b.1.total_cmp(&a.1));
         all.into_iter()
@@ -441,24 +444,30 @@ impl Nnlm {
         }
         let mut y = vec![0.0f32; D];
         layer_norm(&x, &self.lnf_g, &self.lnf_b, &mut y);
-        // log-sum-exp over 全部词表
-        let mut max = f32::NEG_INFINITY;
-        let logits: Vec<f32> = self
-            .wte
-            .chunks_exact(D)
-            .map(|row| {
-                let v = dot(row, &y);
-                max = max.max(v);
-                v
-            })
-            .collect();
-        let sum: f32 = logits.iter().map(|v| (v - max).exp()).sum();
         State {
             kv,
             y,
-            lse: max + sum.ln(),
+            lse: None,
             used: clock,
         }
+    }
+
+    /// log-sum-exp over 全部词表；算一次记在状态里。
+    fn lse(&self, state: &mut State) -> f32 {
+        *state.lse.get_or_insert_with(|| {
+            let mut max = f32::NEG_INFINITY;
+            let logits: Vec<f32> = self
+                .wte
+                .chunks_exact(D)
+                .map(|row| {
+                    let v = dot(row, &state.y);
+                    max = max.max(v);
+                    v
+                })
+                .collect();
+            let sum: f32 = logits.iter().map(|v| (v - max).exp()).sum();
+            max + sum.ln()
+        })
     }
 }
 

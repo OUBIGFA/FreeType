@@ -36,23 +36,39 @@ pub const BOS: &str = "<s>";
 /// 再高（−0.5）中低频 88.8%，但整句回落到 84.8%、简拼也降。设成 0 以前出过「分崩离兮」。
 pub const OOV_FLOOR: f64 = -1.5;
 
+/// 文件内容：随包模型只读映射（定长数组直接从映射读，不复制成私有内存），测试用内存数据。
+type Bytes = Box<dyn AsRef<[u8]> + Send + Sync>;
+
 pub struct WordLm {
     ids: HashMap<String, u32>,
     words: Vec<String>,
-    backoff: Vec<f32>,
-    starts: Vec<u32>,
-    curs: Vec<u32>,
-    scores: Vec<f32>,
+    data: Bytes,
+    /// 各定长数组在文件里的起点：ln λ(prev)、每个 prev 的二元组起点、cur 编号、分数。
+    backoff_at: usize,
+    starts_at: usize,
+    curs_at: usize,
+    scores_at: usize,
+}
+
+fn le_u32(bytes: &[u8], at: usize) -> u32 {
+    u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
 }
 
 impl WordLm {
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path = path.as_ref();
-        let data = std::fs::read(path).with_context(|| format!("读取 {}", path.display()))?;
-        Self::from_bytes(&data).with_context(|| format!("解析 {}", path.display()))
+        let file = std::fs::File::open(path).with_context(|| format!("读取 {}", path.display()))?;
+        // 安装目录的模型只读、由安装器整体替换；映射页可被系统回收，不占 30 多 MB 私有内存。
+        let map = unsafe { memmap2::Mmap::map(&file) }.with_context(|| format!("映射 {}", path.display()))?;
+        Self::from_data(Box::new(map)).with_context(|| format!("解析 {}", path.display()))
     }
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        Self::from_data(Box::new(data.to_vec()))
+    }
+
+    fn from_data(owned: Bytes) -> Result<Self> {
+        let data = (*owned).as_ref();
         let mut r = Reader { d: data, at: 0 };
         if r.take(4)? != MAGIC {
             bail!("不是 WowType 词级语言模型");
@@ -79,20 +95,27 @@ impl WordLm {
             }
             words.push(w);
         }
-        let backoff = r.f32s(n)?;
-        let starts = r.u32s(n + 1)?;
-        let curs = r.u32s(m)?;
-        let scores = r.f32s(m)?;
-        if starts.first().copied() != Some(0) || starts.last().copied() != Some(m as u32)
-            || starts.windows(2).any(|w| w[0] > w[1]) || curs.iter().any(|&id| id as usize >= n) {
+        let backoff_at = r.at;
+        let backoff = r.take(n * 4)?;
+        let starts_at = r.at;
+        let starts = r.take((n + 1) * 4)?;
+        let curs_at = r.at;
+        let curs = r.take(m * 4)?;
+        let scores_at = r.at;
+        let scores = r.take(m * 4)?;
+        let start = |i: usize| le_u32(starts, i * 4);
+        let cur = |i: usize| le_u32(curs, i * 4);
+        if start(0) != 0 || start(n) != m as u32 || (0..n).any(|i| start(i) > start(i + 1))
+            || (0..m).any(|i| cur(i) as usize >= n) {
             bail!("二元组索引坏了");
         }
-        for row in starts.windows(2) {
-            if curs[row[0] as usize..row[1] as usize].windows(2).any(|pair| pair[0] >= pair[1]) {
+        for i in 0..n {
+            if (start(i) as usize + 1..start(i + 1) as usize).any(|j| cur(j - 1) >= cur(j)) {
                 bail!("二元组编号未严格递增");
             }
         }
-        if backoff.iter().chain(&scores).any(|value| !value.is_finite()) {
+        if backoff.chunks_exact(4).chain(scores.chunks_exact(4))
+            .any(|value| !f32::from_le_bytes(value.try_into().unwrap()).is_finite()) {
             bail!("词级模型含非有限分数");
         }
         if r.at != data.len() {
@@ -101,11 +124,34 @@ impl WordLm {
         Ok(Self {
             ids,
             words,
-            backoff,
-            starts,
-            curs,
-            scores,
+            data: owned,
+            backoff_at,
+            starts_at,
+            curs_at,
+            scores_at,
         })
+    }
+
+    fn bytes(&self) -> &[u8] {
+        (*self.data).as_ref()
+    }
+
+    fn backoff(&self, prev: u32) -> f32 {
+        f32::from_bits(le_u32(self.bytes(), self.backoff_at + prev as usize * 4))
+    }
+
+    /// prev 的二元组在 curs / scores 里的下标范围。
+    fn row(&self, prev: u32) -> std::ops::Range<usize> {
+        let at = self.starts_at + prev as usize * 4;
+        le_u32(self.bytes(), at) as usize..le_u32(self.bytes(), at + 4) as usize
+    }
+
+    fn cur(&self, i: usize) -> u32 {
+        le_u32(self.bytes(), self.curs_at + i * 4)
+    }
+
+    fn pair_score(&self, i: usize) -> f32 {
+        f32::from_bits(le_u32(self.bytes(), self.scores_at + i * 4))
     }
 
     pub fn words(&self) -> usize {
@@ -113,16 +159,22 @@ impl WordLm {
     }
 
     pub fn bigrams(&self) -> usize {
-        self.curs.len()
+        (self.scores_at - self.curs_at) / 4
     }
 
     fn pair(&self, prev: u32, cur: u32) -> Option<f32> {
-        let (a, b) = (
-            self.starts[prev as usize] as usize,
-            self.starts[prev as usize + 1] as usize,
-        );
-        let row = &self.curs[a..b];
-        row.binary_search(&cur).ok().map(|i| self.scores[a + i])
+        // 同一 prev 内 cur 编号严格递增（载入时已校验），二分查找。
+        let row = self.row(prev);
+        let (mut low, mut high) = (row.start, row.end);
+        while low < high {
+            let mid = low + (high - low) / 2;
+            match self.cur(mid).cmp(&cur) {
+                std::cmp::Ordering::Less => low = mid + 1,
+                std::cmp::Ordering::Greater => high = mid,
+                std::cmp::Ordering::Equal => return Some(self.pair_score(mid)),
+            }
+        }
+        None
     }
 }
 
@@ -140,11 +192,11 @@ impl LanguageModel for WordLm {
         // 回退分再设个下限 OOV_FLOOR：句首的回退分低到 −4.2，热词表里补的新词（大模型、黑神话、
         // 永远的神）都不在模型里，30000 的词频实际只顶 450 用。
         let Some(&c) = self.ids.get(cur) else {
-            return (self.backoff[p as usize] as f64).max(OOV_FLOOR);
+            return (self.backoff(p) as f64).max(OOV_FLOOR);
         };
         match self.pair(p, c) {
             Some(s) => s as f64,
-            None => self.backoff[p as usize] as f64,
+            None => self.backoff(p) as f64,
         }
     }
 
@@ -164,8 +216,8 @@ impl LanguageModel for WordLm {
             return;
         };
         // 存的分数本来就是提升度；「的」这样的词后面有八万多个搭配，所以不排序、不复制
-        for i in self.starts[p as usize] as usize..self.starts[p as usize + 1] as usize {
-            visit(&self.words[self.curs[i] as usize], self.scores[i] as f64);
+        for i in self.row(p) {
+            visit(&self.words[self.cur(i) as usize], self.pair_score(i) as f64);
         }
     }
 
@@ -173,17 +225,9 @@ impl LanguageModel for WordLm {
         let Some(&p) = self.ids.get(prev) else {
             return Vec::new();
         };
-        let (a, b) = (
-            self.starts[p as usize] as usize,
-            self.starts[p as usize + 1] as usize,
-        );
-        let mut items: Vec<(String, f64)> = (a..b)
-            .map(|i| {
-                (
-                    self.words[self.curs[i] as usize].clone(),
-                    self.scores[i] as f64,
-                )
-            })
+        let mut items: Vec<(String, f64)> = self
+            .row(p)
+            .map(|i| (self.words[self.cur(i) as usize].clone(), self.pair_score(i) as f64))
             .collect();
         items.sort_by(|x, y| y.1.total_cmp(&x.1).then_with(|| x.0.cmp(&y.0)));
         items.truncate(limit);
@@ -206,18 +250,6 @@ impl<'a> Reader<'a> {
     fn u32(&mut self) -> Result<u32> {
         let b = self.take(4)?;
         Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-    }
-    fn u32s(&mut self, n: usize) -> Result<Vec<u32>> {
-        let b = self.take(n * 4)?;
-        Ok(b.chunks_exact(4)
-            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-            .collect())
-    }
-    fn f32s(&mut self, n: usize) -> Result<Vec<f32>> {
-        let b = self.take(n * 4)?;
-        Ok(b.chunks_exact(4)
-            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-            .collect())
     }
 }
 

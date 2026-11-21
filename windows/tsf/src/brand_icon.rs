@@ -70,12 +70,14 @@ impl BrandUpdater {
         })
     }
 
-    pub(crate) fn refresh(&mut self, force: bool) -> Result<()> {
+    /// `force` 时整幅图重取并重设；`reapply` 时按已知修订号查询（未变化时应答不带图像），
+    /// 再用缓存的图像重设系统图标。
+    pub(crate) fn refresh(&mut self, force: bool, reapply: bool) -> Result<()> {
         let response = self.client.call(&Request::GetBrandIcon {
             known_revision: if force { None } else { self.revision },
         }).ok_or_else(|| windows::core::Error::from_hresult(E_FAIL))?;
         let size = unsafe { GetSystemMetrics(SM_CXSMICON) }.max(16);
-        if force || response.brand_icon.is_some() || self.size != size {
+        if force || reapply || response.brand_icon.is_some() || self.size != size {
             let image = response.brand_icon.as_ref().or(self.image.as_ref()).cloned();
             if let Some(image) = image {
                 self.set_image(&image, size)?;
@@ -145,12 +147,20 @@ fn refresh_monitor(state: &Rc<RefCell<MonitorState>>, force: bool) -> Result<()>
         state.borrow_mut().updater = updater;
         return Ok(());
     }
+    // 焦点一直在本线程时不再每秒经管道询问（每个输入线程一次往返，最长等 200 ms，
+    // 发生在应用的界面线程上）。图标变化由服务广播通知；漏掉的在下次得到焦点时补上。
+    if !force && updater.as_ref().is_some_and(|updater| updater.had_focus) {
+        state.borrow_mut().updater = updater;
+        return Ok(());
+    }
     let mut updater = match updater {
         Some(updater) => updater,
         None => BrandUpdater::new(&manager)?,
     };
-    let result = updater.refresh(force || focused && !updater.had_focus);
-    updater.had_focus = focused;
+    // 得到焦点时系统可能换回了注册的图标，要重设；图像本身只在修订号变化时重取。
+    let result = updater.refresh(force, focused && !updater.had_focus);
+    // 失败（服务未启动、超时）时下一秒再试，成功后才停止轮询。
+    updater.had_focus = focused && result.is_ok();
     state.borrow_mut().updater = Some(updater);
     result
 }

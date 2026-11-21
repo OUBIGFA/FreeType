@@ -2575,3 +2575,25 @@ fn merge_settings_adds_remote_data_without_dropping_local_data() {
     cleanup(&source);
     cleanup(&target);
 }
+
+#[test]
+fn typing_while_the_dictionary_loads_says_so_and_recovers_once_ready() {
+    let dir = std::env::temp_dir().join(format!("freetype-host-loading-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut host = Host::new(Store::new(dir));
+    host.handle(1, Request::Hello { session: true, app: "notepad.exe".into() });
+    let frame = typing(&mut host, "niha");
+    assert_eq!(frame.preedit, "niha");
+    assert!(frame.candidates.is_empty());
+    assert_eq!(frame.title.as_deref(), Some(LOADING_TITLE), "an empty candidate window must explain the wait");
+    let lexicon = wowtype_core::MemoryLexicon::from_tsv_str("ni hao\t你好\t1000\n").unwrap();
+    host.install_engine(Ok(Engine::new(
+        std::sync::Arc::new(lexicon),
+        std::sync::Arc::new(wowtype_core::BigramLm::default()),
+    )));
+    // Letters typed during loading stay in the preedit and get candidates on the next key.
+    let frame = press(&mut host, 'o' as u32);
+    assert_eq!(frame.candidates.first().map(String::as_str), Some("你好"));
+    assert_eq!(frame.title, None);
+    cleanup(&host);
+}

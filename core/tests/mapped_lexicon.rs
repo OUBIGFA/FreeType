@@ -82,6 +82,11 @@ fn mapped_queries_and_candidates_match_the_tsv_engine() {
             memory.has_longer(&query),
             "prefix {query:?}"
         );
+        assert_eq!(
+            mapped.has_longer_fuzzy(&query),
+            memory.has_longer_fuzzy(&query),
+            "fuzzy prefix {query:?}"
+        );
         for groups in [
             0,
             wowtype_core::syllable::fuzzy::ZH,
@@ -210,4 +215,94 @@ fn open_mapping_denies_in_place_writers() {
         .open(&index)
         .is_err());
     assert_eq!(mapping.lookup(&full("ni hao"))[0].word, "你好");
+}
+
+#[test]
+fn verified_record_skips_full_checksums_only_for_unchanged_files() {
+    let (source, index) = fixture();
+    let record = index.with_file_name("lexicon.verified");
+    MappedLexicon::compile(&source, &index).unwrap();
+    // The first open performs the full check and remembers both file identities.
+    MappedLexicon::open_verified(&source, &index, &record).unwrap();
+    assert!(record.is_file());
+    // Same size and modification time: startup trusts the record and skips the
+    // full-file CRC. Damage the trailing checksum but keep the identity unchanged.
+    let modified = std::fs::metadata(&index).unwrap().modified().unwrap();
+    let mut bytes = std::fs::read(&index).unwrap();
+    let last = bytes.len() - 1;
+    bytes[last] ^= 1;
+    std::fs::write(&index, &bytes).unwrap();
+    std::fs::File::options().write(true).open(&index).unwrap().set_modified(modified).unwrap();
+    let mapped = MappedLexicon::open_verified(&source, &index, &record).unwrap();
+    assert_eq!(mapped.lookup(&full("ni hao"))[0].word, "你好");
+    drop(mapped);
+    assert!(MappedLexicon::open(&source, &index).is_err(), "plain open still verifies everything");
+    // Any replacement changes the identity, so the full check runs again.
+    std::fs::write(&index, &bytes).unwrap();
+    assert!(MappedLexicon::open_verified(&source, &index, &record).is_err());
+    MappedLexicon::compile(&source, &index).unwrap();
+    MappedLexicon::open_verified(&source, &index, &record).unwrap();
+    std::fs::write(&source, WORDS.replace("你好", "拟好")).unwrap();
+    assert!(MappedLexicon::open_verified(&source, &index, &record).is_err());
+}
+
+#[test]
+fn fuzzy_pruning_keeps_every_longer_fuzzy_word() {
+    use wowtype_core::lexicon::FuzzyLexicon;
+    use wowtype_core::syllable::fuzzy::ALL;
+    let (source, index) = fixture();
+    MappedLexicon::compile(&source, &index).unwrap();
+    let mapped = MappedLexicon::open(&source, &index).unwrap();
+    let memory = MemoryLexicon::from_tsv_path(&source).unwrap();
+    for inner in [&mapped as &dyn Lexicon, &memory] {
+        let view = FuzzyLexicon::new(inner, ALL, 2.5);
+        // 只有 zhong guo / zong guo 两种读音：zeng 经 eng/ong 不相关，zhong 精确就有更长的词。
+        assert!(view.has_longer(&full("zhong")));
+        // 精确的 zong 后面也有词；cong 只能靠 c/ch、ong 模糊到 zhong 以外的读音，不剪错就行。
+        assert!(view.has_longer(&full("zong")));
+        // zheng guo 按 eng/ong 模糊到 zhong guo ren，后面还有词；ni hao 精确、模糊都没有更长的词。
+        assert!(view.has_longer(&full("zheng guo")));
+        assert!(!view.has_longer(&full("ni hao")));
+        // 不剪错：凡是模糊查询能查到的两音节词，它的第一个音节都必须判为「有更长的词」。
+        for first in ["zhong", "zong", "zheng", "zeng", "si", "shi", "ci", "chi", "ni", "li", "hua"] {
+            for second in ["guo", "ci", "chi", "hao", "r"] {
+                let Some(second) = Syllable::from_text(second) else { continue };
+                let query = vec![full(first)[0], second.query(false)];
+                if !view.lookup_common(&query).is_empty() {
+                    assert!(view.has_longer(&query[..1]), "pruned {first} before {query:?}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn lookup_memo_follows_learning_and_fuzzy_settings() {
+    let (source, index) = fixture();
+    MappedLexicon::compile(&source, &index).unwrap();
+    let lm = Arc::new(BigramLm::default());
+    let mut engine = Engine::new(Arc::new(MappedLexicon::open(&source, &index).unwrap()), lm);
+    let first = |engine: &Engine, code: &str| engine.input(code).into_iter().map(|c| c.text).collect::<Vec<_>>();
+    assert!(!first(&engine, "nihao").contains(&"泥号".to_string()));
+    // 缓存里已有 ni hao 的查表结果；学到的新词必须马上出现。
+    engine.add_user_word("ni hao", "泥号", 1e9).unwrap();
+    assert_eq!(first(&engine, "nihao")[0], "泥号");
+    assert!(engine.lexicon().remove("泥号"));
+    assert!(!first(&engine, "nihao").contains(&"泥号".to_string()));
+    // 模糊音开关和分组变化也不能沿用旧结果。
+    assert!(!first(&engine, "zongguo").contains(&"整过".to_string()));
+    engine.set_fuzzy(true);
+    engine.set_fuzzy_groups(wowtype_core::syllable::fuzzy::ALL);
+    let fuzzy = first(&engine, "zongguo");
+    assert!(fuzzy.contains(&"中国".to_string()), "{fuzzy:?}");
+    engine.set_fuzzy_groups(0);
+    assert_eq!(first(&engine, "zongguo"), {
+        let mut plain = Engine::new(
+            Arc::new(MappedLexicon::open(&source, &index).unwrap()),
+            Arc::new(BigramLm::default()),
+        );
+        plain.set_fuzzy(true);
+        plain.set_fuzzy_groups(0);
+        first(&plain, "zongguo")
+    });
 }

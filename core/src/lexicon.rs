@@ -199,6 +199,13 @@ pub trait Lexicon: Send + Sync {
         true
     }
 
+    /// 同 [`Lexicon::has_longer`]，但看模糊音读音：是否存在比 query 更长、模糊音归并后
+    /// 以 query 开头的词。[`FuzzyLexicon`] 靠它剪枝，否则开着模糊音时束搜索完全不剪，
+    /// 每键的查询次数多出六七倍。不确定时返回 true。
+    fn has_longer_fuzzy(&self, _query: &[SyllableQuery]) -> bool {
+        true
+    }
+
     fn total_freq(&self) -> f64;
 
     fn len(&self) -> usize;
@@ -214,6 +221,131 @@ pub trait Lexicon: Send + Sync {
     fn cost(&self, entry: &LexEntry) -> f64 {
         let total = self.total_freq().max(1.0);
         -((entry.freq.max(0.5)) / total).ln()
+    }
+
+    /// 束搜索用的查表：`all` 时含生僻字（[`Lexicon::lookup`]），否则 [`Lexicon::lookup_common`]；
+    /// `skip_ext` 时去掉扩展区单字。按（代价, 文字）取前 `limit` 个不同的词，附上代价。
+    ///
+    /// 束搜索对同一结束位置也按这个顺序只留 `limit` 个不同的词，所以先截断结果不变；
+    /// 单音节常有上千条、模糊音再翻几倍，省掉逐条建立候选。[`MemoLexicon`] 跨按键缓存它。
+    fn lookup_ranked(&self, query: &[SyllableQuery], all: bool, skip_ext: bool, limit: usize) -> Vec<(f64, LexEntry)> {
+        let mut entries = if all { self.lookup(query) } else { self.lookup_common(query) };
+        if skip_ext {
+            entries.retain(|e| !e.is_ext_char());
+        }
+        let mut costed: Vec<(f64, LexEntry)> = entries.into_iter().map(|e| (self.cost(&e), e)).collect();
+        if costed.len() > limit {
+            costed.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.word.cmp(&b.1.word)));
+            let mut seen = HashSet::new();
+            costed.retain(|(_, e)| seen.insert(e.word.clone()));
+            costed.truncate(limit);
+        }
+        costed
+    }
+}
+
+/// 跨按键复用 [`Lexicon::lookup_ranked`] 的结果。逐键输入时前面的音节不变，
+/// 同一段查询每键要重查好几遍（整句、句首词、翻页长尾）；结果只取决于查询和词库内容。
+/// `salt` 由词库代数和查询视图（模糊音分组、惩罚）组成，变了就整份清空。
+#[derive(Default)]
+pub struct LookupMemo {
+    state: std::sync::Mutex<MemoState>,
+}
+
+#[derive(Default)]
+struct MemoState {
+    salt: u64,
+    entries: usize,
+    map: HashMap<u64, Vec<(Vec<SyllableQuery>, bool, bool, usize, Arc<Vec<(f64, LexEntry)>>)>>,
+}
+
+impl LookupMemo {
+    /// 上限：缓存的词条总数约 6 万条（几 MB），超过就整份清空重来。
+    const MAX_ENTRIES: usize = 60_000;
+    /// 单次结果超过这么多条不缓存。
+    const MAX_RESULT: usize = 64;
+
+    pub fn clear(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            *state = MemoState::default();
+        }
+    }
+}
+
+/// 带缓存的查询视图；除 [`Lexicon::lookup_ranked`] 外都直接转给 `inner`。
+pub struct MemoLexicon<'a> {
+    pub inner: &'a dyn Lexicon,
+    pub memo: &'a LookupMemo,
+    pub salt: u64,
+}
+
+impl Lexicon for MemoLexicon<'_> {
+    fn complete_long_word(&self, prefix: &[SyllableKey], word_prefix: &str) -> Option<LexEntry> {
+        self.inner.complete_long_word(prefix, word_prefix)
+    }
+    fn prediction_index(&self) -> Option<&dyn PredictionIndex> {
+        self.inner.prediction_index()
+    }
+    fn lookup(&self, query: &[SyllableQuery]) -> Vec<LexEntry> {
+        self.inner.lookup(query)
+    }
+    fn lookup_common(&self, query: &[SyllableQuery]) -> Vec<LexEntry> {
+        self.inner.lookup_common(query)
+    }
+    fn lookup_fuzzy(&self, query: &[SyllableQuery], groups: u32) -> Vec<LexEntry> {
+        self.inner.lookup_fuzzy(query, groups)
+    }
+    fn prepare_fuzzy(&self) {
+        self.inner.prepare_fuzzy()
+    }
+    fn has_longer(&self, query: &[SyllableQuery]) -> bool {
+        self.inner.has_longer(query)
+    }
+    fn has_longer_fuzzy(&self, query: &[SyllableQuery]) -> bool {
+        self.inner.has_longer_fuzzy(query)
+    }
+    fn total_freq(&self) -> f64 {
+        self.inner.total_freq()
+    }
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+    fn for_each_word(&self, visit: &mut dyn FnMut(&str, f64)) {
+        self.inner.for_each_word(visit)
+    }
+    fn cost(&self, entry: &LexEntry) -> f64 {
+        self.inner.cost(entry)
+    }
+
+    fn lookup_ranked(&self, query: &[SyllableQuery], all: bool, skip_ext: bool, limit: usize) -> Vec<(f64, LexEntry)> {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        (query, all, skip_ext, limit).hash(&mut hasher);
+        let hash = hasher.finish();
+        let same = |item: &&(Vec<SyllableQuery>, bool, bool, usize, Arc<Vec<(f64, LexEntry)>>)| {
+            item.0 == query && item.1 == all && item.2 == skip_ext && item.3 == limit
+        };
+        if let Ok(state) = self.memo.state.lock() {
+            if state.salt == self.salt {
+                if let Some(found) = state.map.get(&hash).and_then(|bucket| bucket.iter().find(same)) {
+                    return found.4.as_ref().clone();
+                }
+            }
+        }
+        // 查表不持锁；同一时刻只有服务进程的引擎线程在用，重复计算也只是多做一次。
+        let found = self.inner.lookup_ranked(query, all, skip_ext, limit);
+        // 翻页长尾的整表（几百上千条）复制和重新解码差不多贵，只缓存截断后的小结果。
+        if found.len() > LookupMemo::MAX_RESULT {
+            return found;
+        }
+        if let Ok(mut state) = self.memo.state.lock() {
+            if state.salt != self.salt || state.entries + found.len() > LookupMemo::MAX_ENTRIES {
+                *state = MemoState { salt: self.salt, ..MemoState::default() };
+            }
+            state.entries += found.len().max(1);
+            state.map.entry(hash).or_default().push((query.to_vec(), all, skip_ext, limit, Arc::new(found.clone())));
+        }
+        found
     }
 }
 
@@ -236,6 +368,8 @@ pub struct MemoryLexicon {
     /// 默认不构建——模糊音默认关闭，而 55 万词库下建这张表要占掉不少加载时间。
     /// 第一次模糊查询时再建。
     fuzzy_index: OnceLock<HashMap<Vec<u32>, Vec<usize>>>,
+    /// 模糊音归并读音的所有「真前缀」哈希，供 has_longer_fuzzy 剪枝；和 fuzzy_index 一起建。
+    fuzzy_prefixes: OnceLock<HashSet<u64>>,
     /// 全拼词条所有「真前缀」的哈希，供 has_longer 剪枝（哈希碰撞只会少剪，不会错剪）。
     full_prefixes: HashSet<u64>,
     /// 同上，按声母：简拼和「全拼混简拼」（kyi、yongzwen）的查询用它剪枝。
@@ -542,6 +676,23 @@ impl MemoryLexicon {
         }
     }
 
+    fn build_fuzzy_prefixes(&self) -> HashSet<u64> {
+        let mut set = HashSet::new();
+        for entry in &self.entries {
+            if let Some(fuzzy) = entry
+                .keys
+                .iter()
+                .map(|k| crate::syllable::fuzzy_key(k.id))
+                .collect::<Option<Vec<_>>>()
+            {
+                for end in 1..fuzzy.len() {
+                    set.insert(fuzzy_hash(&fuzzy[..end]));
+                }
+            }
+        }
+        set
+    }
+
     fn build_fuzzy_index(&self) -> HashMap<Vec<u32>, Vec<usize>> {
         let mut map: HashMap<Vec<u32>, Vec<usize>> = HashMap::new();
         for (idx, entry) in self.entries.iter().enumerate() {
@@ -689,7 +840,20 @@ impl Lexicon for MemoryLexicon {
         self.full_prefixes.contains(&hash)
     }
 
+    fn has_longer_fuzzy(&self, query: &[SyllableQuery]) -> bool {
+        if query.is_empty() {
+            return false;
+        }
+        let Some(key) = fuzzy_query_key(query) else {
+            return false;
+        };
+        self.fuzzy_prefixes
+            .get_or_init(|| self.build_fuzzy_prefixes())
+            .contains(&fuzzy_hash(&key))
+    }
+
     fn prepare_fuzzy(&self) {
+        self.fuzzy_prefixes.get_or_init(|| self.build_fuzzy_prefixes());
         // 55 万条的词库约 0.2 秒
         self.fuzzy_index.get_or_init(|| self.build_fuzzy_index());
     }
@@ -818,6 +982,15 @@ impl Lexicon for FuzzyLexicon<'_> {
         self.inner.lookup_fuzzy(query, groups)
     }
 
+    // 精确或模糊读音任一能接成更长的词才继续往后搜；只看归并读音、不看分组，只会少剪。
+    fn has_longer(&self, query: &[SyllableQuery]) -> bool {
+        self.inner.has_longer(query) || (self.groups != 0 && self.inner.has_longer_fuzzy(query))
+    }
+
+    fn has_longer_fuzzy(&self, query: &[SyllableQuery]) -> bool {
+        self.inner.has_longer_fuzzy(query)
+    }
+
     fn total_freq(&self) -> f64 {
         self.inner.total_freq()
     }
@@ -847,6 +1020,8 @@ pub struct UserLexicon {
     // 导入词库只在导入/删除时重建，不能随每次选词学习重建几十万条数据。
     extra_snapshot: RwLock<Arc<MemoryLexicon>>,
     snapshot: RwLock<Arc<MemoryLexicon>>,
+    /// 两份快照每换一次加一；查询缓存（[`LookupMemo`]）据此失效。
+    generation: std::sync::atomic::AtomicU64,
 }
 
 pub(crate) fn user_dict_text(words: &[(String, String, f64)]) -> String {
@@ -872,6 +1047,7 @@ impl UserLexicon {
             extra: RwLock::new(Vec::new()),
             extra_snapshot: RwLock::new(Arc::new(MemoryLexicon::new())),
             snapshot: RwLock::new(Arc::new(MemoryLexicon::new())),
+            generation: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -1149,6 +1325,7 @@ impl UserLexicon {
         if let Ok(mut slot) = self.extra_snapshot.write() {
             *slot = Arc::new(snapshot);
         }
+        self.generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         count
     }
 
@@ -1174,6 +1351,12 @@ impl UserLexicon {
         }
         if let Ok(mut slot) = self.snapshot.write() { *slot = Arc::new(lexicon); }
         if let Ok(mut slot) = self.learned_codes.write() { *slot = learned_codes; }
+        self.generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// 词库内容的代数：学到的词、自定义词或导入词库变了就加一。
+    pub fn generation(&self) -> u64 {
+        self.generation.load(std::sync::atomic::Ordering::SeqCst)
     }
 }
 
@@ -1241,6 +1424,12 @@ impl Lexicon for UserLexicon {
             || self.extra_snapshot.read().map(|s| s.has_longer(query)).unwrap_or(true)
     }
 
+    fn has_longer_fuzzy(&self, query: &[SyllableQuery]) -> bool {
+        self.base.has_longer_fuzzy(query)
+            || self.snapshot.read().map(|s| s.has_longer_fuzzy(query)).unwrap_or(true)
+            || self.extra_snapshot.read().map(|s| s.has_longer_fuzzy(query)).unwrap_or(true)
+    }
+
     fn prepare_fuzzy(&self) {
         self.base.prepare_fuzzy();
     }
@@ -1298,6 +1487,24 @@ fn query_initials(query: &[SyllableQuery]) -> Option<Vec<u8>> {
 fn needs_initial_check(query: &SyllableQuery) -> bool {
     matches!(query, SyllableQuery::Jianpin { letter }
         if crate::syllable::jianpin_required_initial(*letter).is_some())
+}
+
+/// 模糊音查询的归并读音。含简拼、儿化或不参与模糊音的音节时，lookup_fuzzy 什么也不返回，
+/// 以它开头的更长查询同样如此，所以返回 None 表示「没有更长的模糊音词」。
+pub(crate) fn fuzzy_query_key(query: &[SyllableQuery]) -> Option<Vec<u32>> {
+    query
+        .iter()
+        .map(|q| match *q {
+            SyllableQuery::Full { id, erhua: false } => crate::syllable::fuzzy_key(id),
+            _ => None,
+        })
+        .collect()
+}
+
+fn fuzzy_hash(key: &[u32]) -> u64 {
+    key.iter().fold(KEY_HASH_SEED, |hash, id| {
+        id.to_le_bytes().iter().fold(hash, |h, &byte| (h ^ u64::from(byte)).wrapping_mul(0x1000_0000_01b3))
+    })
 }
 
 fn initial_hash_step(hash: u64, letter: u8) -> u64 {
