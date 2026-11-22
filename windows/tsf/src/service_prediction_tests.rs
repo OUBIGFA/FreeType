@@ -333,21 +333,33 @@ unsafe extern "system" fn feed_proc(window: HWND, message: u32, wparam: WPARAM, 
     })
 }
 
-/// Turn the editor into what CUAS gives an IMM32 app such as FreeMD: a transitory
-/// document marked as emulated, emptied after each commit, with the app's own window.
+fn set_compartment(editor: &Editor, guid: &GUID, value: &VARIANT) {
+    let mgr: ITfCompartmentMgr = editor.document.cast().unwrap();
+    unsafe { mgr.GetCompartment(guid).unwrap().SetValue(editor.client, value).unwrap(); }
+}
+
+/// Point the editor's Transitory Extensions compartment at `parent`, as Windows does.
+fn set_parent(editor: &Editor, parent: &IUnknown) {
+    set_compartment(editor, &GUID_COMPARTMENT_TRANSITORYEXTENSION_PARENT, &VARIANT::from(parent.clone()));
+}
+
+/// Turn the editor into what CUAS gives an IMM32 app such as FreeMD, as read on
+/// Windows 11: a transitory document marked as emulated, whose parent compartment
+/// holds an object that is not a document manager, emptied after each commit,
+/// with the app's own window.
 struct Imm32Host(Option<HWND>);
 
 impl Imm32Host {
     unsafe fn new(editor: &Editor, answers_feed: bool) -> Self {
         editor.store.transitory.set(true);
         editor.store.commit_only.set(true);
-        let mgr: ITfCompartmentMgr = editor.document.cast().unwrap();
-        let mut flag = VARIANT::default();
-        unsafe {
-            (*flag.Anonymous.Anonymous).vt = VT_I4;
-            (*flag.Anonymous.Anonymous).Anonymous.lVal = 1;
-            mgr.GetCompartment(&GUID_COMPARTMENT_EMULATED_DOCUMENTMGR).unwrap().SetValue(editor.client, &flag).unwrap();
-        }
+        set_compartment(editor, &GUID_COMPARTMENT_EMULATED_DOCUMENTMGR, &VARIANT::from(1i32));
+        set_parent(editor, &editor.store.as_interface::<ITextStoreACP>().cast().unwrap());
+        unsafe { Self::window(editor, answers_feed) }
+    }
+
+    /// Only the app window that answers IMR_DOCUMENTFEED, for hosts set up by the test.
+    unsafe fn window(editor: &Editor, answers_feed: bool) -> Self {
         if !answers_feed { return Self(None); }
         let class = windows::core::w!("FreeTypeImm32FeedTest");
         let instance = HINSTANCE(unsafe { GetModuleHandleW(None).unwrap() }.0);
@@ -386,6 +398,61 @@ fn autospace_reads_imm32_text_through_document_feed() {
         // Text the app already had; FreeType never committed it.
         editor.store.app_text.borrow_mut().extend(wide("你好"));
         assert!(press_digit(editor, &sink, 5), "光标前是汉字，数字前要先补空格");
+        assert_eq!(String::from_utf16_lossy(&editor.store.app_text.borrow()), "你好 5");
+    });
+}
+
+/// A second TSF document, as the full parent of a Transitory Extensions document.
+struct ParentDocument {
+    document: ITfDocumentMgr,
+    _store: ComObject<Store>,
+}
+
+impl ParentDocument {
+    unsafe fn new(editor: &Editor, transitory: bool, text: &str) -> Self {
+        let store = Store::default().into_object();
+        store.transitory.set(transitory);
+        store.text.borrow_mut().extend(wide(text));
+        store.selection.set(TS_SELECTION_ACP { acpStart: text.encode_utf16().count() as i32, acpEnd: text.encode_utf16().count() as i32, ..Default::default() });
+        let document = unsafe { editor.manager.CreateDocumentMgr().unwrap() };
+        let (mut context, mut cookie) = (None, 0);
+        let unknown: IUnknown = store.as_interface::<ITextStoreACP>().cast().unwrap();
+        unsafe {
+            document.CreateContext(editor.client, 0, &unknown, &mut context, &mut cookie).unwrap();
+            document.Push(&context.unwrap()).unwrap();
+        }
+        set_parent(editor, &document.cast().unwrap());
+        Self { document, _store: store }
+    }
+}
+
+impl Drop for ParentDocument {
+    fn drop(&mut self) { unsafe { let _ = self.document.Pop(TF_POPF_ALL); } }
+}
+
+#[test]
+fn autospace_reads_the_full_parent_of_a_transitory_extensions_document() {
+    in_editor(|editor, state, sink| unsafe {
+        // Edit and RichEdit: the transitory document is empty, the parent has the text.
+        editor.store.transitory.set(true);
+        editor.store.commit_only.set(true);
+        let _parent = ParentDocument::new(editor, false, "你好");
+        use_test_host(&state);
+        assert!(press_digit(editor, &sink, 5), "父文档光标前是汉字，数字前要先补空格");
+        assert_eq!(String::from_utf16_lossy(&editor.store.app_text.borrow()), " 5");
+    });
+}
+
+#[test]
+fn autospace_asks_the_app_when_the_parent_document_is_transitory_too() {
+    in_editor(|editor, state, sink| unsafe {
+        editor.store.transitory.set(true);
+        editor.store.commit_only.set(true);
+        let _parent = ParentDocument::new(editor, true, "");
+        let _window = Imm32Host::window(editor, true);
+        use_test_host(&state);
+        editor.store.app_text.borrow_mut().extend(wide("你好"));
+        assert!(press_digit(editor, &sink, 5), "父文档也是临时文档时照 Mozc 改问应用窗口");
         assert_eq!(String::from_utf16_lossy(&editor.store.app_text.borrow()), "你好 5");
     });
 }

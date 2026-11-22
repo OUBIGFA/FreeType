@@ -337,24 +337,61 @@ fn before_text(context: &ITfContext, ec: u32) -> Option<String> {
 /// 来源：Mozc `src/win32/tip/tip_transitory_extension.cc` 的 `kTsfEmulatedDocumentMgrGuid`。
 const GUID_COMPARTMENT_EMULATED_DOCUMENTMGR: GUID = GUID::from_u128(0xa94c5fd2_c471_4031_9546_709c17300cb9);
 
-/// CUAS 替 IMM32 应用（如用 mygo 写的 FreeMD）搭的临时文档只装编辑区，上屏后即清空，
-/// 从 TSF 读光标前文字总是空串，只能用 IMR_DOCUMENTFEED 向应用窗口要。
+/// 光标前文字从哪里读。照搬 Mozc 的 `TipTransitoryExtension::AsFullContext` 与
+/// `TipSurroundingText::Get`（`src/win32/tip/`）的判断：
 ///
-/// 判断顺序照 Mozc：非临时文档、带完整父文档的临时文档（Edit、RichEdit）和 Chromium 系
-/// 临时文档都能从 TSF 读到正文，不在此列。
-fn cuas_document(context: &ITfContext) -> bool {
+/// - 非临时文档（Word、WPF、Firefox 等）：直接读这份 TSF 文档；
+/// - 临时文档带完整的父文档（Edit、RichEdit 的 Transitory Extensions）：读父文档；
+///   父文档也是临时的，或拿不到父文档的顶层上下文：按 IMM32 应用处理；
+/// - 临时文档带 CUAS 模拟标记（IMM32 应用，如用 mygo 写的 FreeMD）：TSF 文档只装编辑区、
+///   上屏后即清空，只能用 IMR_DOCUMENTFEED 向应用窗口要；
+/// - 其余临时文档（Chromium 系）：TSF 文档里有正文，直接读。
+///
+/// 真机核对（Windows 11）：CUAS 文档的父文档隔间也是 VT_UNKNOWN，但它不是
+/// ITfDocumentMgr，必须按 Mozc 的做法转换接口后再判断，不能只看是否非空。
+enum Surrounding {
+    Tsf(ITfContext),
+    Imm32,
+}
+
+fn surrounding(context: &ITfContext) -> Surrounding {
     unsafe {
-        if !context.GetStatus().is_ok_and(|status| status.dwStaticFlags & TF_SS_TRANSITORY != 0) { return false; }
-        let Some(mgr) = context.GetDocumentMgr().ok().and_then(|doc| doc.cast::<ITfCompartmentMgr>().ok()) else { return false; };
-        let has_parent = mgr.GetCompartment(&GUID_COMPARTMENT_TRANSITORYEXTENSION_PARENT).and_then(|c| c.GetValue())
-            .is_ok_and(|mut parent| {
-                let inner = &parent.Anonymous.Anonymous;
-                let has = inner.vt == VT_UNKNOWN && inner.Anonymous.punkVal.is_some();
-                let _ = VariantClear(&mut parent);
-                has
-            });
-        !has_parent && compartment_value(&mgr, &GUID_COMPARTMENT_EMULATED_DOCUMENTMGR).is_some_and(|v| v & 1 != 0)
+        let Ok(status) = context.GetStatus() else { return Surrounding::Imm32; };
+        if status.dwStaticFlags & TF_SS_TRANSITORY == 0 { return Surrounding::Tsf(context.clone()); }
+        let Ok(doc) = context.GetDocumentMgr() else { return Surrounding::Imm32; };
+        let Ok(mgr) = doc.cast::<ITfCompartmentMgr>() else { return Surrounding::Tsf(context.clone()); };
+        if let Some(parent) = transitory_parent(&mgr).filter(|parent| !same_object(parent, &doc)) {
+            return match parent.GetTop() {
+                Ok(top) if top.GetStatus().is_ok_and(|s| s.dwStaticFlags & TF_SS_TRANSITORY == 0) => Surrounding::Tsf(top),
+                _ => Surrounding::Imm32,
+            };
+        }
+        if compartment_value(&mgr, &GUID_COMPARTMENT_EMULATED_DOCUMENTMGR).is_some_and(|v| v & 1 != 0) {
+            Surrounding::Imm32
+        } else {
+            Surrounding::Tsf(context.clone())
+        }
     }
+}
+
+/// Transitory Extensions 的父文档；隔间里的对象不是文档管理器时视为没有。
+fn transitory_parent(mgr: &ITfCompartmentMgr) -> Option<ITfDocumentMgr> {
+    unsafe {
+        let mut value = mgr.GetCompartment(&GUID_COMPARTMENT_TRANSITORYEXTENSION_PARENT).ok()?.GetValue().ok()?;
+        let inner = &value.Anonymous.Anonymous;
+        let parent = if inner.vt == VT_UNKNOWN {
+            inner.Anonymous.punkVal.as_ref().and_then(|unknown| unknown.cast::<ITfDocumentMgr>().ok())
+        } else { None };
+        let _ = VariantClear(&mut value);
+        parent
+    }
+}
+
+/// IMM32 应用的光标前文字：向文档所在窗口要；拿不到窗口或应用不答都算不知道。
+fn imm32_before(context: &ITfContext) -> Option<String> {
+    unsafe { context.GetActiveView().and_then(|view| view.GetWnd()) }.ok()
+        .filter(|window| !window.is_invalid())
+        .and_then(document_feed)
 }
 
 /// 向 IMM32 应用要光标前最多 [`BEFORE_CHARS`] 个字（IMR_DOCUMENTFEED）。应用不答时返回 None：
@@ -377,14 +414,6 @@ fn document_feed(window: HWND) -> Option<String> {
     let units = unsafe { std::slice::from_raw_parts(buffer.as_ptr().cast::<u8>().add(start).cast::<u16>(), caret) };
     let before: Vec<char> = char::decode_utf16(units.iter().copied()).map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER)).collect();
     Some(before[before.len().saturating_sub(BEFORE_CHARS as usize)..].iter().collect())
-}
-
-/// 光标前的字：CUAS 文档问应用窗口（拿不到窗口也算不知道），其余读 TSF 文档。
-fn context_before(context: &ITfContext, ec: u32) -> Option<String> {
-    if !cuas_document(context) { return before_text(context, ec); }
-    unsafe { context.GetActiveView().and_then(|view| view.GetWnd()) }.ok()
-        .filter(|window| !window.is_invalid())
-        .and_then(document_feed)
 }
 
 /// 应用给不出光标位置时：系统记的插入符，再不行用输入框窗口的左下角。
@@ -857,11 +886,15 @@ fn now_ms() -> u64 {
 
 /// 只读一下光标前的字（同步）。
 fn read_before(state: &Rc<RefCell<State>>, context: &ITfContext) -> Option<String> {
+    let target = match surrounding(context) {
+        Surrounding::Imm32 => return imm32_before(context),
+        Surrounding::Tsf(target) => target,
+    };
     let client_id = state.borrow().client_id;
     let out: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
-    let (out2, context2) = (out.clone(), context.clone());
-    edit_with(context, client_id, TF_ES_SYNC | TF_ES_READ, move |ec| {
-        *out2.borrow_mut() = context_before(&context2, ec);
+    let (out2, context2) = (out.clone(), target.clone());
+    edit_with(&target, client_id, TF_ES_SYNC | TF_ES_READ, move |ec| {
+        *out2.borrow_mut() = before_text(&context2, ec);
         Ok(())
     });
     let text = out.borrow_mut().take();
@@ -1359,7 +1392,12 @@ fn on_focus(state: &Rc<RefCell<State>>, focus: Option<&ITfDocumentMgr>) {
         if sensitive { return Ok(()); }
         // A queued focus read can arrive after the first commit in this field.
         if prediction_in(&state2.borrow(), &context2) { return Ok(()); }
-        let before = context_before(&context2, ec);
+        let before = match surrounding(&context2) {
+            Surrounding::Tsf(target) if same_object(&target, &context2) => before_text(&context2, ec),
+            // 父文档要另开读锁；这里先报不知道，下一个键会照常读到
+            Surrounding::Tsf(_) => None,
+            Surrounding::Imm32 => imm32_before(&context2),
+        };
         let caret = selection_rect(&context2, ec);
         // 大写锁定可能在别的窗口里开关过：先对齐，下面拿到的中英文状态才是对的
         let on = caps_on();

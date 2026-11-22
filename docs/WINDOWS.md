@@ -110,7 +110,7 @@ flowchart LR
 
 - V 模式：`v1+2*3` 得到 7；`v1314` 得到「壹仟叁佰壹拾肆元整」和「一千三百一十四」。
 - 日期时间（riqi、shijian、xingqi、rq、sj）、emoji 推荐、学习：与 WowType 的会话接口一致，见 [ABI.md](ABI.md) 和 [USAGE.md](USAGE.md)。
-- 中英文之间自动加空格（默认开）：同时检查光标前文字与本次上屏文字的交界，以及本次文字内部的中英交界。汉字与字母、汉字与数字分别控制。已有空格、换行和制表符保留。FreeMD 等经 CUAS 兼容层接入的 IMM32 应用，TSF 文档里没有正文，改用 `IMR_DOCUMENTFEED` 向应用读取光标前文字；应用不提供时，沿用 FreeType 在该输入框刚上屏的文字。识别方法参照 [Mozc](https://github.com/google/mozc/blob/master/src/win32/tip/tip_transitory_extension.cc)。
+- 中英文之间自动加空格（默认开）：同时检查光标前文字与本次上屏文字的交界，以及本次文字内部的中英交界。汉字与字母、汉字与数字分别控制。已有空格、换行和制表符保留。光标前文字的来源照搬 [Mozc](https://github.com/google/mozc/blob/master/src/win32/tip/tip_transitory_extension.cc) 的判断：普通 TSF 文档和 Chromium 系直接读；Edit、RichEdit 读完整的父文档；FreeMD 等经 CUAS 兼容层接入的 IMM32 应用，TSF 文档里没有正文，改用 `IMR_DOCUMENTFEED` 向应用读取；应用不提供时，沿用 FreeType 在该输入框刚上屏的文字。
 - 默认不出 CJK 扩展 B 区以后的生僻单字（常见字体显示不了），设置里能打开。
 - 主词库可以换成自己的 `lexicon.tsv`（设置「词库」页，对应 WowType 的 `Lexicon=`）：Rime 词库用 `tools/rime2tsv.py` 转换。服务进程在后台重新载入，几秒后生效；文件不在时恢复默认的白霜主词库、万象补充和项目热词。默认数据随安装包提供，不在运行时联网更新。
 - 可选快捷键（默认都不用，免得占用应用里同样的快捷键）：表情面板、中英文标点、简繁切换、`Ctrl+空格` 切换中英文。
