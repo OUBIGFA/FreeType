@@ -1,6 +1,6 @@
 //! Windows 虚拟键 → 服务进程的平台无关键码。
 
-use freetype_protocol::{keysym, modifier};
+use freetype_protocol::{keysym, modifier, Key};
 
 /// 不靠键盘布局就能翻的键：功能键、方向键、小键盘。可见字符返回 None（交给 ToUnicode）。
 pub fn named_keysym(vk: u16) -> Option<u32> {
@@ -65,6 +65,11 @@ pub fn modifiers(state: impl Fn(u16) -> i16) -> u32 {
         m |= modifier::NUMLOCK;
     }
     m
+}
+
+/// 是不是 Ctrl+空格（不带 Shift、Alt、Win）。Windows 也把它当作简体中文的输入法开关键。
+pub fn is_ctrl_space(key: &Key) -> bool {
+    key.keysym == 0x20 && key.modifiers & (modifier::SHIFT | modifier::CTRL | modifier::ALT | modifier::SUPER) == modifier::CTRL
 }
 
 /// ToUnicode 给出的字符：只收可见 ASCII（别的字符原样交给应用）。
@@ -249,6 +254,16 @@ mod tests {
             _ => 0,
         });
         assert_eq!(m, modifier::SHIFT | modifier::CAPS);
+    }
+
+    #[test]
+    fn ctrl_space_needs_ctrl_only() {
+        let key = |modifiers| Key { keysym: 0x20, modifiers, ..Key::default() };
+        assert!(is_ctrl_space(&key(modifier::CTRL)));
+        assert!(is_ctrl_space(&key(modifier::CTRL | modifier::CAPS)), "大写锁定不影响");
+        assert!(!is_ctrl_space(&key(0)));
+        assert!(!is_ctrl_space(&key(modifier::CTRL | modifier::SHIFT)));
+        assert!(!is_ctrl_space(&Key { keysym: 'a' as u32, modifiers: modifier::CTRL, ..Key::default() }));
     }
 
     const PLAIN: Moment = Moment { other_modifiers: false };

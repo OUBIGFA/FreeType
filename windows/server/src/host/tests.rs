@@ -1742,6 +1742,25 @@ fn hotkeys_toggle_punct_and_traditional_only_when_set() {
 }
 
 #[test]
+fn ctrl_space_from_system_toggle_switches_mode_only_when_set() {
+    // TSF 在系统吃掉 Ctrl+空格 时补发的就是这个请求：没有上文、没有候选窗代次
+    let mut host = host("ctrl-space");
+    let ctrl_space = |host: &mut Host| {
+        let key = Key { keysym: 0x20, modifiers: modifier::CTRL, test: false };
+        host.handle(1, Request::PhysicalKey { key, before: None, scan: 0, shown_revision: None }).frame.unwrap()
+    };
+    let start = host.handle(1, Request::Status).status.unwrap().mode;
+    assert!(!ctrl_space(&mut host).handled, "默认没设快捷键，不切换");
+    assert_eq!(host.handle(1, Request::Status).status.unwrap().mode, start);
+    configure(&mut host, |c| c.hotkey_mode = "ctrl+space".into());
+    let first = ctrl_space(&mut host);
+    assert!(first.handled);
+    assert_ne!(first.mode, start);
+    assert_eq!(ctrl_space(&mut host).mode, start, "再按一次切回来");
+    cleanup(&host);
+}
+
+#[test]
 fn forget_request_removes_learned_word() {
     let mut host = host("forget");
     for _ in 0..3 {

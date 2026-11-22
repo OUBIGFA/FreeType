@@ -9,6 +9,9 @@
 //!    报这次松开时就切换（`OnTestKeyUp` 或 `OnKeyUp`，见 [`key_released`]），不吃这个键。
 //! 4. Caps Lock：按下、松开时看大写锁定变没变，变了就告诉服务进程（[`caps_changed`]）。开着时
 //!    服务进程一律按英文处理，关掉后回到原来的中英文状态；这个键本身不吃。
+//! 5. `Ctrl+空格` 是简体中文的系统输入法开关键：系统可能吃掉按下、只把系统的「键盘打开 / 关闭」状态改成「关闭」。
+//!    设置里选了它作中英文切换键时，按键回调和这个状态变化（[`ctrl_space_closed`]）都能切换，
+//!    同一次按下只切一次。
 //!
 //! 中英文状态只由 FreeType 自己管（服务进程里），不看系统的「键盘打开 / 关闭」状态：有的应用自己
 //! 建 TSF 线程时这个状态是「关闭」，`Ctrl+空格` 也会把它关掉，以前因此会一声不响地只出字母。
@@ -35,7 +38,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, VK_LEFT,
 };
 use windows::Win32::UI::TextServices::{
-    ITfCompartmentMgr, ITfComposition, ITfCompositionSink, ITfCompositionSink_Impl, ITfContext,
+    ITfCompartmentEventSink, ITfCompartmentEventSink_Impl, ITfCompartmentMgr, ITfComposition, ITfCompositionSink, ITfCompositionSink_Impl, ITfContext,
     ITfContextComposition, ITfDocumentMgr, ITfEditSession, ITfEditSession_Impl, ITfInsertAtSelection,
     ITfKeyEventSink, ITfKeyEventSink_Impl, ITfKeystrokeMgr, ITfLangBarItemMgr, ITfRange, ITfSource,
     ITfTextInputProcessorEx, ITfTextInputProcessorEx_Impl, ITfTextInputProcessor_Impl, ITfTextLayoutSink,
@@ -96,6 +99,10 @@ struct State {
     thread_mgr: Option<ITfThreadMgr>,
     client_id: u32,
     thread_sink_cookie: Option<u32>,
+    /// 订了线程「键盘打开 / 关闭」状态的 cookie（接住被系统吃掉的 Ctrl+空格）。
+    open_close_cookie: Option<u32>,
+    /// 这次 Ctrl+空格 已经切换过中英文；松开空格或失去焦点后清掉。
+    ctrl_space_toggled: bool,
     sink: Option<ITfCompositionSink>,
     layout_sink: Option<ITfTextLayoutSink>,
     /// 订了排版变化的文档和 cookie。
@@ -157,7 +164,8 @@ enum PredictionEscape {
     ITfKeyEventSink,
     ITfThreadMgrEventSink,
     ITfCompositionSink,
-    ITfTextLayoutSink
+    ITfTextLayoutSink,
+    ITfCompartmentEventSink
 )]
 pub struct TextService {
     state: Rc<RefCell<State>>,
@@ -180,6 +188,8 @@ impl TextService {
                 thread_mgr: None,
                 client_id: 0,
                 thread_sink_cookie: None,
+                open_close_cookie: None,
+                ctrl_space_toggled: false,
                 sink: None,
                 layout_sink: None,
                 layout_cookie: None,
@@ -560,6 +570,42 @@ fn set_keyboard_open(thread_mgr: &ITfThreadMgr, client_id: u32) {
         (*value.Anonymous.Anonymous).Anonymous.lVal = 1;
         let _ = compartment.SetValue(client_id, &value);
     }
+}
+
+/// 系统把「键盘打开 / 关闭」改成关闭，且此刻正按着 Ctrl+空格：这是系统输入法开关键吃掉了按键。
+/// 当成一次 Ctrl+空格 发给服务进程，由它按设置决定切不切换；切换了就把状态设回打开，
+/// 下一次按下系统才会再报。按键回调已经切换过这一次时只设回打开。
+fn ctrl_space_closed(state: &Rc<RefCell<State>>) {
+    let held = unsafe {
+        let down = |vk: i32| GetAsyncKeyState(vk) < 0;
+        down(0x11) && down(0x20) && !down(0x10) && !down(0x12) && !down(0x5b) && !down(0x5c)
+    };
+    let (thread_mgr, client_id, toggled) = {
+        let s = state.borrow();
+        let Some(thread_mgr) = s.thread_mgr.clone() else { return };
+        (thread_mgr, s.client_id, s.ctrl_space_toggled)
+    };
+    if !held {
+        return;
+    }
+    if !toggled {
+        // 带上大写锁定的状态：服务进程按每个键里的这一位同步大写锁定
+        let caps = keys::modifiers(|vk| unsafe { GetKeyState(i32::from(vk)) }) & modifier::CAPS;
+        let key = Key { keysym: 0x20, modifiers: modifier::CTRL | caps, test: false };
+        let Some(frame) = call(state, &Request::PhysicalKey { key, before: None, scan: 0, shown_revision: None }) else { return };
+        if !frame.handled {
+            return;
+        }
+        state.borrow_mut().ctrl_space_toggled = true;
+        let context = state.borrow().context.clone();
+        apply(state, context.as_ref(), frame, false);
+    }
+    set_keyboard_open(&thread_mgr, client_id);
+}
+
+fn open_close_source(thread_mgr: &ITfThreadMgr) -> Option<ITfSource> {
+    let mgr = thread_mgr.cast::<ITfCompartmentMgr>().ok()?;
+    unsafe { mgr.GetCompartment(&GUID_COMPARTMENT_KEYBOARD_OPENCLOSE).ok()?.cast().ok() }
 }
 
 /// 订这个文档的排版变化（浏览器类应用打字时还没排好版，排好了再把候选窗挪过去）。
@@ -1446,11 +1492,15 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
                 if let (Some(cookie), Ok(source)) = (s.thread_sink_cookie.take(), thread_mgr.cast::<ITfSource>()) {
                     let _ = source.UnadviseSink(cookie);
                 }
+                if let (Some(cookie), Some(source)) = (s.open_close_cookie.take(), open_close_source(&thread_mgr)) {
+                    let _ = source.UnadviseSink(cookie);
+                }
             }
         }
         s.composition = None;
         s.context = None;
         s.key_preview = None;
+        s.ctrl_space_toggled = false;
         s.busy = false;
         s.predicting = false;
         s.prediction_caret = None;
@@ -1477,6 +1527,9 @@ impl ITfTextInputProcessorEx_Impl for TextService_Impl {
             let source: ITfSource = thread_mgr.cast()?;
             let cookie = source.AdviseSink(&ITfThreadMgrEventSink::IID, &thread_sink).ok();
             self.state.borrow_mut().thread_sink_cookie = cookie;
+            let open_close_sink: ITfCompartmentEventSink = self.to_interface();
+            let cookie = open_close_source(&thread_mgr).and_then(|source| source.AdviseSink(&ITfCompartmentEventSink::IID, &open_close_sink).ok());
+            self.state.borrow_mut().open_close_cookie = cookie;
         }
         let weak = Rc::downgrade(&self.state);
         let button = langbar::create(Rc::new(move |click| on_button(&weak, click)));
@@ -1542,6 +1595,7 @@ fn key_released(state: &Rc<RefCell<State>>, context: Option<&ITfContext>, wparam
         return;
     }
     state.borrow_mut().key_preview = None;
+    if vk == 0x20 { state.borrow_mut().ctrl_space_toggled = false; }
     if vk == 0x08 { confirm_backspace(state, context); }
     if keys::is_modifier(vk) && state.borrow().caret_move.is_some() {
         caret_tick(state);
@@ -1621,6 +1675,7 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
             dismiss_prediction(&self.state);
             self.state.borrow_mut().key_preview = None;
             self.state.borrow_mut().prediction_escape = PredictionEscape::Free;
+            self.state.borrow_mut().ctrl_space_toggled = false;
             if let Some(window) = &self.state.borrow().window {
                 window.hide();
             }
@@ -1651,6 +1706,8 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
             // 组字时不认识的键也吃掉，免得漏给应用
             return Ok(composing(&self.state).into());
         };
+        // 这次 Ctrl+空格 已由系统状态变化切换过：吃掉，免得再切回去
+        if keys::is_ctrl_space(&key) && self.state.borrow().ctrl_space_toggled { return Ok(true.into()); }
         let repeat = lparam.0 & (1 << 30) != 0;
         if prediction_escape_down(&self.state, pic.as_ref(), key, repeat)
             || verified_pair_key(&self.state, pic.as_ref(), key).is_some() {
@@ -1711,6 +1768,7 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
             dismiss_prediction(&self.state);
             return Ok(composing(&self.state).into());
         };
+        if keys::is_ctrl_space(&key) && self.state.borrow().ctrl_space_toggled { return Ok(true.into()); }
         if prediction_escape_down(&self.state, Some(&context), key, repeat) { return Ok(true.into()); }
         if let Some(action) = verified_pair_key(&self.state, Some(&context), key) {
             if let Some(mut frame) = call(&self.state, &Request::ClosePair) {
@@ -1740,6 +1798,7 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
             }
         };
         let handled = frame.handled;
+        if handled && keys::is_ctrl_space(&key) { self.state.borrow_mut().ctrl_space_toggled = true; }
         let visible = self.state.borrow().window.as_ref().is_some_and(|w| w.visible());
         if handled || frame.commit.is_some() || composing(&self.state) || visible {
             apply(&self.state, Some(&context), frame, true);
@@ -1763,6 +1822,20 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
 
     fn OnPreservedKey(&self, _pic: Ref<ITfContext>, _rguid: *const GUID) -> Result<BOOL> {
         Ok(false.into())
+    }
+}
+
+impl ITfCompartmentEventSink_Impl for TextService_Impl {
+    fn OnChange(&self, rguid: *const GUID) -> Result<()> {
+        if unsafe { rguid.as_ref() } != Some(&GUID_COMPARTMENT_KEYBOARD_OPENCLOSE) { return Ok(()); }
+        // 应用或系统改这个状态的时机不受我们控制；正在改 State 时不处理，避免在宿主进程里 panic
+        let Ok(thread_mgr) = self.state.try_borrow().map(|s| s.thread_mgr.clone()) else { return Ok(()) };
+        let closed = thread_mgr.and_then(|t| t.cast::<ITfCompartmentMgr>().ok())
+            .is_some_and(|mgr| compartment_value(&mgr, &GUID_COMPARTMENT_KEYBOARD_OPENCLOSE) == Some(0));
+        if closed {
+            ctrl_space_closed(&self.state);
+        }
+        Ok(())
     }
 }
 
