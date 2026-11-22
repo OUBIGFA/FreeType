@@ -29,6 +29,7 @@ use windows::Win32::System::SystemInformation::GetTickCount64;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::System::Variant::{VariantClear, VARIANT, VT_I4, VT_UNKNOWN};
+use windows::Win32::UI::Input::Ime::{IMR_DOCUMENTFEED, RECONVERTSTRING};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, GetKeyState, GetKeyboardState, SendInput, ToUnicode, INPUT, INPUT_0, INPUT_KEYBOARD,
     KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, VK_LEFT,
@@ -40,6 +41,7 @@ use windows::Win32::UI::TextServices::{
     ITfTextInputProcessorEx, ITfTextInputProcessorEx_Impl, ITfTextInputProcessor_Impl, ITfTextLayoutSink,
     ITfTextLayoutSink_Impl, ITfThreadMgr, ITfThreadMgrEventSink, ITfThreadMgrEventSink_Impl, ITfContextView,
     TfLayoutCode, GUID_COMPARTMENT_EMPTYCONTEXT, GUID_COMPARTMENT_KEYBOARD_DISABLED,
+    GUID_COMPARTMENT_TRANSITORYEXTENSION_PARENT, TF_SS_TRANSITORY,
     GUID_PROP_INPUTSCOPE, ITfInputScope, IS_PASSWORD, IS_NUMERIC_PASSWORD, IS_NUMERIC_PIN,
     IS_ALPHANUMERIC_PIN, IS_ALPHANUMERIC_PIN_SET,
     GUID_COMPARTMENT_KEYBOARD_OPENCLOSE, INSERT_TEXT_AT_SELECTION_FLAGS, TF_AE_NONE, TF_ANCHOR_END,
@@ -48,7 +50,8 @@ use windows::Win32::UI::TextServices::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, DestroyMenu, GetGUIThreadInfo, GetMessageExtraInfo, GetMessageTime, GetWindowRect,
-    EndMenu, PostMessageW, TrackPopupMenu, GUITHREADINFO, MF_SEPARATOR, MF_STRING, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON,
+    EndMenu, PostMessageW, SendMessageW, TrackPopupMenu, GUITHREADINFO, MF_SEPARATOR, MF_STRING, TPM_NONOTIFY, TPM_RETURNCMD,
+    TPM_RIGHTBUTTON, WM_IME_REQUEST,
 };
 
 use crate::client::Client;
@@ -328,6 +331,60 @@ fn before_text(context: &ITfContext, ec: u32) -> Option<String> {
         range.GetText(ec, 0, &mut buf, &mut len).ok()?;
         Some(String::from_utf16_lossy(&buf[..(len as usize).min(buf.len())]))
     }
+}
+
+/// CUAS 文档管理器上未公开的标记：值的最低位为 1 表示它替 IMM32 应用模拟 TSF 文档。
+/// 来源：Mozc `src/win32/tip/tip_transitory_extension.cc` 的 `kTsfEmulatedDocumentMgrGuid`。
+const GUID_COMPARTMENT_EMULATED_DOCUMENTMGR: GUID = GUID::from_u128(0xa94c5fd2_c471_4031_9546_709c17300cb9);
+
+/// CUAS 替 IMM32 应用（如用 mygo 写的 FreeMD）搭的临时文档只装编辑区，上屏后即清空，
+/// 从 TSF 读光标前文字总是空串，只能用 IMR_DOCUMENTFEED 向应用窗口要。
+///
+/// 判断顺序照 Mozc：非临时文档、带完整父文档的临时文档（Edit、RichEdit）和 Chromium 系
+/// 临时文档都能从 TSF 读到正文，不在此列。
+fn cuas_document(context: &ITfContext) -> bool {
+    unsafe {
+        if !context.GetStatus().is_ok_and(|status| status.dwStaticFlags & TF_SS_TRANSITORY != 0) { return false; }
+        let Some(mgr) = context.GetDocumentMgr().ok().and_then(|doc| doc.cast::<ITfCompartmentMgr>().ok()) else { return false; };
+        let has_parent = mgr.GetCompartment(&GUID_COMPARTMENT_TRANSITORYEXTENSION_PARENT).and_then(|c| c.GetValue())
+            .is_ok_and(|mut parent| {
+                let inner = &parent.Anonymous.Anonymous;
+                let has = inner.vt == VT_UNKNOWN && inner.Anonymous.punkVal.is_some();
+                let _ = VariantClear(&mut parent);
+                has
+            });
+        !has_parent && compartment_value(&mgr, &GUID_COMPARTMENT_EMULATED_DOCUMENTMGR).is_some_and(|v| v & 1 != 0)
+    }
+}
+
+/// 向 IMM32 应用要光标前最多 [`BEFORE_CHARS`] 个字（IMR_DOCUMENTFEED）。应用不答时返回 None：
+/// 那是不知道上文，不是空文档，服务进程会沿用自己记下的上屏文字。
+fn document_feed(window: HWND) -> Option<String> {
+    let request = |data: LPARAM| unsafe {
+        SendMessageW(window, WM_IME_REQUEST, Some(WPARAM(IMR_DOCUMENTFEED as usize)), Some(data)).0
+    };
+    let head = std::mem::size_of::<RECONVERTSTRING>();
+    let size = usize::try_from(request(LPARAM(0))).ok().filter(|&size| size >= head)?;
+    // RECONVERTSTRING 只含 DWORD，按 u32 分配即可对齐
+    let mut buffer = vec![0u32; size.div_ceil(4)];
+    let header = buffer.as_mut_ptr().cast::<RECONVERTSTRING>();
+    unsafe { (*header).dwSize = size as u32; }
+    if request(LPARAM(header as isize)) == 0 { return None; }
+    let info = unsafe { *header };
+    // 长度按 UTF-16 计，偏移按字节计；应用填的值越界就当没答
+    let (start, len, caret) = (info.dwStrOffset as usize, info.dwStrLen as usize, info.dwCompStrOffset as usize / 2);
+    if start % 2 != 0 || start.checked_add(len * 2)? > size || caret > len { return None; }
+    let units = unsafe { std::slice::from_raw_parts(buffer.as_ptr().cast::<u8>().add(start).cast::<u16>(), caret) };
+    let before: Vec<char> = char::decode_utf16(units.iter().copied()).map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER)).collect();
+    Some(before[before.len().saturating_sub(BEFORE_CHARS as usize)..].iter().collect())
+}
+
+/// 光标前的字：CUAS 文档问应用窗口（拿不到窗口也算不知道），其余读 TSF 文档。
+fn context_before(context: &ITfContext, ec: u32) -> Option<String> {
+    if !cuas_document(context) { return before_text(context, ec); }
+    unsafe { context.GetActiveView().and_then(|view| view.GetWnd()) }.ok()
+        .filter(|window| !window.is_invalid())
+        .and_then(document_feed)
 }
 
 /// 应用给不出光标位置时：系统记的插入符，再不行用输入框窗口的左下角。
@@ -804,7 +861,7 @@ fn read_before(state: &Rc<RefCell<State>>, context: &ITfContext) -> Option<Strin
     let out: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
     let (out2, context2) = (out.clone(), context.clone());
     edit_with(context, client_id, TF_ES_SYNC | TF_ES_READ, move |ec| {
-        *out2.borrow_mut() = before_text(&context2, ec);
+        *out2.borrow_mut() = context_before(&context2, ec);
         Ok(())
     });
     let text = out.borrow_mut().take();
@@ -1302,7 +1359,7 @@ fn on_focus(state: &Rc<RefCell<State>>, focus: Option<&ITfDocumentMgr>) {
         if sensitive { return Ok(()); }
         // A queued focus read can arrive after the first commit in this field.
         if prediction_in(&state2.borrow(), &context2) { return Ok(()); }
-        let before = before_text(&context2, ec);
+        let before = context_before(&context2, ec);
         let caret = selection_rect(&context2, ec);
         // 大写锁定可能在别的窗口里开关过：先对齐，下面拿到的中英文状态才是对的
         let on = caps_on();

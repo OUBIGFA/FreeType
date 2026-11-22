@@ -9,6 +9,10 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::TextServices::*;
+use windows::Win32::UI::WindowsAndMessaging::{
+    CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW, HWND_MESSAGE, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW,
+};
+use windows::Win32::Foundation::LRESULT;
 
 fn unused<T>() -> Result<T> { Err(E_NOTIMPL.into()) }
 
@@ -25,6 +29,8 @@ struct Store {
     commit_only: Cell<bool>,
     app_text: RefCell<Vec<u16>>,
     composing: Cell<bool>,
+    /// The app window that CUAS reports for its emulated document.
+    window: Cell<HWND>,
 }
 
 impl Store {
@@ -140,7 +146,7 @@ impl ITextStoreACP_Impl for Store_Impl {
         Ok(())
     }
     fn GetScreenExt(&self, _: u32) -> Result<RECT> { unused() }
-    fn GetWnd(&self, _: u32) -> Result<HWND> { unused() }
+    fn GetWnd(&self, _: u32) -> Result<HWND> { Ok(self.window.get()) }
 }
 
 impl ITfContextOwnerCompositionSink_Impl for Store_Impl {
@@ -230,7 +236,7 @@ fn open_prediction(editor: &Editor, state: &Rc<RefCell<State>>, double: bool) ->
     1
 }
 
-fn commit_test_word(editor: &Editor, state: &Rc<RefCell<State>>, sink: &ITfKeyEventSink) {
+fn use_test_host(state: &Rc<RefCell<State>>) {
     let data = std::env::temp_dir().join(format!("freetype-digit-{}-{}", std::process::id(), unsafe { GetCurrentThreadId() }));
     let mut host = freetype_server::host::Host::new(freetype_server::store::Store::new(data));
     let lexicon = wowtype_core::MemoryLexicon::from_tsv_str("ce shi\t测试\t1000\n").unwrap();
@@ -239,6 +245,10 @@ fn commit_test_word(editor: &Editor, state: &Rc<RefCell<State>>, sink: &ITfKeyEv
     host.connect(1, "explorer.exe".into());
     assert!(!host.config().predict_next, "此回归不依赖上屏联想");
     state.borrow_mut().client = Client::with_test_host(host);
+}
+
+fn commit_test_word(editor: &Editor, state: &Rc<RefCell<State>>, sink: &ITfKeyEventSink) {
+    use_test_host(state);
     for vk in [b'C', b'E', b'S', b'H', b'I', b' '] {
         let key = WPARAM(usize::from(vk));
         unsafe {
@@ -293,6 +303,100 @@ fn digit_claim_survives_a_host_that_allows_reading_only_after_preview() {
         editor.store.deny_read.set(false);
         assert!(sink.OnKeyDown(&editor.context, zero, LPARAM(0)).unwrap().as_bool(),
             "预询问读不到正文时，正式按下仍须保留已接管的按键");
+        assert_eq!(String::from_utf16_lossy(&editor.store.app_text.borrow()), "测试 0");
+    });
+}
+
+thread_local! {
+    /// The app text that the test IMM32 window reports, with its caret at the end.
+    static FEED: RefCell<Option<ComObject<Store>>> = const { RefCell::new(None) };
+}
+
+unsafe extern "system" fn feed_proc(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if message != WM_IME_REQUEST || wparam.0 != IMR_DOCUMENTFEED as usize {
+        return unsafe { DefWindowProcW(window, message, wparam, lparam) };
+    }
+    FEED.with_borrow(|store| {
+        let Some(store) = store else { return LRESULT(0) };
+        let text = store.app_text.borrow();
+        let head = std::mem::size_of::<RECONVERTSTRING>() as u32;
+        let (len, size) = (text.len() as u32, head + text.len() as u32 * 2);
+        let info = lparam.0 as *mut RECONVERTSTRING;
+        if info.is_null() { return LRESULT(size as isize); }
+        unsafe {
+            if (*info).dwSize < size { return LRESULT(0); }
+            *info = RECONVERTSTRING { dwSize: size, dwVersion: 0, dwStrLen: len, dwStrOffset: head,
+                dwCompStrLen: 0, dwCompStrOffset: len * 2, dwTargetStrLen: 0, dwTargetStrOffset: len * 2 };
+            std::ptr::copy_nonoverlapping(text.as_ptr(), info.cast::<u8>().add(head as usize).cast::<u16>(), text.len());
+        }
+        LRESULT(size as isize)
+    })
+}
+
+/// Turn the editor into what CUAS gives an IMM32 app such as FreeMD: a transitory
+/// document marked as emulated, emptied after each commit, with the app's own window.
+struct Imm32Host(Option<HWND>);
+
+impl Imm32Host {
+    unsafe fn new(editor: &Editor, answers_feed: bool) -> Self {
+        editor.store.transitory.set(true);
+        editor.store.commit_only.set(true);
+        let mgr: ITfCompartmentMgr = editor.document.cast().unwrap();
+        let mut flag = VARIANT::default();
+        unsafe {
+            (*flag.Anonymous.Anonymous).vt = VT_I4;
+            (*flag.Anonymous.Anonymous).Anonymous.lVal = 1;
+            mgr.GetCompartment(&GUID_COMPARTMENT_EMULATED_DOCUMENTMGR).unwrap().SetValue(editor.client, &flag).unwrap();
+        }
+        if !answers_feed { return Self(None); }
+        let class = windows::core::w!("FreeTypeImm32FeedTest");
+        let instance = HINSTANCE(unsafe { GetModuleHandleW(None).unwrap() }.0);
+        let window = unsafe {
+            RegisterClassW(&WNDCLASSW { lpfnWndProc: Some(feed_proc), hInstance: instance, lpszClassName: class, ..Default::default() });
+            CreateWindowExW(WINDOW_EX_STYLE(0), class, PCWSTR::null(), WINDOW_STYLE(0), 0, 0, 0, 0,
+                Some(HWND_MESSAGE), None, Some(instance), None).unwrap()
+        };
+        editor.store.window.set(window);
+        FEED.set(Some(editor.store.clone()));
+        Self(Some(window))
+    }
+}
+
+impl Drop for Imm32Host {
+    fn drop(&mut self) {
+        FEED.set(None);
+        if let Some(window) = self.0 { unsafe { let _ = DestroyWindow(window); } }
+    }
+}
+
+fn press_digit(editor: &Editor, sink: &ITfKeyEventSink, digit: u8) -> bool {
+    let key = WPARAM(usize::from(b'0' + digit));
+    let preview = unsafe { sink.OnTestKeyDown(&editor.context, key, LPARAM(0)).unwrap().as_bool() };
+    if preview {
+        assert!(unsafe { sink.OnKeyDown(&editor.context, key, LPARAM(0)).unwrap().as_bool() }, "预询问已接管，正式按下不能放行");
+    }
+    preview
+}
+
+#[test]
+fn autospace_reads_imm32_text_through_document_feed() {
+    in_editor(|editor, state, sink| unsafe {
+        let _host = Imm32Host::new(editor, true);
+        use_test_host(&state);
+        // Text the app already had; FreeType never committed it.
+        editor.store.app_text.borrow_mut().extend(wide("你好"));
+        assert!(press_digit(editor, &sink, 5), "光标前是汉字，数字前要先补空格");
+        assert_eq!(String::from_utf16_lossy(&editor.store.app_text.borrow()), "你好 5");
+    });
+}
+
+#[test]
+fn autospace_keeps_committed_text_when_an_imm32_app_has_no_document_feed() {
+    in_editor(|editor, state, sink| unsafe {
+        let _host = Imm32Host::new(editor, false);
+        commit_test_word(editor, &state, &sink);
+        assert_eq!(String::from_utf16_lossy(&editor.store.app_text.borrow()), "测试");
+        assert!(press_digit(editor, &sink, 0), "读不到正文时沿用刚上屏的字，而不是当成空文档");
         assert_eq!(String::from_utf16_lossy(&editor.store.app_text.borrow()), "测试 0");
     });
 }
