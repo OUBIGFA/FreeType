@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -20,17 +22,24 @@ const freeTypeTip = "0804:{6AEA9A65-33E4-4FFA-94E3-399C2ADC4CF1}{2C829DC6-FA03-4
 
 func windowsDefaultTip(change bool) (bool, error) {
 	// Fixed commands only: language, TIP and script never come from user text.
-	script := `$ErrorActionPreference = 'Stop'; $tip = '` + freeTypeTip + `'; $list = Get-WinUserLanguageList; $zh = $list | Where-Object { $_.LanguageTag -in 'zh-Hans','zh-CN' } | Select-Object -First 1; `
+	// Find the language by the FreeType TIP instead of its tag: Windows 11 reports
+	// Simplified Chinese as zh-Hans-CN, and older systems may use zh-CN or zh-Hans.
+	// Errors go to stderr as UTF-8 so the settings page can show the real cause.
+	script := `[Console]::OutputEncoding = [Text.Encoding]::UTF8; $ErrorActionPreference = 'Stop'; try { $tip = '` + freeTypeTip + `'; $list = Get-WinUserLanguageList; $zh = $list | Where-Object { $_.InputMethodTips -contains $tip } | Select-Object -First 1; `
 	if change {
-		script += `if ($null -eq $zh -or $zh.InputMethodTips -notcontains $tip) { throw 'FreeType is not in the Simplified Chinese keyboard list' }; [void]$zh.InputMethodTips.Remove($tip); $zh.InputMethodTips.Insert(0, $tip); Set-WinUserLanguageList $list -Force; Set-WinDefaultInputMethodOverride -InputTip $tip; `
+		script += `if ($null -eq $zh) { throw '没有在 Windows 语言的键盘列表中找到 FreeType；请先在系统设置中添加' }; [void]$zh.InputMethodTips.Remove($tip); $zh.InputMethodTips.Insert(0, $tip); Set-WinUserLanguageList $list -Force; Set-WinDefaultInputMethodOverride -InputTip $tip; `
 	}
-	script += `$current = Get-WinDefaultInputMethodOverride; if ($null -ne $current -and $current.InputMethodTip) { [int]($current.InputMethodTip -eq $tip) } else { [int]($null -ne $zh -and $zh.InputMethodTips.Count -gt 0 -and $zh.InputMethodTips[0] -eq $tip) }`
+	script += `$current = Get-WinDefaultInputMethodOverride; if ($null -ne $current -and $current.InputMethodTip) { [int]($current.InputMethodTip -eq $tip) } else { [int]($null -ne $zh -and $zh.InputMethodTips[0] -eq $tip) } } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }`
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, filepath.Join(os.Getenv("SystemRoot"), "System32", "WindowsPowerShell", "v1.0", "powershell.exe"), "-NoProfile", "-NonInteractive", "-Command", script)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	result, err := cmd.Output()
 	if err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && len(bytes.TrimSpace(exit.Stderr)) > 0 {
+			return false, fmt.Errorf("无法读取或设置 Windows 默认输入法：%s", strings.TrimSpace(string(exit.Stderr)))
+		}
 		return false, fmt.Errorf("无法读取或设置 Windows 默认输入法: %w", err)
 	}
 	return strings.TrimSpace(string(result)) == "1", nil
