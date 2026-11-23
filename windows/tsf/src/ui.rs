@@ -47,6 +47,7 @@ const CARET_RETRY_MS: u32 = 15;
 /// 发给自己的消息：回到应用的消息循环以后，叫文本服务去挪光标（见 [`set_caret_handler`]）。
 const WM_CARET_TICK: u32 = WM_APP + 1;
 pub(crate) const WM_LANGUAGE_MENU: u32 = WM_APP + 2;
+pub(crate) const WM_RESTORE_KEYBOARD_OPEN: u32 = WM_APP + 3;
 const HINT_MS: u32 = 1000;
 /// 上屏联想显示着没人选：过这么久自己收起（见 [`Click::Dismiss`]）。
 const PREDICT_TIMER: usize = 4;
@@ -70,6 +71,8 @@ pub enum Click {
     Dismiss,
     /// 双击间隔结束，请文本服务提交仍保留着的单次空格。
     PredictionSpaceTimeout,
+    /// 离开 TSF 状态通知后恢复键盘打开，避免在锁定的 compartment 内写回。
+    RestoreKeyboardOpen,
 }
 
 thread_local! {
@@ -603,6 +606,10 @@ fn wheel_pages_accumulate_and_cancel() {
 
 unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
+        WM_RESTORE_KEYBOARD_OPEN => {
+            dispatch(Click::RestoreKeyboardOpen);
+            return LRESULT(0);
+        }
         WM_LANGUAGE_MENU => {
             dispatch(Click::LanguageMenu(wparam.0 as i32, lparam.0 as i32));
             LRESULT(0)

@@ -247,6 +247,144 @@ fn use_test_host(state: &Rc<RefCell<State>>) {
     state.borrow_mut().client = Client::with_test_host(host);
 }
 
+/// Only this private desktop's test thread sees the synthetic keyboard state.
+struct TestKeyboard([u8; 256]);
+
+impl TestKeyboard {
+    fn ctrl_space() -> Self {
+        let mut previous = [0; 256];
+        unsafe { GetKeyboardState(&mut previous).unwrap(); }
+        let mut pressed = [0; 256];
+        pressed[0x11] = 0x80;
+        pressed[0x20] = 0x80;
+        unsafe { windows::Win32::UI::Input::KeyboardAndMouse::SetKeyboardState(&pressed).unwrap(); }
+        Self(previous)
+    }
+}
+
+impl Drop for TestKeyboard {
+    fn drop(&mut self) {
+        unsafe { windows::Win32::UI::Input::KeyboardAndMouse::SetKeyboardState(&self.0).unwrap(); }
+    }
+}
+
+fn enable_ctrl_space(state: &Rc<RefCell<State>>) {
+    use_test_host(state);
+    let mut s = state.borrow_mut();
+    let mut config = s.client.call(&Request::GetConfig).unwrap().config.unwrap();
+    config.hotkey_mode = "ctrl+space".into();
+    assert!(s.client.call(&Request::SetConfig { config }).unwrap().ok);
+}
+
+/// Give each press a real Windows message time; repeated previews share that time.
+fn next_key_message(previous: Option<u32>) -> u32 {
+    use windows::Win32::UI::WindowsAndMessaging::{PeekMessageW, PostThreadMessageW, MSG, PM_REMOVE, WM_APP};
+    let mut message = MSG::default();
+    loop {
+        unsafe {
+            PostThreadMessageW(GetCurrentThreadId(), WM_APP + 90, WPARAM(0), LPARAM(0)).unwrap();
+            assert!(PeekMessageW(&mut message, None, WM_APP + 90, WM_APP + 90, PM_REMOVE).as_bool());
+        }
+        let ms = unsafe { GetMessageTime() } as u32;
+        if Some(ms) != previous { return ms; }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+#[test]
+fn ctrl_space_next_press_switches_even_when_the_host_omits_key_up() {
+    in_editor(|editor, state, sink| unsafe {
+        enable_ctrl_space(&state);
+        let space = WPARAM(0x20);
+        let mut previous = None;
+        for expected in [Mode::English, Mode::Chinese, Mode::English, Mode::Chinese] {
+            previous = Some(next_key_message(previous));
+            let _pressed = TestKeyboard::ctrl_space();
+            assert!(sink.OnTestKeyDown(&editor.context, space, LPARAM(0)).unwrap().as_bool());
+            assert!(sink.OnTestKeyDown(&editor.context, space, LPARAM(0)).unwrap().as_bool());
+            assert!(sink.OnKeyDown(&editor.context, space, LPARAM(0)).unwrap().as_bool());
+            assert_eq!(state.borrow().mode, expected, "a new press must not inherit the previous press's duplicate guard");
+            assert!(sink.OnKeyDown(&editor.context, space, LPARAM(0)).unwrap().as_bool());
+            assert_eq!(state.borrow().mode, expected, "duplicate callbacks must not switch back");
+            previous = Some(next_key_message(previous));
+            assert!(sink.OnKeyDown(&editor.context, space, LPARAM(1 << 30)).unwrap().as_bool());
+            assert_eq!(state.borrow().mode, expected, "holding Space must not keep switching");
+        }
+    });
+}
+
+#[test]
+fn ctrl_space_system_toggle_reopens_the_keyboard_after_notification() {
+    use windows::Win32::UI::WindowsAndMessaging::{DispatchMessageW, PeekMessageW, MSG, PM_REMOVE};
+    // Inject only the physical Ctrl+Space observation: GetAsyncKeyState is unavailable
+    // on a private desktop. The compartment notification, handler and server are real.
+    #[implement(ITfCompartmentEventSink)]
+    struct SystemCtrlSpace {
+        state: Rc<RefCell<State>>,
+        compartments: ITfCompartmentMgr,
+    }
+    impl ITfCompartmentEventSink_Impl for SystemCtrlSpace_Impl {
+        fn OnChange(&self, _: *const GUID) -> Result<()> {
+            if compartment_value(&self.compartments, &GUID_COMPARTMENT_KEYBOARD_OPENCLOSE) == Some(0) {
+                ctrl_space_closed(&self.state);
+            }
+            Ok(())
+        }
+    }
+    in_editor(|editor, state, sink| unsafe {
+        enable_ctrl_space(&state);
+        let manager: ITfThreadMgr = editor.manager.cast().unwrap();
+        state.borrow_mut().thread_mgr = Some(manager.clone());
+        set_keyboard_open(&manager, editor.client);
+        let compartments: ITfCompartmentMgr = manager.cast().unwrap();
+        let open = compartments.GetCompartment(&GUID_COMPARTMENT_KEYBOARD_OPENCLOSE).unwrap();
+        let source: ITfSource = open.cast().unwrap();
+        let observer: ITfCompartmentEventSink = SystemCtrlSpace { state: state.clone(), compartments: compartments.clone() }.into();
+        let cookie = source.AdviseSink(&ITfCompartmentEventSink::IID, &observer).unwrap();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut previous = None;
+            for (key_first, expected) in [(false, Mode::English), (true, Mode::Chinese), (false, Mode::English), (true, Mode::Chinese)] {
+                previous = Some(next_key_message(previous));
+                let _pressed = TestKeyboard::ctrl_space();
+                if key_first {
+                    assert!(sink.OnTestKeyDown(&editor.context, WPARAM(0x20), LPARAM(0)).unwrap().as_bool());
+                    assert!(sink.OnKeyDown(&editor.context, WPARAM(0x20), LPARAM(0)).unwrap().as_bool());
+                    assert_eq!(state.borrow().mode, expected);
+                }
+                open.SetValue(editor.client, &VARIANT::from(0i32)).unwrap();
+                assert_eq!(state.borrow().mode, expected, "the system-consumed press must switch exactly once");
+                assert_eq!(compartment_value(&compartments, &GUID_COMPARTMENT_KEYBOARD_OPENCLOSE), Some(0),
+                    "restoration must wait until the notification returns");
+                assert!(sink.OnTestKeyDown(&editor.context, WPARAM(0x20), LPARAM(0)).unwrap().as_bool());
+                assert!(sink.OnKeyDown(&editor.context, WPARAM(0x20), LPARAM(0)).unwrap().as_bool());
+                assert_eq!(state.borrow().mode, expected, "a later key callback must not switch back");
+                let hwnd = state.borrow().window.as_ref().unwrap().hwnd();
+                let mut message = MSG::default();
+                while PeekMessageW(&mut message, Some(hwnd), 0, 0, PM_REMOVE).as_bool() {
+                    DispatchMessageW(&message);
+                }
+                assert_eq!(compartment_value(&compartments, &GUID_COMPARTMENT_KEYBOARD_OPENCLOSE), Some(1),
+                    "the keyboard must reopen outside OnChange so the next press is not wasted reopening it");
+                assert_eq!(state.borrow().mode, expected, "restoring the system state must not switch modes");
+            }
+            let mut config = state.borrow_mut().client.call(&Request::GetConfig).unwrap().config.unwrap();
+            config.hotkey_mode.clear();
+            assert!(state.borrow_mut().client.call(&Request::SetConfig { config }).unwrap().ok);
+            next_key_message(previous);
+            open.SetValue(editor.client, &VARIANT::from(0i32)).unwrap();
+            let hwnd = state.borrow().window.as_ref().unwrap().hwnd();
+            let mut message = MSG::default();
+            while PeekMessageW(&mut message, Some(hwnd), 0, 0, PM_REMOVE).as_bool() { DispatchMessageW(&message); }
+            assert_eq!(compartment_value(&compartments, &GUID_COMPARTMENT_KEYBOARD_OPENCLOSE), Some(0),
+                "a disabled shortcut must not take over the system toggle");
+            assert_eq!(state.borrow().mode, Mode::Chinese);
+        }));
+        source.UnadviseSink(cookie).unwrap();
+        state.borrow_mut().thread_mgr = None;
+        if let Err(error) = result { std::panic::resume_unwind(error); }
+    });
+}
+
 fn commit_test_word(editor: &Editor, state: &Rc<RefCell<State>>, sink: &ITfKeyEventSink) {
     use_test_host(state);
     for vk in [b'C', b'E', b'S', b'H', b'I', b' '] {
