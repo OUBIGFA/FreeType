@@ -24,7 +24,7 @@ const MAX_EMOJI: usize = 400;
 /// 列表里一行最多显示多少个字。
 const LINE_CHARS: usize = 40;
 
-const MENU: [&str; 4] = ["剪贴板", "常用语", "符号", "表情"];
+const MENU: [&str; 6] = ["剪贴板", "常用语", "符号", "表情", "英文候选", "拆字查字"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
@@ -69,6 +69,8 @@ pub struct Tool {
 /// 按了一个键以后。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Outcome {
+    English,
+    Radical,
     /// 面板还开着（数据可能要重算：搜索词变了、换了页）。
     Stay { refresh: bool },
     Close,
@@ -185,6 +187,8 @@ impl Tool {
             return Outcome::Stay { refresh: false };
         };
         if self.page == Page::Menu {
+            if index == 4 { return Outcome::English; }
+            if index == 5 { return Outcome::Radical; }
             self.page = match index {
                 0 => Page::Clipboard,
                 1 => Page::Phrases,
@@ -409,7 +413,7 @@ mod tests {
         let s = sources(&phrases, &[]);
         let mut tool = Tool::open(Page::Menu, &s);
         let view = tool.view();
-        assert_eq!(view.items, vec!["剪贴板", "常用语", "符号", "表情"]);
+        assert_eq!(view.items, vec!["剪贴板", "常用语", "符号", "表情", "英文候选", "拆字查字"]);
         assert_eq!(view.title, "工具栏");
         assert_eq!(tool.key(&press('2' as u32), &s), Outcome::Stay { refresh: true });
         assert_eq!(tool.page, Page::Phrases);

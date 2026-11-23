@@ -316,6 +316,22 @@ impl MappedLexicon {
 }
 
 impl Lexicon for MappedLexicon {
+    fn long_completions(&self, prefix: &[SyllableKey], word_prefix: &str, limit: usize) -> Vec<LexEntry> {
+        if prefix.len() < 4 || limit == 0 { return Vec::new(); }
+        let prefix_key = full_key(prefix.iter().copied());
+        let mut stream = self.index.range().ge(&prefix_key).into_stream();
+        let mut best = Vec::new();
+        while let Some((key, _)) = stream.next() {
+            if !key.starts_with(&prefix_key) { break; }
+            if key.len() == prefix_key.len() { continue; }
+            for entry in self.entries(key).filter(|entry| long_word_matches(entry, prefix, word_prefix)) {
+                best.push(entry);
+                best.sort_unstable_by(|a, b| long_word_order(b, a));
+                best.truncate(limit.min(32));
+            }
+        }
+        best
+    }
     fn complete_long_word(&self, prefix: &[SyllableKey], word_prefix: &str) -> Option<LexEntry> {
         if prefix.len() < 4 { return None; }
         // 复用已部署的全拼 FST；只读取前缀范围，无须改文件格式或另建常驻索引。

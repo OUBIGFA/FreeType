@@ -209,6 +209,7 @@ struct View {
     title: Option<String>,
     preedit: String,
     candidates: Vec<String>,
+    annotations: Vec<String>,
     badges: Vec<String>,
     labels: Vec<String>,
     cursor: Option<usize>,
@@ -222,6 +223,7 @@ struct View {
     preedit_size: u32,
     lock_position: bool,
     wrap_width: i32,
+    available_width: i32,
     wrap: bool,
     /// 候选强调色，见 [`theme`]。
     candidate_style: String,
@@ -233,9 +235,21 @@ struct View {
     panel: Panel,
     columns: usize,
     forgettable: bool,
+    prediction: bool,
 }
 
 impl View {
+    /// 同一批联想的高亮和发布版本不参与几何计算；工作区宽度是首次排版的结果。
+    fn same_prediction_page(&self, next: &Self) -> bool {
+        if !self.prediction || !next.prediction { return false; }
+        let mut current = self.clone();
+        current.cursor = next.cursor;
+        current.revision = next.revision;
+        current.wrap_width = next.wrap_width;
+        current.available_width = next.available_width;
+        current == *next
+    }
+
     fn label(&self, i: usize) -> String {
         if self.labels.is_empty() {
             format!("{}", (i + 1) % 10)
@@ -364,10 +378,28 @@ fn layout(view: &View, fonts: &Fonts, scale: f32) -> Result<Layout> {
             .map(|(i, text)| -> Result<_> {
                 let label = view.label(i);
                 let label = if label.is_empty() { None } else { Some(fonts.small.text(&label)?) };
-                let display = match view.badges.get(i).filter(|badge| !badge.is_empty()) {
+                let mut display = match view.badges.get(i).filter(|badge| !badge.is_empty()) {
                     Some(badge) => format!("{text} {badge}"),
                     None => text.clone(),
                 };
+                if let Some(annotation) = view.annotations.get(i).filter(|s| !s.is_empty()) {
+                    display.push_str("  ·  ");
+                    display.push_str(annotation);
+                }
+                // 长释义不能把窗口撑出屏幕；仅截断显示，不改变服务端的提交文字。
+                if view.available_width > 0 {
+                    let budget = (view.available_width - 4 * pad - s(32.0)).max(s(80.0));
+                    if fonts.main.text(&display)?.size.cx > budget {
+                        let chars: Vec<_> = display.chars().collect();
+                        let (mut low, mut high) = (0, chars.len());
+                        while low < high {
+                            let mid = (low + high + 1) / 2;
+                            let shortened = chars[..mid].iter().collect::<String>() + "…";
+                            if fonts.main.text(&shortened)?.size.cx <= budget { low = mid; } else { high = mid - 1; }
+                        }
+                        display = chars[..low].iter().collect::<String>() + "…";
+                    }
+                }
                 Ok((label, fonts.main.text(&display)?))
             })
             .collect::<Result<_>>()?;
@@ -944,6 +976,7 @@ impl CandidateWindow {
             title: frame.title.clone(),
             preedit: if frame.hide_candidate_preedit { String::new() } else { frame.preedit.clone() },
             candidates: frame.candidates.clone(),
+            annotations: frame.annotations.clone(),
             badges: frame.badges.clone(),
             labels: frame.labels.clone(),
             cursor: frame.cursor,
@@ -962,16 +995,36 @@ impl CandidateWindow {
             lock_position: frame.lock_candidate_position,
             wrap: frame.wrap_candidates,
             wrap_width: 0,
+            available_width: 0,
             candidate_style: frame.candidate_style.clone(),
             vertical: frame.vertical,
             panel: frame.panel,
             columns: frame.columns,
             forgettable: frame.forgettable,
+            prediction: frame.predict,
         };
         let visible = view.hint.is_some() || !view.candidates.is_empty() || view.title.is_some();
         if !visible {
             self.hide();
             return;
+        }
+        // 左右键选联想只重画高亮。宿主此时返回的插入符可能仍在变动，不能用它
+        // 重新定位；保留同一页已测量的文字、点击区域和窗口大小，直到真正上屏。
+        if frame.commit.is_none() && self.visible() {
+            if let Some(data) = data_of(self.hwnd).filter(|data| data.view.same_prediction_page(&view)) {
+                if data.view.revision != view.revision {
+                    data.pressed = None;
+                    data.painted_revision = 0;
+                }
+                data.view.cursor = view.cursor;
+                data.view.revision = view.revision;
+                unsafe {
+                    let _ = InvalidateRect(Some(self.hwnd), None, false);
+                    let _ = UpdateWindow(self.hwnd);
+                    SetTimer(Some(self.hwnd), PREDICT_TIMER, PREDICT_MS, None);
+                }
+                return;
+            }
         }
         let Some(caret) = caret else {
             return;
@@ -993,6 +1046,8 @@ impl CandidateWindow {
             return;
         }
         if let Some(data) = data_of(self.hwnd) {
+            // 联想有独立的正文锚点；真正移动光标由文本服务收起这一页。
+            if data.view.prediction { return; }
             let view = data.view.clone();
             self.show(view, caret);
         }
@@ -1022,6 +1077,7 @@ impl CandidateWindow {
             let dpi = GetDpiForWindow(self.hwnd).max(96);
             let scale = dpi as f32 / 96.0;
             let work = work_area(caret.left, caret.bottom);
+            view.available_width = work.right - work.left;
             if view.wrap { view.wrap_width = work.right - work.left; }
             let result = Fonts::styled(view.font_size.max(12) as f32 * scale, &view.font_family,
                 view.preedit_size as f32 * scale, &view.font_fallbacks).and_then(|fonts| layout(&view, &fonts, scale));

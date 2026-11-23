@@ -541,6 +541,17 @@ impl<'e> Session<'e> {
         }
     }
 
+    /// 独立英文候选共用学习日志和 TSF 预判规则；存完整词/短语编码，不存截短前缀。
+    pub fn learn_external_word(&mut self, word: &str, code: &str) {
+        let Some(engine) = self.engine else { return; };
+        if self.no_learn || self.defer_learning() { return; }
+        self.committed_learning.clear();
+        let mark = engine.learn_mark();
+        engine.record_selection_with_pinyin(word, Some(code));
+        let end = engine.learn_mark();
+        if end > mark { self.committed_learning.push((mark, end)); self.learning_changed = true; }
+    }
+
     /// 带引擎建会话。
     pub fn with_engine(engine: &'e Engine) -> Self {
         Self {

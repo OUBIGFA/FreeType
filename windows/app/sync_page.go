@@ -84,7 +84,7 @@ func (s *settings) syncPage(c *ui.Context) {
 		}
 		s.encryptionRows(c, busy)
 	})
-	if !s.sync.Enabled && !s.showSetting("sync/上传与恢复") && !s.showSetting("sync/自动同步") && !s.showSetting("sync/同步计划") {
+	if !s.sync.Enabled && s.syncPreview == nil && !s.showSetting("sync/上传与恢复") && !s.showSetting("sync/自动同步") && !s.showSetting("sync/同步计划") {
 		return
 	}
 	section(c, "同步计划", func() {
@@ -191,7 +191,7 @@ func (s *settings) syncPage(c *ui.Context) {
 					ui.Column(c).Key("device-" + device.ID).FillWidth().Children(func() {
 						subRow(c, name, detail, func() {
 							if ui.Button(c, "恢复").Label("恢复 " + name).Disabled(busy).Clicked() {
-								s.syncRestore, s.confirmSyncRestore = device, true
+								s.previewSync(device)
 							}
 						})
 					})
@@ -208,15 +208,36 @@ func (s *settings) syncPage(c *ui.Context) {
 		hint(c, "同步数据只发送到所填地址；账号密码和密钥加密保存在这台电脑，不会上传\n"+
 			"备份加密默认关闭；开启后用备份密码加密数据；电脑名、上传时间和大小不加密\n"+
 			"所有电脑使用同一备份密码；备份密码不会上传；旧备份仍需旧密码；忘记密码后无法解密\n"+
-			"手动恢复会合并词库、快捷短语、常用语和学习记录，并采用备份中的设置；保留已有内容；已删除内容可能重新出现\n"+
-			"自动同步按数据修改时间，用较新备份替换全部设置和数据，包括删除记录；请开启系统自动校时；恢复前的备份保存在 sync-backups\n"+
+			"恢复前显示新增、更新、删除和冲突；合并按每条记录的时间处理，两台电脑的独立新增都会保留\n"+
+			"删除标记会随同步保存，旧快照不会复活已删除内容；旧格式没有删除记录，只补缺少内容；请开启系统自动校时\n"+
+			"自动同步合并各台设备的最新快照；整份替换可在恢复预览中主动选择；恢复前备份保存在 sync-backups\n"+
 			"每台电脑保留自己的中英文状态、主词库路径和状态栏位置\n"+
 			"关闭设置窗口后继续同步；退出设置和托盘后停止同步；相同内容不重复传输")
 	}
-	title := "合并 " + deviceName(s.syncRestore) + " 的备份"
-	switch ui.AlertDialog(c, &s.confirmSyncRestore, title, "合并备份中的数据；保留这台电脑已有内容", "取消", "合并") {
-	case 1:
-		s.restoreSync(s.syncRestore)
+	if preview := s.syncPreview; preview != nil {
+		section(c, "恢复预览", func() {
+			hint(c, fmt.Sprintf("新增 %d 项；更新 %d 项；删除 %d 项；冲突 %d 项", preview.Added, preview.Updated, preview.Deleted, preview.Conflicts))
+			hint(c, "冲突按较新的记录处理；同一时间删除优先；下方最多显示 100 条影响项")
+			for _, detail := range preview.Details {
+				ui.Text(c, detail).Wrap().FontSize(textSize(c, 13))
+			}
+			checkbox(c, &s.syncReplace, "整份替换本机数据").Disabled(busy)
+			if s.syncReplace {
+				hint(c, "将恢复备份中的全部内容，包括旧词条和设置；本机之后新增的内容会被替换；恢复前留存备份")
+			}
+			ui.Row(c).Gap(12).Children(func() {
+				if ui.Button(c, "取消预览").Disabled(busy).Clicked() {
+					s.cancelSyncPreview()
+				}
+				label := "确认合并"
+				if s.syncReplace {
+					label = "确认整份替换"
+				}
+				if ui.PrimaryButton(c, label).Disabled(busy).Clicked() {
+					s.restoreSync(s.syncRestore)
+				}
+			})
+		})
 	}
 }
 

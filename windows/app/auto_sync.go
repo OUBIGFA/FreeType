@@ -385,84 +385,8 @@ func (a *autoSync) cycle(c syncSettings) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	newest := newestSyncDevice(devices)
-	remote := deviceVersion(newest)
-	// 用户较晚主动改回原值也算新版本；只有远端不旧于本机时才省略传输。
-	if newest.ID != "" && remote.Hash == version.Hash && compareSyncVersions(remote, version) >= 0 {
-		if compareSyncVersions(remote, version) > 0 {
-			a.mu.Lock()
-			a.state.Checkpoint.Version = remote
-			err = a.saveLocked()
-			a.mu.Unlock()
-			if err != nil {
-				return "", err
-			}
-		}
-		return "已是最新，无需传输", nil
+	if resp.SyncFormat != 1 {
+		return "", errors.New("正在运行的服务不支持逐项同步；请重启 FreeType 后再试")
 	}
-	if !a.stillConfigured(c) {
-		return "", errors.New("同步设置已改变，本次同步已停止")
-	}
-	if newest.ID == "" || compareSyncVersions(version, remote) > 0 {
-		hostname, _ := os.Hostname()
-		if _, err := uploadVersionedSnapshot(store, c.DeviceID, hostname, local, time.Now(), version, c.KeepSnapshots); err != nil {
-			return "", err
-		}
-		return "已上传本机最新备份", nil
-	}
-	incoming := filepath.Join(work, "incoming.json")
-	// 自动恢复只接受刚比较的精确修订，不能静默退回另一份旧快照。
-	if err = downloadExactSnapshot(store, newest, incoming); err != nil {
-		return "", err
-	}
-	got, err := snapshotHash(incoming)
-	if err != nil {
-		return "", err
-	}
-	if remote.Hash != "" && got != remote.Hash {
-		return "", errors.New("云端备份校验失败，本机未改变")
-	}
-	remote.Hash = got
-	if _, err := a.backend.Call(op("inspect_settings_backup", "path", incoming)); err != nil {
-		return "", err
-	}
-	if !a.stillConfigured(c) {
-		return "", errors.New("同步设置已改变，本次同步已停止")
-	}
-	// 覆盖前留一份本机数据；不清理用户的历史回退备份。
-	backupDir := filepath.Join(a.dir, "sync-backups")
-	if err = os.MkdirAll(backupDir, 0700); err != nil {
-		return "", err
-	}
-	backup := filepath.Join(backupDir, fmt.Sprintf("before-sync-%d.json", time.Now().UnixNano()))
-	data, err := os.ReadFile(local)
-	if err != nil {
-		return "", err
-	}
-	if err = os.WriteFile(backup, data, 0600); err != nil {
-		return "", err
-	}
-	a.mu.Lock()
-	a.state.Checkpoint.Pending = &remote
-	err = a.saveLocked()
-	a.mu.Unlock()
-	if err != nil {
-		return "", err
-	}
-	response, err := a.backend.Call(op("import_sync_settings", "path", incoming, "expected_path", local))
-	if err != nil {
-		return "", err
-	}
-	a.mu.Lock()
-	a.state.Checkpoint.Version = remote
-	a.state.Checkpoint.Pending = nil
-	err = a.saveLocked()
-	a.mu.Unlock()
-	if a.restored != nil {
-		a.restored(response)
-	}
-	if err != nil {
-		return "", fmt.Errorf("数据已恢复，保存同步状态失败：%w", err)
-	}
-	return "已恢复 " + deviceName(newest) + " 的最新备份", nil
+	return a.cycleRecords(c, store, devices, local, work, version)
 }

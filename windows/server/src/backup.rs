@@ -52,6 +52,8 @@ pub(crate) struct SettingsBackup {
     status_bar_position: Option<[i32; 2]>,
     // 主词库用内容迁移；config.lexicon 不保存来源机器的绝对路径。
     pub main_lexicon: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync_records: Option<Value>,
     // 本地一键备份由设置程序附加账号和计划；服务只接受它，不恢复或上传连接配置。
     #[serde(default, skip_serializing, rename = "sync_connection")]
     _sync_connection: Option<Value>,
@@ -252,6 +254,7 @@ fn snapshot_of(
         recent_emoji: recent,
         status_bar_position,
         main_lexicon,
+        sync_records: None,
         _sync_connection: None,
         _sync_metadata: None,
     };
@@ -282,6 +285,10 @@ pub(crate) fn modified_unix_ms(store: &Store, config: &Config) -> Result<u64, St
 
 pub(crate) fn read(path: &Path) -> Result<PreparedBackup, String> {
     let text = fs::read_to_string(path).map_err(|error| format!("读取全部设置备份失败：{error}"))?;
+    from_text(&text)
+}
+
+pub(crate) fn from_text(text: &str) -> Result<PreparedBackup, String> {
     let mut value: Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
         .map_err(|error| format!("全部设置备份格式不正确：{error}"))?;
     let parts = present_parts(&mut value)?;
@@ -291,6 +298,9 @@ pub(crate) fn read(path: &Path) -> Result<PreparedBackup, String> {
 
 /// 校验整份备份。没有的类别是空值，下面对各类的检查对空值都成立；学习记录没有就不读。
 fn prepare(mut data: SettingsBackup, parts: Vec<BackupPart>) -> Result<PreparedBackup, String> {
+    if data.sync_records.is_some() {
+        crate::sync_merge::validate_snapshot(&serde_json::to_value(&data).map_err(|e| e.to_string())?)?;
+    }
     if data.format != "freetype-settings" || data.version != 1 {
         return Err("不是支持的 FreeType 全部设置备份".into());
     }
@@ -312,7 +322,8 @@ fn prepare(mut data: SettingsBackup, parts: Vec<BackupPart>) -> Result<PreparedB
             return Err("备份中的词库名称不正确或重复".into());
         }
         let parsed = msime::parse_dictionary(&dict.text);
-        if !parsed.errors.is_empty() || parsed.items.is_empty() {
+        crate::dictionary_catalog::metadata(&dict.text)?;
+        if !parsed.errors.is_empty() || (parsed.items.is_empty() && !dict.text.starts_with("# FreeType-Dictionary: ")) {
             return Err(format!("词库「{}」有无效词条", dict.name));
         }
     }
@@ -589,6 +600,9 @@ impl PreparedBackup {
                 write(fresh.dir().join(MAIN_LEXICON), text.clone())?;
             }
         }
+        if let Some(records) = &data.sync_records {
+            write(fresh.dir().join("sync-records.json"), records.to_string())?;
+        }
         Ok(())
     }
 
@@ -601,6 +615,9 @@ impl PreparedBackup {
             .flat_map(part_files)
             .map(|name| (name.to_string(), (PathBuf::from(name), PathBuf::from(name))))
             .collect();
+        if self.data.sync_records.is_some() {
+            paths.insert("sync-records.json".into(), (PathBuf::from("sync-records.json"), PathBuf::from("sync-records.json")));
+        }
         if self.has(BackupPart::Dictionaries) {
             for path in dictionary_paths(&store.dir().join("dicts"))? {
                 let relative = path

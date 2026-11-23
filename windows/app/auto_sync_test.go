@@ -50,29 +50,62 @@ type syncBackendFixture struct {
 	fail     bool
 }
 
+// 单一记录的外部服务契约夹具；记录级合并算法由 Rust 的真实双设备测试覆盖。
+func testRecordSnapshot(data []byte, modified int64) []byte {
+	var value map[string]json.RawMessage
+	_ = json.Unmarshal(data, &value)
+	value["test_record_modified"], _ = json.Marshal(modified)
+	encoded, _ := json.Marshal(value)
+	return encoded
+}
+
+func testRecordContent(data []byte) ([]byte, int64) {
+	var value map[string]json.RawMessage
+	_ = json.Unmarshal(data, &value)
+	var modified int64
+	_ = json.Unmarshal(value["test_record_modified"], &modified)
+	delete(value, "test_record_modified")
+	encoded, _ := json.Marshal(value)
+	return encoded, modified
+}
+
 func (b *syncBackendFixture) Call(r Request) (Response, error) {
 	path, _ := r["path"].(string)
 	switch r["op"] {
 	case "export_sync_settings":
-		return Response{OK: true, ModifiedUnixMS: b.modified}, os.WriteFile(path, b.data, 0600)
+		return Response{OK: true, ModifiedUnixMS: b.modified, SyncFormat: 1}, os.WriteFile(path, testRecordSnapshot(b.data, b.modified), 0600)
+	case "preview_sync_merge":
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return Response{}, err
+		}
+		_, modified := testRecordContent(data)
+		preview := &SyncMergePreview{}
+		if modified > b.modified {
+			preview.Updated, preview.Versions = 1, 1
+		}
+		return Response{OK: true, SyncMerge: preview}, nil
 	case "inspect_settings_backup":
 		data, err := os.ReadFile(path)
 		if err == nil && !json.Valid(data) {
 			err = errors.New("无效备份")
 		}
 		return Response{OK: err == nil}, err
-	case "import_sync_settings":
+	case "merge_sync_settings":
 		expected, err := os.ReadFile(r["expected_path"].(string))
 		if err != nil {
 			return Response{}, err
 		}
-		if !bytes.Equal(expected, b.data) || b.fail {
+		if !bytes.Equal(expected, testRecordSnapshot(b.data, b.modified)) || b.fail {
 			return Response{}, errors.New("本机数据已改变")
 		}
-		b.data, err = os.ReadFile(path)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return Response{}, err
+		}
+		b.data, b.modified = testRecordContent(data)
 		b.imports++
-		b.modified += 5000
-		return Response{OK: err == nil}, err
+		return Response{OK: true, SyncMerge: &SyncMergePreview{Updated: 1, Versions: 1}}, nil
 	}
 	return Response{}, errors.New("意外的同步操作")
 }
@@ -111,7 +144,7 @@ func TestAutoSyncTransfersNewestSnapshotOverWebDAVAndDoesNotEchoAfterRestart(t *
 		t.Fatal(devices)
 	}
 	remote := filepath.Join(t.TempDir(), "remote.json")
-	if err = os.WriteFile(remote, []byte(`{"format":"freetype-settings","value":"remote"}`), 0600); err != nil {
+	if err = os.WriteFile(remote, testRecordSnapshot([]byte(`{"format":"freetype-settings","value":"remote"}`), 200), 0600); err != nil {
 		t.Fatal(err)
 	}
 	hash, _ := snapshotHash(remote)
@@ -284,7 +317,7 @@ func TestAutoSyncRejectsCorruptCloudAndChangedLocalBeforeReplacing(t *testing.T)
 			}
 			store := &memStore{files: map[string][]byte{}}
 			remote := filepath.Join(t.TempDir(), "remote.json")
-			os.WriteFile(remote, []byte(`{"value":"remote"}`), 0600)
+			os.WriteFile(remote, testRecordSnapshot([]byte(`{"value":"remote"}`), 200), 0600)
 			hash, _ := snapshotHash(remote)
 			device, err := uploadVersionedSnapshot(store, deviceB, "remote", remote, time.Now(), syncVersion{Modified: 200, Origin: deviceB, Hash: hash}, 5)
 			if err != nil {
@@ -482,7 +515,7 @@ func TestAutoSyncPublishesLaterRevertEvenWhenCloudHasSameContent(t *testing.T) {
 	}
 	store := &memStore{files: map[string][]byte{}}
 	file := filepath.Join(t.TempDir(), "remote.json")
-	os.WriteFile(file, b.data, 0600)
+	os.WriteFile(file, testRecordSnapshot(b.data, 100), 0600)
 	hash, _ := snapshotHash(file)
 	if _, err = uploadVersionedSnapshot(store, deviceB, "remote", file, time.Now(), syncVersion{Modified: 100, Origin: deviceB, Hash: hash}, 5); err != nil {
 		t.Fatal(err)

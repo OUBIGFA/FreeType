@@ -578,15 +578,16 @@ func (s *settings) uploadSync() {
 		}
 		defer os.Remove(file)
 		// 快照就是「导出全部设置」的文件：由服务进程生成，里面没有同步的地址和凭据
-		operation := "export_settings"
-		if manager != nil {
-			operation = "export_sync_settings"
-		}
+		operation := "export_sync_settings"
 		response, err := s.backend.Call(op(operation, "path", file))
 		if err != nil {
 			return "", nil, fmt.Errorf("生成备份失败：%w", err)
 		}
-		var version syncVersion
+		hash, err := snapshotHash(file)
+		if err != nil {
+			return "", nil, err
+		}
+		version := syncVersion{Modified: response.ModifiedUnixMS, Origin: id, Hash: hash}
 		if manager != nil {
 			hash, err := snapshotHash(file)
 			if err != nil {
@@ -630,24 +631,72 @@ func (s *settings) refreshSyncDevices() {
 }
 
 func (s *settings) restoreSync(device syncDevice) {
-	s.syncTask("transfer", "正在恢复", func(store remoteStore) (string, func(), error) {
-		file, err := tempSnapshot()
+	if s.syncPreviewFile != "" {
+		s.applySyncPreview(device)
+	}
+}
+
+// 先下载并校验确切快照，再显示具体变更；确认时不重新下载另一份内容。
+func (s *settings) previewSync(device syncDevice) {
+	s.syncTask("transfer", "正在预览同步差异", func(store remoteStore) (string, func(), error) {
+		incoming, err := tempSnapshot()
 		if err != nil {
 			return "", nil, err
 		}
-		defer os.Remove(file)
-		if err := downloadSnapshot(store, device, file); err != nil {
+		expected, err := tempSnapshot()
+		if err != nil {
+			os.Remove(incoming)
 			return "", nil, err
 		}
-		response, err := s.backend.Call(op("merge_settings", "path", file))
+		fail := func(err error) (string, func(), error) { os.Remove(incoming); os.Remove(expected); return "", nil, err }
+		if err := downloadSnapshot(store, device, incoming); err != nil {
+			return fail(err)
+		}
+		if _, err := s.backend.Call(op("export_sync_settings", "path", expected)); err != nil {
+			return fail(err)
+		}
+		response, err := s.backend.Call(op("preview_sync_merge", "path", incoming))
 		if err != nil {
-			return "", nil, fmt.Errorf("合并失败：%w", err)
+			return fail(err)
 		}
-		message := "已合并 " + deviceName(device) + " 的备份"
-		if response.Report != nil && response.Report.Note != "" {
-			message += "：" + response.Report.Note
+		if response.SyncMerge == nil {
+			return fail(errors.New("服务没有返回同步差异，请更新服务后重试"))
 		}
-		return message, func() { s.applyRestored(response) }, nil
+		return "已取得同步差异", func() {
+			s.cancelSyncPreview()
+			s.syncRestore, s.syncPreview, s.syncPreviewFile, s.syncExpectedFile = device, response.SyncMerge, incoming, expected
+			s.syncReplace = false
+		}, nil
+	})
+}
+
+func (s *settings) cancelSyncPreview() {
+	for _, file := range []string{s.syncPreviewFile, s.syncExpectedFile} {
+		if file != "" {
+			_ = os.Remove(file)
+		}
+	}
+	s.syncPreview, s.syncPreviewFile, s.syncExpectedFile = nil, "", ""
+}
+
+func (s *settings) applySyncPreview(device syncDevice) {
+	incoming, expected, replace := s.syncPreviewFile, s.syncExpectedFile, s.syncReplace
+	s.syncTask("transfer", "正在应用已预览的备份", func(_ remoteStore) (string, func(), error) {
+		if err := preserveSyncBackup(s.syncDataDir(), expected); err != nil {
+			return "", nil, err
+		}
+		operation := "merge_sync_settings"
+		if replace {
+			operation = "import_sync_settings"
+		}
+		response, err := s.backend.Call(op(operation, "path", incoming, "expected_path", expected))
+		if err != nil {
+			return "", nil, err
+		}
+		return "已恢复 " + deviceName(device) + " 的备份", func() {
+			s.cancelSyncPreview()
+			s.applyRestored(response)
+		}, nil
 	})
 }
 

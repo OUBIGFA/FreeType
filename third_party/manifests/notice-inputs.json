@@ -46,6 +46,21 @@
       "file": "third_party/licenses/WowType-MODEL-NOTICE.txt",
       "source": "https://github.com/Gloridust/WowType/releases/tag/lm-2026.11.09",
       "sha256": "b96a674800c4f039230ab4edae95168f0895b440e344d223f753cf7fa12c09c5"
+    },
+    {
+      "file": "third_party/licenses/ecdict-LICENSE.txt",
+      "source": "https://raw.githubusercontent.com/skywind3000/ECDICT/39cfb9672c0906b63569e0453c2e6abfb9ab182a/LICENSE",
+      "sha256": "f8552dd246f61a4e064569eae6194a01c6b3d63b03bf27c6ca863593c549ed0f"
+    },
+    {
+      "file": "third_party/licenses/radical-LICENSE.txt",
+      "source": "https://raw.githubusercontent.com/mirtlecn/rime-radical-pinyin/87e73d7182916f3db9dbc0b6a4d18a78a775b298/LICENSE",
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+    },
+    {
+      "file": "third_party/licenses/pinyin-LICENSE.txt",
+      "source": "https://raw.githubusercontent.com/mozillazg/pinyin-data/fe29ad32bdf352b31a02b9936e537f575432e9a6/LICENSE",
+      "sha256": "9c048697be2502a16e8bcb282d5d465a07295b2def0ffb05a269c5d39dbe1586"
     }
   ],
   "nsisSource": {

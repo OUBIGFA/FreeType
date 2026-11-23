@@ -54,7 +54,29 @@ impl Engine {
         } else {
             ""
         };
-        let Some(entry) = self.lexicon.complete_long_word(&prefix, word_prefix) else {
+        let choices = self.lexicon.long_completions(&prefix, word_prefix, 16);
+        // 诗句/专名按读音补全不以通用模型词表为门槛；仅有一个词库扩展也保留。
+        // 整词有多个扩展时优先模型中真正收录的词，避免高词频切词残片占住补全位。
+        let selected = if word_prefix.is_empty() || choices.len() <= 1 {
+            choices.first()
+        } else {
+            choices.iter().find(|entry| self.lm.knows_word(&entry.word) == Some(true)).or_else(|| {
+                if self.lm.knows_word(word_prefix).is_none() { return choices.first(); }
+                let guard = self.nnlm.read().ok()?;
+                let model = guard.as_ref()?;
+                let context = model.context_tokens(word_prefix);
+                let empty = model.context_tokens("");
+                // 有限候选只比较补出的后缀相对无上下文的提升度，不按整句概率惩罚长词。
+                choices.iter().take(8).filter(|entry| {
+                    let suffix = &entry.word[word_prefix.len()..];
+                    let Some(next) = suffix.chars().next().filter(|ch| model.knows(*ch)) else { return false; };
+                    // 各备选共享两次上下文前向结果，只看新增首字的提升度；不对每条
+                    // 长诗句执行完整神经推理，避免完整词库下按键耗时随后缀长度增长。
+                    model.next_char_logprob(&context, next) > model.next_char_logprob(&empty, next)
+                }).max_by(|a, b| a.freq.total_cmp(&b.freq))
+            })
+        };
+        let Some(entry) = selected.cloned() else {
             return;
         };
         let text = self.shown_text(&entry.word);

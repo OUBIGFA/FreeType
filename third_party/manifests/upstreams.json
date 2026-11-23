@@ -72,6 +72,34 @@
           "sha256": "6af695065ef3b79eefc450d0ea03a6b00d6a1a001aa75ea0b52e81d54ce20c23"
         }
       ]
+    },
+    {
+      "name": "ECDICT English lookup data",
+      "repository": "https://github.com/skywind3000/ECDICT",
+      "revision": "39cfb9672c0906b63569e0453c2e6abfb9ab182a",
+      "use": "独立英文/拆字本地查询数据；原始输入、校验值与生成规则见 input-tools.json；许可与原始源码随包保留",
+      "license": "MIT"
+    },
+    {
+      "name": "Rime radical decomposition data",
+      "repository": "https://github.com/mirtlecn/rime-radical-pinyin",
+      "revision": "87e73d7182916f3db9dbc0b6a4d18a78a775b298",
+      "use": "独立英文/拆字本地查询数据；原始输入、校验值与生成规则见 input-tools.json；许可与原始源码随包保留",
+      "license": "GPL-3.0"
+    },
+    {
+      "name": "pinyin-data readings",
+      "repository": "https://github.com/mozillazg/pinyin-data",
+      "revision": "fe29ad32bdf352b31a02b9936e537f575432e9a6",
+      "use": "独立英文/拆字本地查询数据；原始输入、校验值与生成规则见 input-tools.json；许可与原始源码随包保留",
+      "license": "MIT"
+    },
+    {
+      "name": "msime-windows feature behavior reference",
+      "repository": "https://github.com/metasequoiaime/msime-windows",
+      "revision": "d8e9ebaabac5f7f63ba01c70fec39a6111e3b13d",
+      "use": "参考来源词库管理、独立英文候选、拆字查字、逐项同步与 Vim Esc 的公开用户行为；Rust/Go 独立实现，不复制程序代码；输入数据另从原始来源取得",
+      "license": "GPL-3.0; behavior reference only"
     }
   ]
 }

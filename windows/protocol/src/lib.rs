@@ -62,6 +62,8 @@ pub mod keysym {
 
 /// 修饰键位掩码（和 `wowtype_core::session::modifier` 一致）。
 pub mod modifier {
+    /// 同一次物理按键的自动重复；不属于应用快捷键修饰键。
+    pub const REPEAT: u32 = 1 << 5;
     pub const SHIFT: u32 = 1 << 0;
     pub const CAPS: u32 = 1 << 1;
     pub const CTRL: u32 = 1 << 2;
@@ -320,6 +322,13 @@ pub struct Config {
     pub app_presets: bool,
     /// 各程序切进来时的状态，见 [`Config::app_presets`]。
     pub app_preset_rules: Vec<AppPreset>,
+    /// 仅这些程序在空闲的单次 Esc 时切英文；按键继续交给宿主。
+    pub vim_mode_apps: Vec<String>,
+    pub english_correction: bool,
+    pub english_space: bool,
+    pub english_gloss: bool,
+    pub hotkey_english: String,
+    pub hotkey_radical: String,
 
     // —— 实用功能 ——
     /// 快捷短语混入候选（编码完整对上时排第一）。
@@ -436,6 +445,12 @@ impl Default for Config {
             traditional: false,
             app_presets: false,
             app_preset_rules: Vec::new(),
+            vim_mode_apps: Vec::new(),
+            english_correction: true,
+            english_space: true,
+            english_gloss: true,
+            hotkey_english: "off".into(),
+            hotkey_radical: "off".into(),
             quick_phrases: true,
             emoji_suggest: true,
             date_time: true,
@@ -520,7 +535,7 @@ impl Config {
         self.page_size = self.page_size.clamp(3, 10);
         self.font_size = self.font_size.clamp(12, 36);
         if self.preedit_size != 0 { self.preedit_size = self.preedit_size.clamp(10, 36); }
-        pick(&mut self.inline_preedit, &["segmented", "raw", "off"], &d.inline_preedit);
+        pick(&mut self.inline_preedit, &["segmented", "spaces", "raw", "off"], &d.inline_preedit);
         self.font_fallbacks = self.font_fallbacks.split([',', '，']).map(str::trim)
             .filter(|name| !name.is_empty() && name.len() <= 64 && !name.chars().any(char::is_control))
             .take(6).collect::<Vec<_>>().join(",");
@@ -556,6 +571,8 @@ impl Config {
         pick(&mut self.mode_scope, &MODE_SCOPES, &d.mode_scope);
         pick(&mut self.hint_position, &HINT_POSITIONS, &d.hint_position);
         pick(&mut self.hotkey_emoji, &HOTKEYS_EMOJI, &d.hotkey_emoji);
+        pick(&mut self.hotkey_english, &["off", "ctrl+shift+y", "ctrl+alt+y"], &d.hotkey_english);
+        pick(&mut self.hotkey_radical, &["off", "ctrl+shift+u", "ctrl+alt+u"], &d.hotkey_radical);
         pick(&mut self.hotkey_punct, &HOTKEYS_PUNCT, &d.hotkey_punct);
         pick(&mut self.hotkey_traditional, &HOTKEYS_TRADITIONAL, &d.hotkey_traditional);
         pick(&mut self.hotkey_mode, &HOTKEYS_MODE, &d.hotkey_mode);
@@ -570,6 +587,8 @@ impl Config {
             }
         }
         self.app_preset_rules = rules;
+        self.vim_mode_apps = self.vim_mode_apps.iter().filter_map(|name| normalize_app_name(name))
+            .collect::<std::collections::BTreeSet<_>>().into_iter().collect();
         self
     }
 
@@ -610,6 +629,40 @@ pub struct Dictionary {
     /// 文件名（不含 .txt），也是显示名。
     pub name: String,
     pub entries: usize,
+    #[serde(default = "dictionary_enabled_default")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+fn dictionary_enabled_default() -> bool { true }
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DictionaryEntry {
+    pub word: String,
+    pub pinyin: String,
+    #[serde(default)]
+    pub weight: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DictionaryPage {
+    pub dictionary: Dictionary,
+    pub total: usize,
+    pub offset: usize,
+    pub entries: Vec<DictionaryEntry>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SyncMergePreview {
+    pub versions: usize,
+    pub added: usize,
+    pub updated: usize,
+    pub deleted: usize,
+    pub conflicts: usize,
+    pub details: Vec<String>,
 }
 
 /// 一个学到的词（设置程序的「学到的词」列表）。
@@ -634,6 +687,8 @@ pub enum Command {
     ToggleTraditional,
     /// 打开表情面板。
     EmojiPanel,
+    EnglishCandidates,
+    RadicalLookup,
     /// 打开工具栏（和 v + 空格一样）。
     Toolbar,
     /// 打开设置窗口。
@@ -783,6 +838,9 @@ pub enum Request {
     /// 导入水杉格式词库文件，存为 `dicts\<name>.txt`。
     ImportDictionary { path: String, name: String },
     RemoveDictionary { name: String },
+    QueryDictionary { name: String, query: String, offset: usize, limit: usize },
+    UpdateDictionary { name: String, new_name: String, enabled: bool, description: String },
+    DeleteDictionaryEntries { name: String, entries: Vec<DictionaryEntry> },
     /// 导出学到的用户词（水杉词库格式）。
     ExportUserDictionary { path: String },
     /// 完整学习备份（JSON）：词条、次数、时间和搭配。
@@ -802,6 +860,8 @@ pub enum Request {
     ImportSyncSettings { path: String, expected_path: String },
     InspectSettingsBackup { path: String },
     ImportSettings { path: String },
+    PreviewSyncMerge { path: String },
+    MergeSyncSettings { path: String, expected_path: String },
     /// 把一份全部设置备份合并进当前数据（数据同步的恢复）：不删除、不替换本机已有的内容。
     MergeSettings { path: String },
     /// 学到的词（用户词库）。
@@ -845,6 +905,9 @@ pub enum PairEdit { Skip, Erase }
 /// 一次按键之后 DLL 要做的事。
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Frame {
+    /// 显示注音/释义，与实际候选及上屏内容分离。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub annotations: Vec<String>,
     /// 吃掉这个键（false：交给应用）。
     pub handled: bool,
     /// 要上屏的字。
@@ -1033,6 +1096,12 @@ pub struct Response {
     pub common_phrases: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dictionaries: Option<Vec<Dictionary>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dictionary_page: Option<DictionaryPage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync_merge: Option<SyncMergePreview>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub sync_format: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_words: Option<Vec<UserWord>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -229,6 +229,22 @@ mod tests {
     }
 
     #[test]
+    fn two_clean_shift_taps_preserve_the_mode_and_following_shortcut_is_not_an_extra_toggle() {
+        let mut tap = ShiftTap::default();
+        let mut chinese = true;
+        for _ in 0..2 {
+            tap.key_down(VK_SHIFT, PLAIN, false);
+            tap.key_down(VK_SHIFT, PLAIN, false);
+            if tap.key_up(VK_SHIFT, PLAIN) { chinese = !chinese; }
+            assert!(!tap.key_up(VK_SHIFT, PLAIN));
+        }
+        assert!(chinese, "双击 Shift 后模式回到原状态，宿主仍收到两次按键");
+        tap.key_down(VK_SHIFT, PLAIN, false);
+        tap.key_down(0x41, PLAIN, false);
+        assert!(!tap.key_up(VK_SHIFT, PLAIN), "Shift 组合键不再触发一次模式切换");
+    }
+
+    #[test]
     fn caret_move_waits_for_modifiers() {
         let pending = CaretMove::new(1, 1000);
         assert_eq!(pending.step(1000, true, true), CaretStep::Wait, "Shift 还按着：等");

@@ -227,6 +227,28 @@ def collect(output):
     authorization = check_authorization()
     run(["go", "mod", "verify"], APP)
     components = collect_rust(output)
+    # These remain independent licensed data. Include exact editable inputs and the
+    # generator, including the complete decomposition upstream archive (GPL source).
+    from make_input_tools import check as check_input_tools, prepare_sources
+    input_manifest_path = ROOT / "third_party/manifests/input-tools.json"
+    input_manifest = json.loads(input_manifest_path.read_text(encoding="utf-8"))
+    check_input_tools(ROOT / ".local/data")
+    input_sources = prepare_sources(input_manifest)
+    for source in input_manifest["sources"]:
+        archive = ROOT / ".local/third-party" / ("input-tools-" + source["name"] + "-" + source["revision"] + ".zip")
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+            for item in source["files"]:
+                bundle.write(input_sources / source["name"] / item["name"], source["name"] + "/" + item["name"])
+            bundle.write(ROOT / "tools/make_input_tools.py", "tools/make_input_tools.py")
+            bundle.write(input_manifest_path, "third_party/manifests/input-tools.json")
+            bundle.writestr("README.txt", "FreeType independent input lookup data. Original inputs and licenses are retained.\n"
+                            "Build with Python 3.11+: python -X utf8 tools/make_input_tools.py\n"
+                            "The manifest pins all sources and hashes; the generator downloads any other required inputs.\n")
+        component = copy_component(output, "data:" + source["name"], source["revision"],
+                                   ROOT / "third_party/licenses", [source["name"] + "-LICENSE.txt"], archive)
+        component["sourceUrl"] = source["repository"]
+        components.append(component)
     go_components, modules = collect_go(output)
     components.extend(go_components)
 

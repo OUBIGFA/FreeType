@@ -65,10 +65,18 @@ type settings struct {
 	// 字体列表（第一次打开候选窗页时取）。
 	fonts            []string
 	shuangpinExample string
+	newVimApp        string
 
-	dicts   []Dictionary
-	phrases []QuickPhrase
-	common  []string
+	dicts                                                                    []Dictionary
+	dictionaryName, dictionaryQuery, dictionaryRename, dictionaryDescription string
+	dictionaryPage                                                           *DictionaryPage
+	dictionarySequence                                                       uint64
+	dictionaryBusy, confirmDictionaryDelete                                  bool
+	dictionarySelected                                                       map[string]bool
+	phrases                                                                  []QuickPhrase
+	selectedPhrases, selectedWords                                           map[string]bool
+	confirmPhraseBatch, confirmWordBatch                                     bool
+	common                                                                   []string
 	// 全列表保存完成并刷新前不接受下一次修改，避免用旧列表覆盖刚写入的条目。
 	phrasesBusy, commonBusy      bool
 	words                        []UserWord
@@ -117,14 +125,16 @@ type settings struct {
 	// 连远端的办法（测试里换成内存里的假远端）。
 	newStore func(syncSettings) (remoteStore, error)
 	// 正在做的同步动作的说明（空：没有在做）；做完的结果和它是不是失败。
-	syncBusy, syncMessage string
-	syncMessageArea       string
-	showSyncHelp          bool
-	syncFailed            bool
-	syncDevices           []syncDevice
-	syncListed            bool
-	syncRestore           syncDevice
-	confirmSyncRestore    bool
+	syncBusy, syncMessage             string
+	syncMessageArea                   string
+	showSyncHelp                      bool
+	syncFailed                        bool
+	syncDevices                       []syncDevice
+	syncListed                        bool
+	syncRestore                       syncDevice
+	syncPreview                       *SyncMergePreview
+	syncPreviewFile, syncExpectedFile string
+	syncReplace                       bool
 
 	// 最近一次导入的结果。
 	report       string

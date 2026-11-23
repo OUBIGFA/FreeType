@@ -38,6 +38,8 @@ pub mod voice_ffi;
 #[cfg(not(feature = "voice"))]
 pub mod voice_stub;
 pub mod wordlm;
+pub mod lookup_table;
+pub mod input_tools;
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -215,6 +217,7 @@ pub struct Engine {
     nnlm_path: RwLock<Option<std::path::PathBuf>>,
     /// 束搜索查表结果的跨按键缓存，见 [`lexicon::MemoLexicon`]。
     lookup_memo: lexicon::LookupMemo,
+    input_tools: OnceLock<input_tools::InputTools>,
 }
 
 impl Engine {
@@ -234,6 +237,7 @@ impl Engine {
             last_word: RwLock::new(String::new()),
             last_words: RwLock::new(HashMap::new()),
             word_prior: OnceLock::new(),
+            input_tools: OnceLock::new(),
             manual_pins: RwLock::new(session::ManualPins::new()),
             converter: RwLock::new(Arc::new(Converter::new())),
             english: RwLock::new(Arc::new(HashMap::new())),

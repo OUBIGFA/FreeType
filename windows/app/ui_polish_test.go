@@ -30,6 +30,46 @@ func saveUIFrame(test *testing.T, name string, view *ui.Tester) {
 	}
 }
 
+func TestInputFeatureManagementViewsRenderRealControls(test *testing.T) {
+	for _, dark := range []bool{false, true} {
+		s, b := newTestSettings()
+		b.dicts = []Dictionary{{Name: "专业词库", Entries: 120, Enabled: true, Source: "Rime · 医学.dict.yaml", Description: "日常医学用词"}}
+		s.refresh()
+		s.page, s.dictionaryName, s.dictionaryRename, s.dictionaryDescription = "dicts", "专业词库", "专业词库", "日常医学用词"
+		s.dictionaryPage = &DictionaryPage{Dictionary: b.dicts[0], Total: 120, Entries: []DictionaryEntry{{Word: "研究", Pinyin: "yan jiu", Weight: 1000}, {Word: "临床试验", Pinyin: "lin chuang shi yan", Weight: 800}}}
+		s.dictionarySelected = map[string]bool{}
+		view := ui.NewTester(s.view, 1100, 1100)
+		view.SetDark(dark)
+		view.Frame()
+		for _, label := range []string{"保存名称与说明", "搜索词库词条", "词库下一页", "删除选中词库词条"} {
+			if _, found := view.Find(label); !found {
+				test.Fatalf("管理控件缺失：%s", label)
+			}
+		}
+		saveUIFrame(test, fmt.Sprintf("input-feature-dictionary-%t", dark), view)
+		s.page = "features"
+		s.locateSetting(setting("features/英文拼写建议"))
+		view.Frame()
+		view.Frame()
+		if _, found := view.Find("英文拼写建议"); !found {
+			test.Fatal("英文候选开关不可见")
+		}
+		saveUIFrame(test, fmt.Sprintf("input-feature-options-%t", dark), view)
+		s.page = "sync"
+		s.locatedSetting, s.settingQuery, s.revealSetting = "", "", false
+		s.pageScroll = ui.ScrollState{}
+		s.syncLoaded = true
+		s.syncPreview = &SyncMergePreview{Added: 2, Updated: 1, Deleted: 1, Conflicts: 1, Details: []string{"删除 常用语：旧条目", "新增 学习：新用词"}}
+		view = ui.NewTester(s.view, 1100, 2600)
+		view.SetDark(dark)
+		view.Frame()
+		if !view.HasText("确认合并") || !view.HasText("整份替换本机数据") {
+			test.Fatalf("同步预览缺少明确的恢复方式：%q", view.Texts())
+		}
+		saveUIFrame(test, fmt.Sprintf("input-feature-sync-%t", dark), view)
+	}
+}
+
 func colorLuminance(color ui.Color) float64 {
 	linear := func(channel uint8) float64 {
 		value := float64(channel) / 255

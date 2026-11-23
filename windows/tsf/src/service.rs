@@ -1178,7 +1178,8 @@ fn prediction_space_key(
 /// 虚拟键翻成键码；翻不出来（非 ASCII 字符、功能键）返回 None。
 fn translate(wparam: WPARAM, lparam: LPARAM, test: bool) -> Option<Key> {
     let vk = wparam.0 as u16;
-    let modifiers = keys::modifiers(|vk| unsafe { GetKeyState(i32::from(vk)) });
+    let modifiers = keys::modifiers(|vk| unsafe { GetKeyState(i32::from(vk)) })
+        | if lparam.0 & (1 << 30) != 0 { modifier::REPEAT } else { 0 };
     if let Some(keysym) = keys::named_keysym(vk) {
         return Some(Key { keysym, modifiers, test });
     }
@@ -1321,12 +1322,14 @@ fn button_menu(owner: HWND, x: i32, y: i32) -> Option<Request> {
     use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, WS_EX_TOOLWINDOW, WS_POPUP};
     unsafe {
         let menu = CreatePopupMenu().ok()?;
-        let items: [(u32, &str); 5] = [
+        let items: [(u32, &str); 7] = [
             (1, "切换中英文"),
             (2, "中文 / 英文标点"),
             (3, "简体 / 繁体"),
             (4, "表情与符号"),
             (5, "工具栏"),
+            (7, "英文候选"),
+            (8, "拆字查字"),
         ];
         for (id, text) in items {
             let _ = AppendMenuW(menu, MF_STRING, id as usize, &windows::core::HSTRING::from(text));
@@ -1352,6 +1355,8 @@ fn button_menu(owner: HWND, x: i32, y: i32) -> Option<Request> {
             4 => Command::EmojiPanel,
             5 => Command::Toolbar,
             6 => Command::OpenSettings,
+            7 => Command::EnglishCandidates,
+            8 => Command::RadicalLookup,
             _ => return None,
         };
         Some(Request::Command { command })

@@ -168,6 +168,10 @@ pub trait Lexicon: Send + Sync {
     fn complete_long_word(&self, _prefix: &[SyllableKey], _word_prefix: &str) -> Option<LexEntry> {
         None
     }
+    /// 有限的备选集合供引擎筛选质量，避免词频最高的切词残片挡住真实长词。
+    fn long_completions(&self, prefix: &[SyllableKey], word_prefix: &str, _limit: usize) -> Vec<LexEntry> {
+        self.complete_long_word(prefix, word_prefix).into_iter().collect()
+    }
     /// Static dictionaries can supply the same prediction priors directly from disk.
     fn prediction_index(&self) -> Option<&dyn PredictionIndex> {
         None
@@ -280,6 +284,9 @@ pub struct MemoLexicon<'a> {
 }
 
 impl Lexicon for MemoLexicon<'_> {
+    fn long_completions(&self, prefix: &[SyllableKey], word_prefix: &str, limit: usize) -> Vec<LexEntry> {
+        self.inner.long_completions(prefix, word_prefix, limit)
+    }
     fn complete_long_word(&self, prefix: &[SyllableKey], word_prefix: &str) -> Option<LexEntry> {
         self.inner.complete_long_word(prefix, word_prefix)
     }
@@ -805,6 +812,14 @@ impl MemoryLexicon {
 }
 
 impl Lexicon for MemoryLexicon {
+    fn long_completions(&self, prefix: &[SyllableKey], word_prefix: &str, limit: usize) -> Vec<LexEntry> {
+        let Some(head) = prefix.get(..4).and_then(|slice| <[SyllableKey; 4]>::try_from(slice).ok()) else { return Vec::new(); };
+        let Some(indices) = self.long_prefix_index.get(&head) else { return Vec::new(); };
+        let mut entries: Vec<_> = indices.iter().map(|&i| &self.entries[i])
+            .filter(|entry| long_word_matches(entry, prefix, word_prefix)).collect();
+        entries.sort_unstable_by(|a, b| long_word_order(b, a));
+        entries.into_iter().take(limit.min(32)).cloned().collect()
+    }
     fn complete_long_word(&self, prefix: &[SyllableKey], word_prefix: &str) -> Option<LexEntry> {
         let head: [SyllableKey; 4] = prefix.get(..4)?.try_into().ok()?;
         self.long_prefix_index.get(&head)?.iter().map(|&i| &self.entries[i])
@@ -1383,6 +1398,16 @@ fn user_reading(input: &str, word: &str, frequency: f64) -> Result<String> {
 }
 
 impl Lexicon for UserLexicon {
+    fn long_completions(&self, prefix: &[SyllableKey], word_prefix: &str, limit: usize) -> Vec<LexEntry> {
+        let mut entries = self.base.long_completions(prefix, word_prefix, limit);
+        if let Ok(snapshot) = self.snapshot.read() { entries.extend(snapshot.long_completions(prefix, word_prefix, limit)); }
+        if let Ok(snapshot) = self.extra_snapshot.read() { entries.extend(snapshot.long_completions(prefix, word_prefix, limit)); }
+        entries.sort_unstable_by(|a, b| long_word_order(b, a));
+        let mut seen = std::collections::HashSet::new();
+        entries.retain(|entry| seen.insert(entry.word.clone()));
+        entries.truncate(limit.min(32));
+        entries
+    }
     fn complete_long_word(&self, prefix: &[SyllableKey], word_prefix: &str) -> Option<LexEntry> {
         // 学习和导入数据沿用各自的快照，删除或换词库后不留下过期补全。
         [

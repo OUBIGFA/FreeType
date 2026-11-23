@@ -32,6 +32,124 @@ fn configure(host: &mut Host, change: impl FnOnce(&mut Config)) {
 }
 
 #[test]
+fn lagging_surrounding_text_cannot_change_chinese_punctuation_after_commit() {
+    let mut host = host("lagging-punctuation");
+    host.handle(1, Request::Focus { active: true, before: Some("1:1".into()) });
+    typing(&mut host, "nihao");
+    assert_eq!(press(&mut host, 0x20).commit.as_deref(), Some(" 你好"));
+    let dot = host.handle(1, Request::Key { key: Key { keysym: '.' as u32, modifiers: 0, test: false }, before: Some("1:1".into()) }).frame.unwrap();
+    assert_eq!(dot.commit.as_deref(), Some("。"), "宿主迟报的数字不能盖掉刚上屏的汉字");
+    let dot = host.handle(1, Request::Key { key: Key { keysym: '.' as u32, modifiers: 0, test: false }, before: Some("3".into()) }).frame.unwrap();
+    assert!(dot.commit.as_deref() == Some(".") || !dot.handled, "真挪到其他数字后仍输出半角");
+    cleanup(&host);
+}
+
+#[test]
+fn lookup_modes_commit_only_selected_text_and_keep_raw_enter_unchanged() {
+    let Some(resources) = std::env::var_os("FREETYPE_TEST_INPUT_TOOLS") else { return; };
+    let mut host = host("lookup-modes");
+    host.engine_ref().unwrap().load_input_tools(resources).unwrap();
+    let open = |host: &mut Host, command: &str| {
+        let request = serde_json::from_value(serde_json::json!({"op":"command","command":command})).expect("查询模式入口");
+        let response = host.handle(1, request);
+        assert!(response.ok);
+        response.frame.unwrap()
+    };
+    assert!(open(&mut host, "english_candidates").title.as_deref().unwrap().contains("英文"));
+    let frame = typing(&mut host, "inspiteof");
+    assert!(frame.vertical, "带音标和释义的候选按行显示，不能撑成超长横条");
+    assert!(frame.annotations.iter().any(|text| !text.is_empty()));
+    let index = frame.candidates.iter().position(|text| text == "in spite of").expect("短语候选");
+    let selected = host.handle(1, Request::Select { index }).frame.unwrap();
+    assert_eq!(selected.commit.as_deref(), Some("in spite of "));
+    assert!(selected.title.as_deref().unwrap().contains("英文"), "英文模式持续输入，Esc 或快捷键退出");
+    typing(&mut host, "conectivity");
+    assert_eq!(press(&mut host, keysym::RETURN).commit.as_deref(), Some("conectivity"));
+    press(&mut host, keysym::ESCAPE);
+    open(&mut host, "radical_lookup");
+    let frame = typing(&mut host, "ririri");
+    let index = frame.candidates.iter().position(|text| text == "晶").unwrap();
+    assert_eq!(host.handle(1, Request::Select { index }).frame.unwrap().commit.as_deref(), Some("晶"));
+    assert!(press(&mut host, 'n' as u32).preedit.starts_with('n'), "查字上屏后返回普通拼音");
+    cleanup(&host);
+}
+
+#[test]
+fn dictionary_catalog_controls_sources_queries_pages_and_removes_only_selected_entries() {
+    let mut host = host("dictionary-catalog");
+    let path = host.data_dir().join("source.txt");
+    std::fs::create_dir_all(host.data_dir()).unwrap();
+    std::fs::write(&path, "韵酒\tyun jiu\t10000\n韵茶\tyun cha\t9000\n").unwrap();
+    for name in ["甲", "乙"] {
+        assert!(host.handle(1, Request::ImportDictionary { path: path.display().to_string(), name: name.into() }).ok);
+    }
+    let call = |host: &mut Host, value| {
+        let request: Request = serde_json::from_value(value).expect("词库管理协议应可用");
+        let response = host.handle(1, request);
+        assert!(response.ok, "{:?}", response.error);
+        serde_json::to_value(response).unwrap()
+    };
+    let page = call(&mut host, serde_json::json!({"op":"query_dictionary","name":"甲","query":"韵","offset":0,"limit":1}));
+    assert_eq!(page["dictionary_page"]["total"], 2);
+    assert_eq!(page["dictionary_page"]["entries"].as_array().unwrap().len(), 1);
+    for name in ["甲", "乙"] {
+        call(&mut host, serde_json::json!({"op":"update_dictionary","name":name,"new_name":name,"enabled":false,"description":"本地专业词库"}));
+        if name == "甲" { assert!(host.engine_ref().unwrap().input("yunjiu").iter().any(|c| c.text == "韵酒")); }
+    }
+    assert!(!host.engine_ref().unwrap().input("yunjiu").iter().any(|c| c.text == "韵酒"));
+    call(&mut host, serde_json::json!({"op":"update_dictionary","name":"甲","new_name":"饮品","enabled":true,"description":"茶与酒"}));
+    assert!(host.engine_ref().unwrap().input("yunjiu").iter().any(|c| c.text == "韵酒"));
+    call(&mut host, serde_json::json!({"op":"delete_dictionary_entries","name":"饮品","entries":[{"word":"韵酒","pinyin":"yun jiu"}]}));
+    assert!(!host.engine_ref().unwrap().input("yunjiu").iter().any(|c| c.text == "韵酒"));
+    assert!(host.engine_ref().unwrap().input("yuncha").iter().any(|c| c.text == "韵茶"));
+    let listed = call(&mut host, serde_json::json!({"op":"list_dictionaries"}));
+    let renamed = listed["dictionaries"].as_array().unwrap().iter().find(|d| d["name"] == "饮品").unwrap();
+    assert_eq!(renamed["description"], "茶与酒");
+    assert_eq!(renamed["enabled"], true);
+    assert_eq!(Store::new(host.data_dir().to_path_buf()).load_dictionaries().len(), 1, "停用状态需在重启后保留");
+    cleanup(&host);
+}
+
+#[test]
+fn inline_space_separator_changes_only_display_and_preserves_selection() {
+    let mut host = host("inline-spaces");
+    configure(&mut host, |c| c.inline_preedit = "spaces".into());
+    let frame = typing(&mut host, "nihao");
+    assert_eq!(frame.inline_preedit.as_deref(), Some("ni hao"));
+    assert_eq!(frame.preedit, "ni'hao", "候选窗仍展示原来的拼音分词");
+    assert_eq!(frame.inline_cursor, 6);
+    assert_eq!(key_with(&mut host, 1, 0x20, 0).commit.as_deref(), Some("你好"));
+    assert_eq!(Host::new(Store::new(host.data_dir().to_path_buf())).config().inline_preedit, "spaces");
+    cleanup(&host);
+}
+
+#[test]
+fn vim_escape_switches_only_on_real_unmodified_idle_press_for_configured_app() {
+    let mut host = host("vim-escape");
+    let mut config = serde_json::to_value(host.config()).unwrap();
+    config["vim_mode_apps"] = serde_json::json!(["NOTEPAD.EXE"]);
+    assert!(host.handle(1, Request::SetConfig { config: serde_json::from_value(config).unwrap() }).ok);
+    typing(&mut host, "ni");
+    let cancelled = key_with(&mut host, 1, keysym::ESCAPE, 0);
+    assert!(cancelled.handled && cancelled.preedit.is_empty());
+    assert_eq!(cancelled.mode, Mode::Chinese);
+    // Bit 5 is the Windows physical-repeat hint; holding the cancellation Esc must not switch.
+    assert_eq!(key_with(&mut host, 1, keysym::ESCAPE, 1 << 5).mode, Mode::Chinese);
+    for mods in [modifier::SHIFT, modifier::CTRL, modifier::ALT, modifier::SUPER] {
+        assert_eq!(key_with(&mut host, 1, keysym::ESCAPE, mods).mode, Mode::Chinese);
+    }
+    let preview = host.handle(1, Request::Key { key: Key { keysym: keysym::ESCAPE, modifiers: 0, test: true }, before: None }).frame.unwrap();
+    assert!(preview.handled, "预判需保留实际处理机会");
+    assert_eq!(host.handle(1, Request::Status).status.unwrap().mode, Mode::Chinese, "预判不切换模式");
+    let actual = key_with(&mut host, 1, keysym::ESCAPE, 0);
+    assert!(!actual.handled, "Esc 交给编辑器退出 insert 模式");
+    assert_eq!(actual.mode, Mode::English);
+    let restarted = Host::new(Store::new(host.data_dir().to_path_buf()));
+    assert_eq!(serde_json::to_value(restarted.config()).unwrap()["vim_mode_apps"], serde_json::json!(["notepad.exe"]));
+    cleanup(&host);
+}
+
+#[test]
 fn brand_icon_changes_persist_without_interrupting_composition() {
     let mut host = host("brand-icon");
     typing(&mut host, "ni");
@@ -1075,7 +1193,7 @@ fn v_space_opens_toolbar_and_phrases_commit() {
     let frame = press(&mut host, 0x20);
     assert!(frame.handled);
     assert_eq!(frame.title.as_deref(), Some("工具栏"));
-    assert_eq!(frame.candidates, vec!["剪贴板", "常用语", "符号", "表情"]);
+    assert_eq!(frame.candidates, vec!["剪贴板", "常用语", "符号", "表情", "英文候选", "拆字查字"]);
     assert!(!frame.forgettable);
     let frame = press(&mut host, '2' as u32);
     assert_eq!(frame.panel, Panel::List);

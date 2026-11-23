@@ -15,6 +15,16 @@
 
 ## 2. 引擎与应用依赖
 
+### 独立英文词典与拆字查询数据
+
+英文词条、短语、音标及中文释义取自 [ECDICT](https://github.com/skywind3000/ECDICT)，固定修订 `39cfb9672c0906b63569e0453c2e6abfb9ab182a`，MIT，Copyright (c) 2025 Linwei。FreeType 过滤词缀及非字母表达、规整查询编码，并生成只读索引；未复制水杉的英文实现。
+
+拆字数据取自 [rime-radical-pinyin](https://github.com/mirtlecn/rime-radical-pinyin)，固定修订 `87e73d7182916f3db9dbc0b6a4d18a78a775b298`，GPL-3.0，©2026 Mirtle。上游同时声明聚合了 chaizi（CC-BY-3.0）、CHISE ids（GPL-2.0-or-later）和 yi-bai/ids（MIT）；随包保留完整上游源码归档及其中的署名。转换后的拆字索引作为独立数据按 GPL-3.0 分发，不把其许可改成程序的 Apache-2.0。
+
+规范读音取自 [pinyin-data](https://github.com/mozillazg/pinyin-data)，固定修订 `fe29ad32bdf352b31a02b9936e537f575432e9a6`，MIT，Copyright (c) 2016 mozillazg。第二读音优先使用现代词典共同收录的数据，缺少读音时留空；原始数据说明与署名一起保留。
+
+来源和 SHA-256 见 `third_party/manifests/input-tools.json`。安装包的 `third-party/data/` 包含各自许可证、原始输入及 FreeType 转换脚本；完整生成输入留在可下载的固定修订，不以少量演示词表替代。查询与拼写建议在本地执行。
+
 ### WowType
 
 来源：`https://github.com/Gloridust/WowType`，固定修订 `5656e136e9f5fc32837c87bc1a2242ec159a32d7`。

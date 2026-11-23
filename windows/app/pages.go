@@ -357,7 +357,7 @@ func (s *settings) candidatesPage(c *ui.Context) {
 	})
 	section(c, "预编辑与位置", func() {
 		s.settingRow(c, "candidates/行内预编辑", func() {
-			changed = choose(c, "行内预编辑", []choice{{"segmented", "拼音分词"}, {"raw", "原始按键"}, {"off", "不显示"}}, &s.config.InlinePreedit, 160) || changed
+			changed = choose(c, "行内预编辑", []choice{{"segmented", "拼音分词"}, {"spaces", "空格分音节"}, {"raw", "原始按键"}, {"off", "不显示"}}, &s.config.InlinePreedit, 160) || changed
 		})
 		changed = s.settingSwitch(c, "candidates/候选窗预编辑", false, &s.config.CandidatePreedit) || changed
 		s.settingRow(c, "candidates/预编辑字号", func() {
@@ -684,6 +684,13 @@ func (s *settings) featuresPage(c *ui.Context) {
 		hint(c, "联想词来自内置语言模型和学习记录；常用搭配优先显示；搭配记录随学习备份导入导出")
 	}
 	s.appPresetSection(c)
+	s.vimSection(c)
+	section(c, "英文候选与拆字查字", func() {
+		hint(c, "在输入位置打开工具栏，选择英文候选或拆字查字；也可在快捷键页启用专用按键；英文 Esc 返回，拆字选中后返回拼音")
+		changed = s.settingSwitch(c, "features/英文拼写建议", false, &s.config.EnglishCorrection) || changed
+		changed = s.settingSwitch(c, "features/英文上屏补空格", false, &s.config.EnglishSpace) || changed
+		changed = s.settingSwitch(c, "features/英文音标与释义", false, &s.config.EnglishGloss) || changed
+	})
 	if changed {
 		s.saveConfig()
 	}
@@ -698,6 +705,12 @@ func (s *settings) shortcutsPage(c *ui.Context) {
 	section(c, "可以设置的快捷键", func() {
 		s.settingRow(c, "shortcuts/表情面板", func() {
 			changed = choose(c, "表情面板", hotkeysEmoji, &s.config.HotkeyEmoji, 180) || changed
+		})
+		s.settingRow(c, "shortcuts/英文候选", func() {
+			changed = choose(c, "英文候选", []choice{{"off", "关闭"}, {"ctrl+shift+y", "Ctrl + Shift + Y"}, {"ctrl+alt+y", "Ctrl + Alt + Y"}}, &s.config.HotkeyEnglish, 180) || changed
+		})
+		s.settingRow(c, "shortcuts/拆字查字", func() {
+			changed = choose(c, "拆字查字", []choice{{"off", "关闭"}, {"ctrl+shift+u", "Ctrl + Shift + U"}, {"ctrl+alt+u", "Ctrl + Alt + U"}}, &s.config.HotkeyRadical, 180) || changed
 		})
 		s.settingRow(c, "shortcuts/中文 / 英文标点", func() {
 			changed = choose(c, "中文 / 英文标点", hotkeysPunct, &s.config.HotkeyPunct, 180) || changed
@@ -790,16 +803,29 @@ func (s *settings) dictsPage(c *ui.Context) {
 			for _, d := range s.dicts {
 				name := d.Name
 				row(c, name, fmt.Sprintf("%d 条", d.Entries), func() {
-					if ui.Button(c, "删除").Label("删除 " + name).Clicked() {
+					enabled := d.Enabled
+					if checkbox(c, &enabled, "启用 "+name).Disabled(s.dictionaryBusy).Changed() {
+						s.changeDictionary(d, d.Name, enabled, d.Description)
+					}
+					if ui.Button(c, "浏览").Label("浏览 " + name).Disabled(s.dictionaryBusy).Clicked() {
+						s.dictionaryName, s.dictionaryRename, s.dictionaryDescription = name, name, d.Description
+						s.dictionaryQuery = ""
+						s.queryDictionary(0)
+					}
+					if ui.Button(c, "删除").Label("删除 " + name).Disabled(s.dictionaryBusy).Clicked() {
 						s.removeDictionary(name)
 					}
 				})
 			}
 		})
 	})
+	s.dictionaryBrowser(c)
 }
 
 func (s *settings) phrasesPage(c *ui.Context) {
+	if s.selectedPhrases == nil {
+		s.selectedPhrases = map[string]bool{}
+	}
 	pageHeader(c, "快捷短语", "启用实用功能中的快捷短语候选后，输入完整编码即可选用；编码仅含英文字母")
 	section(c, "添加", func() {
 		s.settingBlock(c, "phrases/添加快捷短语", func() {
@@ -846,6 +872,16 @@ func (s *settings) phrasesPage(c *ui.Context) {
 				row(c, title, "在上方添加短语，或导入已有文件", nil)
 				return
 			}
+			ui.Row(c).Gap(12).Children(func() {
+				if ui.Button(c, "选择当前结果").Label("全选当前短语").Clicked() {
+					for _, i := range shown {
+						s.selectedPhrases[s.phrases[i].Code+"\t"+s.phrases[i].Text] = true
+					}
+				}
+				if ui.Button(c, "删除选中").Label("删除选中短语").Disabled(s.phrasesBusy || len(s.selectedPhrases) == 0).Clicked() {
+					s.confirmPhraseBatch = true
+				}
+			})
 			remove := -1
 			// 最多显示 12 行，多出来的在列表里滚动
 			ui.List(c, nil, len(shown), func(k int) {
@@ -856,6 +892,15 @@ func (s *settings) phrasesPage(c *ui.Context) {
 					item.Background(colors(c).cardHover)
 				}
 				item.Children(func() {
+					selectedKey := ph.Code + "\t" + ph.Text
+					checked := s.selectedPhrases[selectedKey]
+					if checkbox(c, &checked, "").Label(fmt.Sprintf("选择短语 %s %d", ph.Code, i+1)).Disabled(s.phrasesBusy).Changed() {
+						if checked {
+							s.selectedPhrases[selectedKey] = true
+						} else {
+							delete(s.selectedPhrases, selectedKey)
+						}
+					}
 					ui.Row(c).Width(96).Shrink(0).Children(func() { keyCap(c, ph.Code).Tooltip(ph.Code) })
 					ui.Text(c, preview(ph.Text)).Grow(1).Basis(0).MinWidth(0).Shrink(1).SingleLine().Tooltip(ph.Text)
 					ui.Textf(c, "%d", ph.Weight).Width(56).TextAlign(ui.End).FontFeatures("tnum").TextColor(colors(c).muted).FontSize(textSize(c, 13))
@@ -869,9 +914,21 @@ func (s *settings) phrasesPage(c *ui.Context) {
 			}
 		})
 	})
+	if ui.AlertDialog(c, &s.confirmPhraseBatch, "删除选中短语", "删除所选短语；可用备份恢复", "取消", "确认删除短语") == 1 {
+		var kept []QuickPhrase
+		for _, phrase := range s.phrases {
+			if !s.selectedPhrases[phrase.Code+"\t"+phrase.Text] {
+				kept = append(kept, phrase)
+			}
+		}
+		s.savePhrases(kept, func() { s.selectedPhrases = map[string]bool{}; s.notice = "已删除所选短语" })
+	}
 }
 
 func (s *settings) learnedPage(c *ui.Context) {
+	if s.selectedWords == nil {
+		s.selectedWords = map[string]bool{}
+	}
 	pageHeader(c, "学到的词", "选词次数和搭配影响候选排序；可在此删除学习记录，也可长按候选或按 Ctrl + Delete 删除")
 	section(c, "", func() {
 		s.settingRow(c, "learned/学习备份", func() {
@@ -915,6 +972,26 @@ func (s *settings) learnedPage(c *ui.Context) {
 		s.clearLearned()
 	}
 	words := s.filteredWords()
+	ui.Row(c).Gap(12).Children(func() {
+		if ui.Button(c, "选择当前结果").Label("全选当前学习词").Clicked() {
+			for _, word := range words {
+				s.selectedWords[word.Word] = true
+			}
+		}
+		if ui.Button(c, "删除选中").Label("删除选中学习词").Disabled(len(s.selectedWords) == 0).Clicked() {
+			s.confirmWordBatch = true
+		}
+	})
+	if ui.AlertDialog(c, &s.confirmWordBatch, "删除选中学习词", "删除所选词的学习记录和搭配；可用学习备份恢复", "取消", "确认删除学习词") == 1 {
+		var selected []string
+		for _, word := range s.words {
+			if s.selectedWords[word.Word] {
+				selected = append(selected, word.Word)
+			}
+		}
+		s.forgetWords(selected)
+		s.selectedWords = map[string]bool{}
+	}
 	ui.Row(c).Margin(18, 0, 0, 0).Padding(0, 4).Gap(12).Wrap().AlignItems(ui.Center).Children(func() {
 		ui.Text(c, fmt.Sprintf("学到的词 %d 条", len(s.words))).FontSize(textSize(c, 13)).FontWeight(600).TextColor(colors(c).muted).Grow(1).Basis(180).Wrap()
 		if ui.Button(c, "刷新").Clicked() {
@@ -944,6 +1021,14 @@ func (s *settings) learnedPage(c *ui.Context) {
 					item.Background(p.cardHover)
 				}
 				item.Children(func() {
+					checked := s.selectedWords[w.Word]
+					if checkbox(c, &checked, "").Label("选择学习词 " + w.text()).Changed() {
+						if checked {
+							s.selectedWords[w.Word] = true
+						} else {
+							delete(s.selectedWords, w.Word)
+						}
+					}
 					ui.Text(c, w.text()).FontWeight(500).Width(140).SingleLine().Tooltip(w.text())
 					ui.Text(c, w.Pinyin).Grow(1).Basis(0).MinWidth(0).SingleLine().TextColor(p.muted).Tooltip(w.Pinyin)
 					ui.Textf(c, "%.0f", w.Freq).FontSize(textSize(c, 13)).TextColor(p.muted).Width(64).TextAlign(ui.End).FontFeatures("tnum")

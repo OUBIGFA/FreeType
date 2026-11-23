@@ -9,6 +9,48 @@ import (
 
 var presetModes = []choice{{"english", "英文"}, {"chinese", "中文"}}
 
+// Vim 规则与切入程序时的语言预设独立；不要求用户启用切入自动切换。
+func (s *settings) vimSection(c *ui.Context) {
+	section(c, "Vim 模式", func() {
+		s.settingBlock(c, "features/Vim 程序", func() {
+			hint(c, "取消组字后，再按一次 Esc 切英文；Esc 仍交给程序；同一程序的所有窗口都生效；终端内其他程序也会受到影响")
+			ui.Row(c).Gap(12).Wrap().AlignItems(ui.Center).Children(func() {
+				ui.TextInput(c, &s.newVimApp).Label("Vim 程序名").Placeholder("例如 code.exe 或 gvim.exe").Width(280).MaxWidthPercent(100)
+				if ui.Button(c, "添加程序").Label("添加 Vim 程序").Clicked() {
+					if app, valid := normalizePresetApp(s.newVimApp); valid {
+						found := false
+						for _, existing := range s.config.VimModeApps {
+							found = found || existing == app
+						}
+						if !found {
+							s.config.VimModeApps = append(s.config.VimModeApps, app)
+							s.saveConfig()
+						}
+						s.newVimApp = ""
+					} else {
+						s.notice = "请输入有效的程序名"
+					}
+				}
+			})
+			remove := -1
+			for i, app := range s.config.VimModeApps {
+				row(c, app, "Esc 切英文", func() {
+					if ui.Button(c, "移除").Label("移除 Vim 程序 " + app).Clicked() {
+						remove = i
+					}
+				})
+			}
+			if remove >= 0 {
+				s.config.VimModeApps = append(s.config.VimModeApps[:remove], s.config.VimModeApps[remove+1:]...)
+				if s.config.VimModeApps == nil {
+					s.config.VimModeApps = []string{}
+				}
+				s.saveConfig()
+			}
+		})
+	})
+}
+
 // normalizePresetApp 让设置端和服务端使用同一种规则键：只保留文件名并忽略大小写。
 func normalizePresetApp(name string) (string, bool) {
 	name = strings.Trim(strings.TrimSpace(name), "\"")

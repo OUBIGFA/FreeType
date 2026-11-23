@@ -59,7 +59,12 @@ fn sync_restore_rejects_changed_local_data_then_replaces_with_remote_defaults_an
     assert!(restored.common_phrases.unwrap().is_empty(), "较新快照的删除必须生效，不能重新合并回来");
     let result = dir.join("result.json");
     assert!(export(&mut local, &result).ok);
-    assert_eq!(std::fs::read(result).unwrap(), std::fs::read(incoming).unwrap());
+    let mut actual: serde_json::Value = serde_json::from_slice(&std::fs::read(result).unwrap()).unwrap();
+    let mut source: serde_json::Value = serde_json::from_slice(&std::fs::read(incoming).unwrap()).unwrap();
+    let actual_records = actual.as_object_mut().unwrap().remove("sync_records");
+    let source_records = source.as_object_mut().unwrap().remove("sync_records");
+    assert_eq!(actual, source, "整份恢复必须还原全部正文与默认值");
+    assert_ne!(actual_records, source_records, "主动恢复使用本机的新编辑版本，而非复用旧快照版本");
     std::fs::remove_dir_all(dir).unwrap();
     std::fs::remove_dir_all(remote_dir).unwrap();
 }

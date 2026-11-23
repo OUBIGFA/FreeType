@@ -20,6 +20,7 @@ use wowtype_core::symbols;
 use wowtype_core::Engine;
 
 use crate::raw::{self, Raw};
+use crate::lookup_mode::{Action as LookupAction, Kind as LookupKind, LookupMode};
 use crate::tools::{self, Outcome, Page, Sources, Tool};
 
 /// 光标前记多少个字当上文。
@@ -97,10 +98,14 @@ pub struct ClientState {
     pub session: Session<'static>,
     /// 这个输入框里光标前的字（上屏的字，或 DLL 读到的）。
     pub context: String,
+    /// 宿主最近确认的正文；只忽略与上屏前完全相同的迟到文本，空正文表示输入框已清空。
+    reported_context: Option<String>,
+    committed_from: Option<String>,
     /// 双引号、单引号上一次给的是不是左引号（没开成对补全时左右交替）。
     quote_open: [bool; 2],
     pub tool: Option<Tool>,
     pub raw: Option<Raw>,
+    pub lookup: Option<LookupMode>,
     /// 上屏联想：刚上屏的词后面常接的词，候选窗正显示着。
     ///
     /// 这时没有在组字。数字键、空格或左右方向键（各有开关）选词，鼠标也能选；
@@ -163,6 +168,39 @@ pub fn session_config(config: &Config) -> session::Config {
 }
 
 impl ClientState {
+    pub fn open_lookup(&mut self, kind: LookupKind, env: &Env) -> Out {
+        if self.session.learning_disabled() { return self.current(false, env); }
+        let same = self.lookup.as_ref().is_some_and(|lookup| lookup.kind == kind);
+        self.clear();
+        if same { return self.current(true, env); }
+        if env.engine.and_then(Engine::input_tools).is_none() {
+            let mut out = self.current(true, env);
+            out.frame.hint = Some("查询词典未就绪；请检查安装数据".into());
+            return out;
+        }
+        self.lookup = Some(LookupMode::new(kind));
+        self.current(true, env)
+    }
+
+    fn lookup_action(&mut self, action: LookupAction, env: &Env) -> Out {
+        match action {
+            LookupAction::Stay => self.current(true, env),
+            LookupAction::Close => { self.lookup = None; self.current(true, env) }
+            LookupAction::Pass => self.current(false, env),
+            LookupAction::Commit { text, learn } => {
+                let english = self.lookup.as_ref().is_some_and(|lookup| lookup.kind == LookupKind::English);
+                if learn { self.session.learn_external_word(text.trim(), &wowtype_core::input_tools::letters(text.trim())); }
+                self.lookup = if english { Some(LookupMode::new(LookupKind::English)) } else { None };
+                // 英文的补空格是独立开关；查询注解从来不进入提交路径。
+                self.remember(&text);
+                let mut out = self.current(true, env);
+                if !text.is_empty() { out.frame.commit = Some(text); }
+                out.frame.undo_learning = learn && self.session.has_commit_learning();
+                out
+            }
+        }
+    }
+
     pub fn new(engine: Option<&'static Engine>, config: &Config, app: String) -> Self {
         let mut session = Session::new();
         session.set_engine(engine);
@@ -170,9 +208,12 @@ impl ClientState {
         Self {
             session,
             context: String::new(),
+            reported_context: None,
+            committed_from: None,
             quote_open: [false; 2],
             tool: None,
             raw: None,
+            lookup: None,
             predict: None,
             predict_cursor: 0,
             app,
@@ -187,7 +228,11 @@ impl ClientState {
 
     /// 在组字、开着面板或邮箱补全。
     pub fn busy(&self) -> bool {
-        self.session.composing() || self.tool.is_some() || self.raw.is_some()
+        self.session.composing() || self.tool.is_some() || self.raw.is_some() || self.lookup.is_some()
+    }
+
+    pub fn vim_escape_idle(&self) -> bool {
+        !self.busy() && self.predict.is_none()
     }
 
     fn prev(&self) -> Option<char> {
@@ -198,6 +243,11 @@ impl ClientState {
     pub fn set_before(&mut self, before: &str) {
         let n = before.chars().count();
         let context: String = before.chars().skip(n.saturating_sub(CONTEXT_CHARS)).collect();
+        if !context.is_empty() && context != self.context && self.committed_from.as_ref() == Some(&context) {
+            return;
+        }
+        self.committed_from = None;
+        self.reported_context = Some(context.clone());
         if context != self.context {
             // 光标挪走了、应用里的字变了：联想词不再接得上
             self.predict = None;
@@ -219,6 +269,7 @@ impl ClientState {
     /// 上屏一段字：交界和段内的中英混输共用同一规则，再记进上文。
     fn emit(&mut self, text: &str, env: &Env) -> String {
         let out = autospace::format_text(text, self.prev(), env.autospace_flags());
+        self.committed_from = self.reported_context.clone();
         self.remember(&out);
         out
     }
@@ -226,6 +277,10 @@ impl ClientState {
     /// 收起上屏联想（换了输入框）。
     pub fn dismiss_prediction(&mut self) {
         self.predict = None;
+    }
+
+    pub fn focus_context(&mut self) {
+        self.committed_from = None;
     }
 
     /// 还作数的联想词：关了开关、切到英文（含大写锁定）就作废。
@@ -329,6 +384,8 @@ impl ClientState {
 
     /// 关掉面板和邮箱补全，清空编辑区。
     pub fn clear(&mut self) {
+        self.lookup = None;
+        self.committed_from = None;
         self.predict = None;
         self.tool = None;
         self.raw = None;
@@ -394,6 +451,11 @@ impl ClientState {
         out.frame.preedit_cursor = utf16_len(&core.preedit[..core.preedit_cursor.min(core.preedit.len())]);
         out.frame.preedit = core.preedit;
         match env.config.inline_preedit.as_str() {
+            "spaces" => {
+                // 只换显示分隔符，不改输入码、候选拼音与 UTF-16 光标偏移。
+                out.frame.inline_preedit = Some(out.frame.preedit.replace('\'', " "));
+                out.frame.inline_cursor = out.frame.preedit_cursor;
+            }
             "raw" => {
                 let (raw, cursor) = self.session.raw_preedit();
                 out.frame.inline_cursor = utf16_len(&raw[..cursor]);
@@ -416,6 +478,7 @@ impl ClientState {
 
     /// 现在的样子（不按键）。
     pub fn current(&mut self, handled: bool, env: &Env) -> Out {
+        if let Some(lookup) = &self.lookup { return Out { frame: lookup.frame(handled, env.config), ..Out::default() }; }
         if let Some(tool) = &self.tool {
             return Out {
                 frame: tool_frame(tool, handled),
@@ -434,6 +497,7 @@ impl ClientState {
 
     /// 打开工具栏或表情面板（结束正在打的字）。
     pub fn open_tool(&mut self, page: Page, env: &Env) -> Out {
+        self.lookup = None;
         self.predict = None;
         self.raw = None;
         if self.session.composing() {
@@ -489,6 +553,11 @@ impl ClientState {
     }
 
     pub fn key(&mut self, key: &Key, env: &Env) -> Out {
+        if let Some(lookup) = &mut self.lookup {
+            let Some(engine) = env.engine else { self.lookup = None; return self.current(false, env); };
+            let action = lookup.key(key, engine, env.config);
+            return self.lookup_action(action, env);
+        }
         if self.tool.is_some() {
             return self.tool_key(key, env);
         }
@@ -742,6 +811,8 @@ impl ClientState {
 
     fn tool_outcome(&mut self, outcome: Outcome, env: &Env) -> Out {
         match outcome {
+            Outcome::English => self.open_lookup(LookupKind::English, env),
+            Outcome::Radical => self.open_lookup(LookupKind::Radical, env),
             Outcome::Stay { .. } => self.current(true, env),
             Outcome::Close => {
                 self.tool = None;
@@ -765,6 +836,11 @@ impl ClientState {
 
     /// 鼠标点了这一屏的第 index 个。
     pub fn select(&mut self, index: usize, env: &Env) -> Out {
+        if let Some(lookup) = &self.lookup {
+            let page = env.config.page_size as usize;
+            let action = lookup.select(lookup.cursor / page * page + index, env.config, true);
+            return self.lookup_action(action, env);
+        }
         if let Some(tool) = self.tool.as_mut() {
             let outcome = tool.click(index, &env.sources());
             return self.tool_outcome(outcome, env);
@@ -786,6 +862,7 @@ impl ClientState {
     }
 
     pub fn page(&mut self, next: bool, env: &Env) -> Out {
+        if let Some(lookup) = &mut self.lookup { lookup.page(next, env.config.page_size as usize); return self.current(true, env); }
         if let Some(tool) = self.tool.as_mut() {
             tool.page(next);
             return self.current(true, env);
@@ -811,6 +888,11 @@ impl ClientState {
 
     /// 输入框没了焦点、应用要结束组字：`commit` 时原样上屏。
     pub fn reset(&mut self, commit: bool, env: &Env) -> Out {
+        if let Some(lookup) = self.lookup.take() {
+            let mut out = self.current(true, env);
+            if commit && !lookup.query.is_empty() { out.frame.commit = Some(lookup.query); }
+            return out;
+        }
         self.predict = None;
         self.tool = None;
         if let Some(raw) = self.raw.take() {

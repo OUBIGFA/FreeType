@@ -7,7 +7,7 @@ import time
 import unittest
 from pathlib import Path
 
-from test_update_handoff import ServerFixture
+from test_update_handoff import ROOT, ServerFixture
 
 
 @unittest.skipUnless(os.name == "nt", "Windows input performance")
@@ -15,6 +15,37 @@ class InputPerformanceTests(ServerFixture, unittest.TestCase):
     # As with an installed service, keep the executable path stable across launches.
     # Each process still gets private resources, writable files, mutex and pipe.
     copy_server = False
+
+    def test_complete_english_and_radical_data_work_through_the_real_service(self):
+        import shutil
+        source = ROOT / ".local/data"
+        for name in ("english-lookup.ftd", "english-spelling.ftd", "radical-lookup.ftd", "INPUT-TOOLS.json"):
+            shutil.copyfile(source / name, self.resources / name)
+        _, connection = self.ready()
+        config = self.call(connection, "get_config")["config"]
+        config.update(english_correction=True, english_space=True, english_gloss=True)
+        self.call(connection, "set_config", config=config)
+        for text, expected in [("inspiteof", "in spite of"), ("Tes", "Test"), ("conectivity", "connectivity")]:
+            self.call(connection, "reset", commit=False)
+            self.call(connection, "command", command="english_candidates")
+            elapsed = []
+            for char in text:
+                started = time.perf_counter()
+                frame = self.call(connection, "key", key={"keysym": ord(char), "modifiers": 0, "test": False})["frame"]
+                elapsed.append(time.perf_counter() - started)
+            self.assertLess(max(elapsed), 0.2, f"English query blocked an input key: {text} {elapsed}")
+            self.assertIn(expected, frame["candidates"])
+            self.assertTrue(frame["vertical"])
+            self.assertTrue(any(frame["annotations"]))
+            chosen = frame["candidates"].index(expected)
+            self.assertEqual(self.call(connection, "select", index=chosen)["frame"]["commit"], expected + " ")
+        self.call(connection, "reset", commit=False)
+        self.call(connection, "command", command="radical_lookup")
+        for char in "ririri":
+            frame = self.call(connection, "key", key={"keysym": ord(char), "modifiers": 0, "test": False})["frame"]
+        index = frame["candidates"].index("晶")
+        self.assertIn("jīng", frame["annotations"][index])
+        self.assertEqual(self.call(connection, "select", index=index)["frame"]["commit"], "晶")
 
     def ready(self):
         server = self.launch(self.server)

@@ -10,6 +10,66 @@ use windows::Win32::System::StationsAndDesktops::{
 use windows::Win32::System::Threading::GetCurrentThreadId;
 
 #[test]
+fn prediction_highlight_preserves_window_and_item_rectangles() {
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    let _desktop = PrivateDesktop::new();
+    let instance = HINSTANCE(unsafe { GetModuleHandleW(None).unwrap() }.0);
+    let window = CandidateWindow::new(instance).unwrap();
+    for vertical in [false, true] {
+        window.hide();
+        let mut frame = Frame {
+            candidates: vec!["好".into(), "一起去".into(), "星期六下午".into()],
+            labels: vec![String::new(); 3],
+            cursor: Some(0), predict: true, vertical, page_revision: 1,
+            font_size: 20, font_family: "Microsoft YaHei".into(),
+            ..Frame::default()
+        };
+        window.update(&frame, Some(rect(140, 150, 2, 24)));
+        let mut original = RECT::default();
+        unsafe { GetWindowRect(window.hwnd, &mut original).unwrap(); }
+        let items = data_of(window.hwnd).unwrap().layout.items.clone();
+        for cursor in [1, 2, 1, 0] {
+            frame.cursor = Some(cursor);
+            frame.page_revision += 1;
+            // A rich editor may report a different text extent during an unchanged
+            // prediction page. Moving the highlight must not use it to place the popup.
+            window.update(&frame, Some(rect(180 + cursor as i32 * 20, 175, 2, 31)));
+            window.reposition(rect(310, 280, 2, 20));
+            let mut current = RECT::default();
+            unsafe { GetWindowRect(window.hwnd, &mut current).unwrap(); }
+            assert_eq!(current, original, "同一批联想只移动高亮，窗口位置和尺寸保持不变");
+            let data = data_of(window.hwnd).unwrap();
+            assert_eq!(data.layout.items, items, "每个词的点击区域也保持不变");
+            assert_eq!(data.view.cursor, Some(cursor));
+            assert_eq!(data.painted_revision, frame.page_revision);
+        }
+        frame.commit = Some("一起去".into());
+        frame.candidates = vec!["公园".into(), "吃饭".into()];
+        frame.cursor = Some(0);
+        window.update(&frame, Some(rect(400, 200, 2, 24)));
+        let mut next = RECT::default();
+        unsafe { GetWindowRect(window.hwnd, &mut next).unwrap(); }
+        assert_ne!(next, original, "上屏后新的联想页应使用新的内容和位置");
+    }
+}
+
+#[test]
+fn dictionary_annotations_fit_screen_width_without_changing_commit_candidates() {
+    let _desktop = PrivateDesktop::new();
+    for scale in [1.0, 1.5, 2.0] {
+        let view = View { candidates: vec!["connectivity".into(), "in spite of".into(), "晶".into()],
+            annotations: vec!["kənekˈtɪvəti  连通性；连接性能".into(), "尽管；不顾；虽然".repeat(30), "jīng".into()],
+            vertical:true, cursor:Some(1), font_size:20, font_family:"Microsoft YaHei".into(), available_width:600,
+            ..View::default() };
+        let (layout, pixels) = rendered(view.clone(), scale);
+        assert!(layout.width <= 600, "长释义不可撑出显示范围：{}", layout.width);
+        assert_eq!(layout.items.len(), 3);
+        assert!(!pixels.is_empty());
+        assert_eq!(view.candidates, ["connectivity", "in spite of", "晶"]);
+    }
+}
+
+#[test]
 fn candidate_text_palette_matches_styles_in_both_appearances() {
     fn luminance(color: COLORREF) -> f64 {
         let linear = |value: u32| {

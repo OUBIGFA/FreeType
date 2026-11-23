@@ -160,6 +160,7 @@ foreach ($name in 'lexicon.tsv', 'words.lm', 'english.txt', 'LICENSE', 'SOURCE.t
 }
 Invoke-Native python @('-X', 'utf8', 'tools/make_default_data.py', '--check')
 Invoke-Native python @('-X', 'utf8', 'tools/prepare_neural_model.py')
+Invoke-Native python @('-X', 'utf8', 'tools/make_input_tools.py', '--check')
 $GoVersion = (& go version)
 if ($GoVersion -notmatch '^go version go1\.27\.4 windows/amd64$') { throw "Go 1.27.4 windows/amd64 is required, found: $GoVersion" }
 $GoMod = Get-Content -Raw (Join-Path $AppDir 'go.mod')
@@ -205,6 +206,7 @@ if (-not $SkipTests) {
     Invoke-Native python @('-X', 'utf8', '-m', 'unittest', 'discover', '-s', 'tests/repository', '-v')
     Invoke-Native python @('-X', 'utf8', '-m', 'unittest', 'discover', '-s', 'tests/data', '-v')
     $env:FREETYPE_TEST_NNLM = (Join-Path $Data 'nnlm.bin')
+    $env:FREETYPE_TEST_INPUT_TOOLS = $Data
     Invoke-Native cargo @('test', '--locked', '-p', 'wowtype-core', '--no-default-features')
     Invoke-Native cargo @('test', '--locked', '-p', 'freetype-protocol', '-p', 'freetype-server', '-p', 'freetype-tsf')
     Invoke-Native go @('vet', './...') $AppDir
@@ -234,6 +236,9 @@ foreach ($name in 'lexicon.tsv', 'words.lm', 'english.txt', 'LICENSE', 'SOURCE.t
     Copy-Item (Join-Path $Data $name) (Join-Path $Resources 'data')
 }
 Copy-Item (Join-Path $Data 'nnlm.bin'), 'third_party\manifests\neural-model.json', 'core\data\s2t.tsv' (Join-Path $Resources 'data')
+foreach ($name in 'english-lookup.ftd', 'english-spelling.ftd', 'radical-lookup.ftd', 'INPUT-TOOLS.json') {
+    Copy-Item -LiteralPath (Join-Path $Data $name) -Destination (Join-Path $Resources 'data')
+}
 # Record the packaged inputs without modifying the upstream binary models.
 $StagedData = Join-Path $Resources 'data'
 Compile-Lexicon (Join-Path $Bin 'FreeTypeServer.exe') (Join-Path $StagedData 'lexicon.tsv') (Join-Path $StagedData 'lexicon.ftd')
@@ -241,6 +246,8 @@ $DefaultDataVersion = (Get-Content -Raw (Join-Path $Data 'VERSION')).Trim()
 $NeuralDataVersion = (Get-Content -Raw (Join-Path $StagedData 'neural-model.json') | ConvertFrom-Json).version
 $DataVersions = [ordered]@{ 'lexicon.tsv' = $DefaultDataVersion; 'lexicon.ftd' = $DefaultDataVersion; 'english.txt' = $DefaultDataVersion;
     'words.lm' = '2026.11.09'; 'nnlm.bin' = $NeuralDataVersion; 's2t.tsv' = '1.4.1' }
+$InputToolsVersion = (Get-Content -LiteralPath (Join-Path $Data 'INPUT-TOOLS.json') -Raw -Encoding UTF8 | ConvertFrom-Json).version
+foreach ($name in 'english-lookup.ftd', 'english-spelling.ftd', 'radical-lookup.ftd') { $DataVersions[$name] = $InputToolsVersion }
 $DataFiles = [ordered]@{}
 foreach ($entry in $DataVersions.GetEnumerator()) {
     $DataFiles[$entry.Key] = [ordered]@{ version = $entry.Value; sha256 = Sha256 (Join-Path $StagedData $entry.Key) }

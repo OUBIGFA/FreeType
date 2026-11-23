@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use freetype_protocol::{Config, Dictionary, ImportReport, Mode, QuickPhrase};
-use wowtype_core::msime::{self, DictEntry, LineError, Parsed};
+use wowtype_core::msime::{self, LineError};
 
 use crate::dictfmt;
 
@@ -346,7 +346,14 @@ impl Store {
                 imported.foreign
             ));
         }
-        let mut report = self.save_dictionary(&name, imported.parsed)?;
+        let mut meta = self.dictionary_metadata(&name)?;
+        meta.source = format!("{} · {}", imported.format.name(), path.file_name().unwrap_or_default().to_string_lossy());
+        if imported.parsed.items.is_empty() {
+            return Err(imported.parsed.errors.first().map_or_else(|| "文件中没有可用词条".into(),
+                |error| format!("文件中没有可用词条；第 {} 行：{}", error.line, error.message)));
+        }
+        self.write_dictionary(&name, &meta, &imported.parsed.items)?;
+        let mut report = report(imported.parsed.items.len(), &imported.parsed.errors);
         let mut note = format!("识别为{}", imported.format.name());
         if imported.tables > 0 {
             note.push_str(&format!("；包含 import_tables 中的 {} 个词典", imported.tables));
@@ -361,23 +368,6 @@ impl Store {
         Ok(report)
     }
 
-    /// 把条目写成 `dicts\<name>.txt`。
-    fn save_dictionary(&self, name: &str, parsed: Parsed<DictEntry>) -> Result<ImportReport, String> {
-        if parsed.items.is_empty() {
-            let mut message = String::from("文件中没有可用词条");
-            if let Some(first) = parsed.errors.first() {
-                message.push_str(&format!("；第 {} 行：{}", first.line, first.message));
-            }
-            return Err(message);
-        }
-        write_atomic(
-            &self.dict_dir().join(format!("{name}.txt")),
-            &msime::format_dictionary(&parsed.items),
-        )
-        .map_err(|e| format!("保存词库失败：{e}"))?;
-        Ok(report(parsed.items.len(), &parsed.errors))
-    }
-
     pub fn remove_dictionary(&self, name: &str) -> Result<(), String> {
         let name = dictionary_name(name).ok_or("词库名称无效")?;
         fs::remove_file(self.dict_dir().join(format!("{name}.txt"))).map_err(|e| format!("删除词库失败：{e}"))
@@ -385,10 +375,14 @@ impl Store {
 
     /// 全部导入的词库，按名字排。
     pub fn load_dictionaries(&self) -> Vec<(String, Vec<msime::DictEntry>)> {
+        self.read_dictionaries().into_iter().filter(|(_, _, meta)| meta.enabled).map(|(name, entries, _)| (name, entries)).collect()
+    }
+
+    fn read_dictionaries(&self) -> Vec<(String, Vec<msime::DictEntry>, crate::dictionary_catalog::Metadata)> {
         let Ok(dir) = fs::read_dir(self.dict_dir()) else {
             return Vec::new();
         };
-        let mut out: Vec<(String, Vec<msime::DictEntry>)> = dir
+        let mut out: Vec<_> = dir
             .filter_map(Result::ok)
             .filter_map(|entry| {
                 let path = entry.path();
@@ -397,7 +391,11 @@ impl Store {
                 }
                 let name = path.file_stem()?.to_str()?.to_string();
                 let text = read_text(&path).ok()?;
-                Some((name, msime::parse_dictionary(&text).items))
+                let meta = match crate::dictionary_catalog::metadata(&text) {
+                    Ok(meta) => meta,
+                    Err(error) => { crate::log(&format!("{name}：{error}")); return None; }
+                };
+                Some((name, msime::parse_dictionary(&text).items, meta))
             })
             .collect();
         out.sort_by(|a, b| a.0.cmp(&b.0));
@@ -405,11 +403,14 @@ impl Store {
     }
 
     pub fn list_dictionaries(&self) -> Vec<Dictionary> {
-        self.load_dictionaries()
+        self.read_dictionaries()
             .into_iter()
-            .map(|(name, entries)| Dictionary {
+            .map(|(name, entries, meta)| Dictionary {
                 name,
                 entries: entries.len(),
+                enabled: meta.enabled,
+                source: meta.source,
+                description: meta.description,
             })
             .collect()
     }
@@ -499,11 +500,8 @@ mod tests {
         let report = store.import_dictionary(&file, "我的词库", &|_| Box::new(crate::dictfmt::LexiconReading::default())).unwrap();
         assert_eq!((report.added, report.skipped), (1, 1));
         assert_eq!(
-            store.list_dictionaries(),
-            vec![Dictionary {
-                name: "我的词库".into(),
-                entries: 1
-            }]
+            store.list_dictionaries().into_iter().map(|d| (d.name, d.entries, d.enabled)).collect::<Vec<_>>(),
+            vec![("我的词库".into(), 1, true)]
         );
         assert!(store.import_dictionary(&file, "CON", &|_| Box::new(crate::dictfmt::LexiconReading::default())).is_err());
         store.remove_dictionary("我的词库").unwrap();

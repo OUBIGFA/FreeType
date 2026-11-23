@@ -1,0 +1,110 @@
+{
+  "version": "2026-11-23.1",
+  "format": "FTLOOK01",
+  "sources": [
+    {
+      "name": "ecdict",
+      "repository": "https://github.com/skywind3000/ECDICT",
+      "revision": "39cfb9672c0906b63569e0453c2e6abfb9ab182a",
+      "license": "MIT",
+      "files": [
+        {
+          "name": "ecdict.csv",
+          "url": "https://raw.githubusercontent.com/skywind3000/ECDICT/39cfb9672c0906b63569e0453c2e6abfb9ab182a/ecdict.csv",
+          "bytes": 66009548,
+          "sha256": "d1ecbdf9ee2b920afb6f430ca6b6bb9f559588cf0dff86e04bd255f9390843cc"
+        },
+        {
+          "name": "LICENSE",
+          "url": "https://raw.githubusercontent.com/skywind3000/ECDICT/39cfb9672c0906b63569e0453c2e6abfb9ab182a/LICENSE",
+          "bytes": 1063,
+          "sha256": "f8552dd246f61a4e064569eae6194a01c6b3d63b03bf27c6ca863593c549ed0f"
+        },
+        {
+          "name": "README.md",
+          "url": "https://raw.githubusercontent.com/skywind3000/ECDICT/39cfb9672c0906b63569e0453c2e6abfb9ab182a/README.md",
+          "bytes": 18414,
+          "sha256": "0c3f95fc7e15f7eccf65feedb58ba3ebace1fe7b7cbdd1af60c9ace4cef9094b"
+        }
+      ]
+    },
+    {
+      "name": "radical",
+      "repository": "https://github.com/mirtlecn/rime-radical-pinyin",
+      "revision": "87e73d7182916f3db9dbc0b6a4d18a78a775b298",
+      "license": "GPL-3.0",
+      "files": [
+        {
+          "name": "LICENSE",
+          "url": "https://raw.githubusercontent.com/mirtlecn/rime-radical-pinyin/87e73d7182916f3db9dbc0b6a4d18a78a775b298/LICENSE",
+          "bytes": 35149,
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        },
+        {
+          "name": "radical_pinyin.dict.yaml",
+          "url": "https://raw.githubusercontent.com/mirtlecn/rime-radical-pinyin/87e73d7182916f3db9dbc0b6a4d18a78a775b298/radical_pinyin.dict.yaml",
+          "bytes": 2167717,
+          "sha256": "298bb907aff1d17fdc34e097f35dcfd3547e8a28d2640fa2c87340ce7e2ce058"
+        },
+        {
+          "name": "README.md",
+          "url": "https://raw.githubusercontent.com/mirtlecn/rime-radical-pinyin/87e73d7182916f3db9dbc0b6a4d18a78a775b298/README.md",
+          "bytes": 6586,
+          "sha256": "83e75666f0b61faf215a12baf2feba84920627f8c96b7906056ac6272a06584e"
+        },
+        {
+          "name": "upstream.tar.gz",
+          "url": "https://codeload.github.com/mirtlecn/rime-radical-pinyin/tar.gz/87e73d7182916f3db9dbc0b6a4d18a78a775b298",
+          "bytes": 3025156,
+          "sha256": "d7345a16cabc53423d3dfea26ade2b13083ef2151c23bdf845f3fc7d484728a2"
+        }
+      ]
+    },
+    {
+      "name": "pinyin",
+      "repository": "https://github.com/mozillazg/pinyin-data",
+      "revision": "fe29ad32bdf352b31a02b9936e537f575432e9a6",
+      "license": "MIT",
+      "files": [
+        {
+          "name": "kHanyuPinlu.txt",
+          "url": "https://raw.githubusercontent.com/mozillazg/pinyin-data/fe29ad32bdf352b31a02b9936e537f575432e9a6/kHanyuPinlu.txt",
+          "bytes": 78922,
+          "sha256": "260ef08aef066ae5e798ed9933e305094d03a87a5d0bcbced6d740cb9084f2f8"
+        },
+        {
+          "name": "kTGHZ2013.txt",
+          "url": "https://raw.githubusercontent.com/mozillazg/pinyin-data/fe29ad32bdf352b31a02b9936e537f575432e9a6/kTGHZ2013.txt",
+          "bytes": 166509,
+          "sha256": "83be5ecdfe0b8fcc1202ae45882a2f983c013db87ba68369d94a4dad775382bb"
+        },
+        {
+          "name": "kXHC1983.txt",
+          "url": "https://raw.githubusercontent.com/mozillazg/pinyin-data/fe29ad32bdf352b31a02b9936e537f575432e9a6/kXHC1983.txt",
+          "bytes": 230280,
+          "sha256": "7ade5b5750c92d39dec2151075ebcca323afe6af452349f54438d950b1dd4eeb"
+        },
+        {
+          "name": "LICENSE",
+          "url": "https://raw.githubusercontent.com/mozillazg/pinyin-data/fe29ad32bdf352b31a02b9936e537f575432e9a6/LICENSE",
+          "bytes": 1076,
+          "sha256": "9c048697be2502a16e8bcb282d5d465a07295b2def0ffb05a269c5d39dbe1586"
+        },
+        {
+          "name": "pinyin.txt",
+          "url": "https://raw.githubusercontent.com/mozillazg/pinyin-data/fe29ad32bdf352b31a02b9936e537f575432e9a6/pinyin.txt",
+          "bytes": 985559,
+          "sha256": "2342a6f98c85dbc3c8d26aef31744876a36326c6466e51e9a0f16898c36c2011"
+        },
+        {
+          "name": "README.md",
+          "url": "https://raw.githubusercontent.com/mozillazg/pinyin-data/fe29ad32bdf352b31a02b9936e537f575432e9a6/README.md",
+          "bytes": 4956,
+          "sha256": "864b2e4f9e4dbdb01bfa32892b78c25bd982eb45fa6faf1d6c701be3d3f707d3"
+        }
+      ]
+    }
+  ],
+  "minimumEnglishEntries": 500000,
+  "minimumRadicalEntries": 100000
+}

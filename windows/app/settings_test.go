@@ -77,6 +77,20 @@ func (f *fakeBackend) Call(r Request) (Response, error) {
 		return Response{OK: true, Report: &ImportReport{Added: len(f.common)}}, nil
 	case "list_dictionaries":
 		return Response{OK: true, Dictionaries: f.dicts}, nil
+	case "query_dictionary":
+		for _, dict := range f.dicts {
+			if dict.Name == r["name"] {
+				return Response{OK: true, DictionaryPage: &DictionaryPage{Dictionary: dict, Total: dict.Entries}}, nil
+			}
+		}
+		return Response{}, fmt.Errorf("找不到词库")
+	case "update_dictionary":
+		for i := range f.dicts {
+			if f.dicts[i].Name == r["name"] {
+				f.dicts[i].Name, f.dicts[i].Enabled, f.dicts[i].Description = r["new_name"].(string), r["enabled"].(bool), r["description"].(string)
+			}
+		}
+		return Response{OK: true, Dictionaries: f.dicts}, nil
 	case "import_dictionary":
 		f.dicts = append(f.dicts, Dictionary{Name: r["name"].(string), Entries: 2})
 		return Response{OK: true, Report: &ImportReport{Added: 2, Skipped: 1, Errors: []string{"第 3 行：编码不是有效的全拼"}}}, nil
@@ -87,7 +101,7 @@ func (f *fakeBackend) Call(r Request) (Response, error) {
 	case "import_learning":
 		f.words = append(f.words, UserWord{Word: "恢复词", Pinyin: "hui fu ci", Freq: 3000})
 		return Response{OK: true, UserWords: f.words, Report: &ImportReport{Added: 3}}, nil
-	case "export_settings":
+	case "export_settings", "export_sync_settings":
 		rawParts, _ := json.Marshal(r["parts"])
 		content := `{"format":"freetype-settings","version":1}`
 		if r["parts"] == nil || strings.Contains(string(rawParts), `"learning"`) {
@@ -96,7 +110,11 @@ func (f *fakeBackend) Call(r Request) (Response, error) {
 		if err := os.WriteFile(r["path"].(string), []byte(content), 0600); err != nil {
 			return Response{}, err
 		}
-		return Response{OK: true, Report: &ImportReport{Added: 5}}, nil
+		return Response{OK: true, Report: &ImportReport{Added: 5}, ModifiedUnixMS: 100, SyncFormat: 1}, nil
+	case "preview_sync_merge":
+		return Response{OK: true, SyncMerge: &SyncMergePreview{Added: 2, Deleted: 1, Conflicts: 1, Versions: 3, Details: []string{"删除 常用语：旧条目"}}}, nil
+	case "merge_sync_settings":
+		return Response{OK: true, SyncMerge: &SyncMergePreview{Added: 2, Deleted: 1, Versions: 3}}, nil
 	case "inspect_settings_backup":
 		return Response{OK: true, Report: &ImportReport{Added: 5, Note: "全部设置、1 份词库、1 条快捷短语、1 条常用语、2 条学到的词及使用记录"}}, nil
 	case "import_settings":
@@ -1240,6 +1258,63 @@ func TestAppPresetSettingsPageShowsWindowPickerAndRules(t *testing.T) {
 	}
 	if !b.config.AppPresets {
 		t.Fatal("指定软件总开关没有保存")
+	}
+}
+
+func TestDictionaryPageOffersSourceBrowsingAndTemporaryDisable(t *testing.T) {
+	s, b := newTestSettings()
+	b.dicts = []Dictionary{{Name: "专业词库", Entries: 12}}
+	s.refresh()
+	tt := open(t, s, "词库")
+	tt.Frame()
+	for _, label := range []string{"浏览 专业词库", "启用 专业词库"} {
+		if err := tt.Click(label); err != nil {
+			t.Fatalf("词库管理入口不可用：%s：%v", label, err)
+		}
+		tt.Frame()
+	}
+	if !b.dicts[0].Enabled || s.dictionaryPage == nil || s.dictionaryPage.Total != 12 {
+		t.Fatal("启用状态与词库总数应回显")
+	}
+}
+
+func TestPersonalWordsAndPhrasesCanBeDeletedAsSelectedGroups(t *testing.T) {
+	s, b := newTestSettings()
+	tt := open(t, s, "学到的词")
+	for _, label := range []string{"选择学习词 设置业", "删除选中学习词", "确认删除学习词"} {
+		if err := tt.Click(label); err != nil {
+			t.Fatal(err)
+		}
+		tt.Frame()
+	}
+	if len(b.words) != 1 || b.words[0].Word != "输入法" {
+		t.Fatalf("只能删除所选词：%+v", b.words)
+	}
+	if err := tt.Click("快捷短语"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	for _, label := range []string{"选择短语 dz 1", "删除选中短语", "确认删除短语"} {
+		if err := tt.Click(label); err != nil {
+			t.Fatal(err)
+		}
+		tt.Frame()
+	}
+	if len(b.phrases) != 0 {
+		t.Fatal("选中短语没有删除")
+	}
+}
+
+func TestVimApplicationRulePersistsWithoutEnablingApplicationPresets(t *testing.T) {
+	s, b := newTestSettings()
+	s.newVimApp = `C:\Editors\Code.EXE`
+	tt := open(t, s, "实用功能")
+	tt.Frame()
+	if err := tt.Click("添加 Vim 程序"); err != nil {
+		t.Fatal(err)
+	}
+	if len(b.config.VimModeApps) != 1 || b.config.VimModeApps[0] != "code.exe" || b.config.AppPresets {
+		t.Fatalf("Vim 规则应独立保存：%+v", b.config)
 	}
 }
 

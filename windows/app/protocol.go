@@ -55,6 +55,12 @@ type Config struct {
 	Traditional          bool        `json:"traditional"`
 	AppPresets           bool        `json:"app_presets"`
 	AppPresetRules       []AppPreset `json:"app_preset_rules"`
+	VimModeApps          []string    `json:"vim_mode_apps"`
+	EnglishCorrection    bool        `json:"english_correction"`
+	EnglishSpace         bool        `json:"english_space"`
+	EnglishGloss         bool        `json:"english_gloss"`
+	HotkeyEnglish        string      `json:"hotkey_english"`
+	HotkeyRadical        string      `json:"hotkey_radical"`
 
 	QuickPhrases       bool `json:"quick_phrases"`
 	EmojiSuggest       bool `json:"emoji_suggest"`
@@ -95,6 +101,7 @@ type Config struct {
 // defaultConfig 和服务进程的默认值一样（连不上服务进程时界面先按它画）。
 func defaultConfig() Config {
 	return Config{
+		EnglishCorrection: true, EnglishSpace: true, EnglishGloss: true, HotkeyEnglish: "off", HotkeyRadical: "off",
 		PageSize: 7, Horizontal: true, FontSize: 18, FontFamily: "Microsoft YaHei", CandidateStyle: "pink", BrandIcon: "default", PinBadge: "paperclip",
 		InlinePreedit: "segmented", CandidatePreedit: true, CandidateFollow: true, CandidateSingleLine: true,
 		FuzzyGroups: fuzzyDefault, ShuangpinScheme: "xiaohe", TypoCorrection: true, TypoKinds: 15,
@@ -178,8 +185,33 @@ type QuickPhrase struct {
 
 // Dictionary 是一份导入的词库。
 type Dictionary struct {
-	Name    string `json:"name"`
-	Entries int    `json:"entries"`
+	Name        string `json:"name"`
+	Entries     int    `json:"entries"`
+	Enabled     bool   `json:"enabled"`
+	Source      string `json:"source"`
+	Description string `json:"description"`
+}
+
+type DictionaryEntry struct {
+	Word   string `json:"word"`
+	Pinyin string `json:"pinyin"`
+	Weight uint32 `json:"weight"`
+}
+
+type DictionaryPage struct {
+	Dictionary Dictionary        `json:"dictionary"`
+	Total      int               `json:"total"`
+	Offset     int               `json:"offset"`
+	Entries    []DictionaryEntry `json:"entries"`
+}
+
+type SyncMergePreview struct {
+	Versions  int      `json:"versions"`
+	Added     int      `json:"added"`
+	Updated   int      `json:"updated"`
+	Deleted   int      `json:"deleted"`
+	Conflicts int      `json:"conflicts"`
+	Details   []string `json:"details"`
 }
 
 // UserWord 是一个学到的词。
@@ -245,6 +277,9 @@ type Response struct {
 	QuickPhrases     []QuickPhrase        `json:"quick_phrases,omitempty"`
 	CommonPhrases    []string             `json:"common_phrases,omitempty"`
 	Dictionaries     []Dictionary         `json:"dictionaries,omitempty"`
+	DictionaryPage   *DictionaryPage      `json:"dictionary_page,omitempty"`
+	SyncMerge        *SyncMergePreview    `json:"sync_merge,omitempty"`
+	SyncFormat       int                  `json:"sync_format,omitempty"`
 	UserWords        []UserWord           `json:"user_words,omitempty"`
 	Report           *ImportReport        `json:"report,omitempty"`
 	Frame            *Frame               `json:"frame,omitempty"`

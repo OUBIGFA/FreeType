@@ -8,6 +8,9 @@ pub mod raw;
 mod saver;
 mod stats;
 pub mod store;
+mod dictionary_catalog;
+mod lookup_mode;
+mod sync_merge;
 pub mod tools;
 
 #[cfg(windows)]

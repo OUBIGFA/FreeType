@@ -826,7 +826,7 @@ func TestSyncPageUploadsListsAndMergesThroughTheBackend(t *testing.T) {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	exported, _ := b.last("export_settings")["path"].(string)
+	exported, _ := b.last("export_sync_settings")["path"].(string)
 	if exported == "" {
 		t.Fatal("上传没有让服务进程生成快照")
 	}
@@ -852,17 +852,20 @@ func TestSyncPageUploadsListsAndMergesThroughTheBackend(t *testing.T) {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	if b.last("merge_settings") != nil {
+	if b.last("merge_sync_settings") != nil {
 		t.Fatal("确认之前不能合并")
 	}
-	if err := tt.Click("合并"); err != nil {
+	if !tt.HasText("删除 常用语：旧条目") {
+		t.Fatal("确认前必须看到具体删除影响")
+	}
+	if err := tt.Click("确认合并"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	if b.last("merge_settings") == nil || b.last("import_settings") != nil {
+	if b.last("merge_sync_settings") == nil || b.last("import_settings") != nil {
 		t.Fatal("同步恢复应走合并，不是整份替换")
 	}
-	if !tt.HasText("已合并 家里的电脑 的备份") {
+	if !tt.HasText("已恢复 家里的电脑 的备份") {
 		t.Fatalf("没有显示合并结果：%q", tt.Texts())
 	}
 	// 失败要显示原因

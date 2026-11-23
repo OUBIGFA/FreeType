@@ -191,6 +191,9 @@ pub fn load_engine(resources: &Path, store_dir: &Path, lexicon: &str) -> Result<
     engine.prepare_fuzzy();
     let _ = engine.load_english(resources.join("english.txt"));
     let _ = engine.load_conversion(resources.join("s2t.tsv"));
+    if resources.join("INPUT-TOOLS.json").is_file() {
+        engine.load_input_tools(resources).map_err(|error| format!("英文与拆字词典载入失败：{error:#}"))?;
+    }
     stage("索引与字表");
     let store = Store::new(store_dir.to_path_buf());
     for (path, history) in [(store.user_dict_path(), false), (store.history_path(), true)] {
@@ -239,6 +242,10 @@ fn is_hotkey(key: &Key, name: &str) -> bool {
     let (want_mods, want) = match name {
         "ctrl+shift+e" => (modifier::CTRL | modifier::SHIFT, 'e'),
         "ctrl+alt+e" => (modifier::CTRL | modifier::ALT, 'e'),
+        "ctrl+shift+y" => (modifier::CTRL | modifier::SHIFT, 'y'),
+        "ctrl+alt+y" => (modifier::CTRL | modifier::ALT, 'y'),
+        "ctrl+shift+u" => (modifier::CTRL | modifier::SHIFT, 'u'),
+        "ctrl+alt+u" => (modifier::CTRL | modifier::ALT, 'u'),
         "ctrl+period" => (modifier::CTRL, '.'),
         "ctrl+shift+f" => (modifier::CTRL | modifier::SHIFT, 'f'),
         "ctrl+shift+t" => (modifier::CTRL | modifier::SHIFT, 't'),
@@ -411,6 +418,15 @@ impl Host {
             .map(|e| (e.pinyin, e.word, f64::from(e.weight.max(1))))
             .collect();
         engine.lexicon().set_extra_words(words);
+    }
+
+    fn refresh_dictionary_candidates(&mut self) {
+        self.apply_dictionaries();
+        for client in self.clients.values_mut() {
+            client.pending = None;
+            client.state.session.refresh_candidates();
+            client.state.dismiss_prediction();
+        }
     }
 
     /// 开着上屏联想：提前建好它的词频表（只建一次），免得第一次联想时那个键卡一下。
@@ -746,8 +762,9 @@ impl Host {
         frame.preedit_size = self.config.preedit_size;
         frame.lock_candidate_position = !self.config.candidate_follow;
         frame.wrap_candidates = !self.config.candidate_single_line;
+        // 词典注解较长，查询模式按行展示；普通候选的横竖排偏好保持独立。
         frame.font_fallbacks = self.config.font_fallbacks.clone();
-        frame.vertical = !self.config.horizontal;
+        frame.vertical = !frame.annotations.is_empty() || !self.config.horizontal;
         frame.hint_position = self.config.hint_position.clone();
         frame.want_before = self.config.autospace;
     }
@@ -818,7 +835,9 @@ impl Host {
     /// 设置里选的快捷键：处理了返回应答。test 只回答「要这个键」，不动状态。
     fn hotkey(&mut self, id: ClientId, key: &Key) -> Option<Response> {
         let hit = |name: &str| is_hotkey(key, name);
-        let action = if hit(&self.config.hotkey_punct) {
+        let action = if hit(&self.config.hotkey_english) { 5
+        } else if hit(&self.config.hotkey_radical) { 6
+        } else if hit(&self.config.hotkey_punct) {
             1
         } else if hit(&self.config.hotkey_traditional) {
             2
@@ -839,6 +858,8 @@ impl Host {
             return Some(Response::with_frame(frame));
         }
         Some(match action {
+            5 => self.with_client(id, |state, env| state.open_lookup(crate::lookup_mode::Kind::English, env)),
+            6 => self.with_client(id, |state, env| state.open_lookup(crate::lookup_mode::Kind::Radical, env)),
             1 => self.toggle_punct(id),
             2 => self.toggle_traditional(id),
             3 => self.with_client(id, |state, env| {
@@ -861,6 +882,17 @@ impl Host {
             self.notify_bar();
         }
         let app = self.app_of(id);
+        if key.keysym == keysym::ESCAPE
+            && key.modifiers & (modifier::SHIFT | modifier::CTRL | modifier::ALT | modifier::SUPER | modifier::REPEAT) == 0
+            && !self.caps && self.mode_of(&app) == Mode::Chinese
+            && self.config.vim_mode_apps.contains(&app)
+            && self.clients.get(&id).is_some_and(|client| client.state.vim_escape_idle()) {
+            // TSF 的预询问只预约正式处理；正式处理切状态但把 Esc 留给编辑器。
+            if key.test { return self.with_client(id, |state, env| state.current(true, env)); }
+            if let Err(error) = self.set_mode(&app, Mode::English) { return Response::error(error); }
+            self.notify_bar();
+            return self.with_client(id, |state, env| state.current(false, env));
+        }
         if let Some(response) = self.hotkey(id, &key) {
             if let Some(client) = self.clients.get_mut(&id) {
                 client.pending = None;
@@ -1001,6 +1033,7 @@ impl Host {
         let mut response = self.with_client(id, |state, env| {
             // 换了输入框：上一个输入框里的联想词不带过来
             state.dismiss_prediction();
+            state.focus_context();
             if let Some(before) = &before {
                 state.set_before(before);
             }
@@ -1078,6 +1111,8 @@ impl Host {
 
     fn command(&mut self, id: ClientId, command: Command) -> Response {
         match command {
+            Command::EnglishCandidates => self.with_client(id, |state, env| state.open_lookup(crate::lookup_mode::Kind::English, env)),
+            Command::RadicalLookup => self.with_client(id, |state, env| state.open_lookup(crate::lookup_mode::Kind::Radical, env)),
             Command::TogglePunct => self.toggle_punct(id),
             Command::ToggleTraditional => self.toggle_traditional(id),
             Command::EmojiPanel => self.with_client(id, |state, env| state.open_tool(Page::Emoji, env)),
@@ -1243,7 +1278,15 @@ impl Host {
         let Some(engine) = self.engine.as_deref() else { return Response::error("词库还在载入，请稍后再试"); };
         // 确认运行中引擎的学习状态可读，再准备文件；失败不能先覆盖其他设置。
         if let Err(error) = engine.export_learning() { return Response::error(format!("读取当前学习记录失败：{error:#}")); }
-        let prepared = match backup::read(path) { Ok(data) => data, Err(error) => return Response::error(error) };
+        let mut prepared = match backup::read(path) { Ok(data) => data, Err(error) => return Response::error(error) };
+        // 主动整份恢复采用旧正文，但继续使用本机的变更历史。之后按本次用户操作
+        // 生成新版本；只有真正的逐项合并才接纳远端记录版本。
+        prepared.data.sync_records = None;
+        self.import_prepared(prepared)
+    }
+
+    fn import_prepared(&mut self, prepared: backup::PreparedBackup) -> Response {
+        let Some(engine) = self.engine.as_deref() else { return Response::error("词库还在载入，请稍后再试"); };
         // 只替换备份里有的类别；没有的类别（文件、引擎里的状态）保持不变。
         let config = prepared.restored_config(&self.store, &self.config);
         // 排空旧学习快照，再替换备份文件，保证重启仍读取恢复后的数据。
@@ -1346,7 +1389,17 @@ impl Host {
         let mut response = self.export_settings(path, &BackupPart::ALL);
         if response.ok {
             match backup::modified_unix_ms(&self.store, &self.config) {
-                Ok(stamp) => response.modified_unix_ms = Some(stamp.max(self.sync_modified_ms)),
+                Ok(stamp) => {
+                    let result = (|| -> Result<(), String> {
+                        let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+                        let mut snapshot: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+                        crate::sync_merge::attach(&self.store, &mut snapshot, stamp.max(self.sync_modified_ms), false)?;
+                        crate::store::write_atomic(path, &snapshot.to_string()).map_err(|e| e.to_string())
+                    })();
+                    if let Err(error) = result { return Response::error(error); }
+                    response.modified_unix_ms = Some(stamp.max(self.sync_modified_ms));
+                    response.sync_format = 1;
+                }
                 Err(error) => return Response::error(error),
             }
         }
@@ -1366,9 +1419,38 @@ impl Host {
             Ok(text) => text,
             Err(error) => return Response::error(format!("读取同步比较快照失败：{error}")),
         };
-        if current != expected { return Response::error("本机数据在下载期间已修改，将重新比较版本"); }
+        let actual: serde_json::Value = match serde_json::from_str(&current) { Ok(value) => value, Err(error) => return Response::error(error.to_string()) };
+        let expected: serde_json::Value = match serde_json::from_str(&expected) { Ok(value) => value, Err(error) => return Response::error(error.to_string()) };
+        if crate::sync_merge::without_records(actual) != crate::sync_merge::without_records(expected) { return Response::error("本机数据在下载期间已修改，将重新比较版本"); }
         // 检查和恢复在同一宿主请求中完成，期间不处理其他输入或设置修改。
         self.import_settings(path)
+    }
+
+    fn prepare_sync_merge(&self, path: &Path, expected_path: Option<&Path>) -> Result<(backup::PreparedBackup, freetype_protocol::SyncMergePreview), String> {
+        let engine = self.engine.as_deref().ok_or("词库还在载入，请稍后再试")?;
+        let (text, _) = backup::snapshot(&self.store, &self.config, self.mode, &self.recent_emoji, engine)?;
+        let mut local: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+        if let Some(expected_path) = expected_path {
+            let expected: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(expected_path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+            if crate::sync_merge::without_records(local.clone()) != crate::sync_merge::without_records(expected) {
+                return Err("本机数据在预览后已修改，请重新预览".into());
+            }
+        }
+        let stamp = backup::modified_unix_ms(&self.store, &self.config)?.max(self.sync_modified_ms);
+        crate::sync_merge::attach(&self.store, &mut local, stamp, false)?;
+        let remote = backup::read(path)?;
+        let remote = serde_json::to_value(remote.data).map_err(|e| e.to_string())?;
+        let (merged, preview) = crate::sync_merge::merge(&local, &remote)?;
+        Ok((backup::from_text(&merged.to_string())?, preview))
+    }
+
+    fn merge_sync_settings(&mut self, path: &Path, expected_path: &Path) -> Response {
+        if self.clients.values().any(|client| client.state.busy()) { return Response::error("正在输入，请结束输入后再同步"); }
+        let (prepared, preview) = match self.prepare_sync_merge(path, Some(expected_path)) { Ok(value) => value, Err(error) => return Response::error(error) };
+        // 合并和替换共用现有事务写入、恢复前备份及引擎接续边界。
+        let mut result = self.import_prepared(prepared);
+        if result.ok { result.sync_merge = Some(preview); }
+        result
     }
 
     /// 处理一条请求；里面出了 panic 时记日志、丢掉这个连接的输入状态，不让服务进程退出。
@@ -1377,9 +1459,14 @@ impl Host {
             Request::SetConfig { .. } | Request::SetQuickPhrases { .. } | Request::ImportQuickPhrases { .. }
             | Request::SetCommonPhrases { .. } | Request::ImportCommonPhrases { .. }
             | Request::ImportDictionary { .. } | Request::RemoveDictionary { .. }
+            | Request::UpdateDictionary { .. } | Request::DeleteDictionaryEntries { .. }
+            | Request::MergeSyncSettings { .. } | Request::ImportSyncSettings { .. }
             | Request::ImportLearning { .. } | Request::ImportSettings { .. } | Request::MergeSettings { .. }
             | Request::ForgetWords { .. } | Request::AddUserWord { .. } | Request::ClearLearned
             | Request::ToggleMode { .. } | Request::Command { .. } | Request::Reload);
+        let record_edit = may_edit && !matches!(&request,
+            Request::ToggleMode { .. } | Request::Command { command: Command::OpenSettings | Command::Toolbar | Command::EmojiPanel | Command::EnglishCandidates | Command::RadicalLookup });
+        let user_restore = matches!(&request, Request::ImportSettings { .. } | Request::ImportSyncSettings { .. } | Request::ImportLearning { .. });
         let scan = match &request {
             Request::PhysicalKey { key, scan, .. } if !key.test => Some(*scan),
             _ => None,
@@ -1411,6 +1498,17 @@ impl Host {
                 let learned = self.clients.get_mut(&id).is_some_and(|client| client.state.session.take_learning_change());
                 self.dirty |= learned;
                 if response.ok && (may_edit || learned) { self.mark_sync_change(); }
+                // 管理操作不在逐键热路径；已开启记录同步后立即登记增删，避免离线
+                // 很久才上传时把旧编辑时间误当成本次上传时间。学习本身另有使用时间。
+                if response.ok && record_edit && (user_restore || self.store.dir().join("sync-records.json").is_file()) {
+                    let recorded = (|| -> Result<(), String> {
+                        let engine = self.engine.as_deref().ok_or("词库尚未就绪")?;
+                        let (text, _) = backup::snapshot(&self.store, &self.config, self.mode, &self.recent_emoji, engine)?;
+                        let mut snapshot: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+                        crate::sync_merge::attach(&self.store, &mut snapshot, self.sync_modified_ms, user_restore)
+                    })();
+                    if let Err(error) = recorded { return Response::error(format!("操作已保存，但同步变更记录失败：{error}")); }
+                }
                 if self.config.typing_stats && actual && self.clients.get(&id).is_some_and(|client| !client.state.session.learning_disabled()) {
                     if let Some(frame) = response.frame.as_ref().filter(|frame| frame.handled) {
                         self.stats.record(id, scan, frame.commit.as_deref(), frame.selected_rank, self.config.stats_retention);
@@ -1618,13 +1716,27 @@ impl Host {
             Request::ImportDictionary { path, name } => {
                 let reading = |words: &[String]| self.reading(words);
                 let response = Self::report(self.store.import_dictionary(Path::new(&path), &name, &reading));
-                if response.ok { self.apply_dictionaries(); }
+                if response.ok { self.refresh_dictionary_candidates(); }
                 response
             }
             Request::RemoveDictionary { name } => {
                 if let Err(error) = self.store.remove_dictionary(&name) { return Response::error(error); }
-                self.apply_dictionaries();
+                self.refresh_dictionary_candidates();
                 Response::ok()
+            }
+            Request::QueryDictionary { name, query, offset, limit } => match self.store.query_dictionary(&name, &query, offset, limit) {
+                Ok(page) => Response { dictionary_page: Some(page), ..Response::ok() },
+                Err(error) => Response::error(error),
+            },
+            Request::UpdateDictionary { name, new_name, enabled, description } => {
+                if let Err(error) = self.store.update_dictionary(&name, &new_name, enabled, &description) { return Response::error(error); }
+                self.refresh_dictionary_candidates();
+                Response { dictionaries: Some(self.store.list_dictionaries()), ..Response::ok() }
+            }
+            Request::DeleteDictionaryEntries { name, entries } => {
+                let removed = match self.store.delete_dictionary_entries(&name, &entries) { Ok(n) => n, Err(error) => return Response::error(error) };
+                self.refresh_dictionary_candidates();
+                Self::report(Ok(ImportReport { added: removed, ..ImportReport::default() }))
             }
             Request::ExportUserDictionary { path } => {
                 let Some(engine) = self.engine.as_deref() else {
@@ -1660,6 +1772,11 @@ impl Host {
             Request::ImportSyncSettings { path, expected_path } => self.import_sync_settings(Path::new(&path), Path::new(&expected_path)),
             Request::InspectSettingsBackup { path } => Self::report(backup::read(Path::new(&path)).map(|data| data.report())),
             Request::ImportSettings { path } => self.import_settings(Path::new(&path)),
+            Request::PreviewSyncMerge { path } => match self.prepare_sync_merge(Path::new(&path), None) {
+                Ok((_, preview)) => Response { sync_merge: Some(preview), ..Response::ok() },
+                Err(error) => Response::error(error),
+            },
+            Request::MergeSyncSettings { path, expected_path } => self.merge_sync_settings(Path::new(&path), Path::new(&expected_path)),
             Request::MergeSettings { path } => self.merge_settings(Path::new(&path)),
             Request::ListUserWords => Response {
                 user_words: Some(self.user_words()),

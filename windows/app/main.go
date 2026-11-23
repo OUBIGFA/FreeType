@@ -157,7 +157,7 @@ func (a *app) openSettings() {
 		Content:       ui.View(s.view),
 	})
 	s.apply = func(fn func()) { win.Update(fn) }
-	win.OnClosed(func() { a.win, a.settings = nil, nil })
+	win.OnClosed(func() { s.cancelSyncPreview(); a.win, a.settings = nil, nil })
 	a.win, a.settings = win, s
 	if err := a.setBrandIcon(a.iconConfig); err != nil {
 		s.notice = "更新图标失败：" + err.Error()
