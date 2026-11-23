@@ -70,7 +70,21 @@ class ReleaseResourceTests(unittest.TestCase):
         self.assertEqual(manifest["authorizationRecordSha256"], hashlib.sha256(
             (ROOT / "third_party/manifests/authorization.json").read_bytes()).hexdigest())
         data = next(component for component in manifest["components"] if component["id"] == "data:default")
-        self.assertTrue(any(name.endswith("default-data-sources.zip") for name in data["sourceFiles"]))
+        self.assertEqual(data["sourceFiles"], [])
+        self.assertTrue(any(name.endswith("default-data-sources.zip") for name in data["externalSourceFiles"]))
+        self.assertTrue((directory / "SOURCES.txt").is_file())
+        self.assertFalse(any(path.is_dir() and path.name == "source" for path in directory.rglob("*")))
+        for component in manifest["components"]:
+            self.assertTrue(component["licenseFiles"])
+            self.assertEqual(component["sourceFiles"], [])
+        self.assertFalse((self.stage / "data/lexicon.tsv").exists())
+        self.assertTrue((self.stage / "data/lexicon.ftd").is_file())
+        source_bundle = os.environ.get("FREETYPE_TEST_SOURCE_BUNDLE")
+        if not source_bundle:
+            raise RuntimeError("Run windows/build.ps1 with the separate source artifact")
+        source_bundle = Path(source_bundle)
+        self.assertEqual(source_bundle.name, manifest["sources"]["file"])
+        self.assertEqual(hashlib.sha256(source_bundle.read_bytes()).hexdigest(), manifest["sources"]["sha256"])
         for relative, expected in manifest["files"].items():
             with self.subTest(file=relative):
                 path = directory / relative

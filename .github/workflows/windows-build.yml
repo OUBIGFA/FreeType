@@ -90,6 +90,10 @@ jobs:
               $Info.installer.sha256 -ne $Hash -or $Info.source.baseCommit -ne $Commit -or $Info.source.tree -ne $Tree) {
             throw 'Installer does not match this workflow source and build record'
           }
+          $SourcesHash = (Get-FileHash -LiteralPath "$env:FREETYPE_OUTPUT/$($Info.correspondingSources.file)" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($SourcesHash -ne $Info.correspondingSources.sha256) {
+            throw 'Corresponding source archive does not match the installer build record'
+          }
       - name: Save installer and CI verification records
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:

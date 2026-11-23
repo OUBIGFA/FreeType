@@ -1,12 +1,12 @@
 # FreeType 第三方声明
 
-本文件随安装器安装为 `THIRD-PARTY-NOTICES.txt`。完整许可原文和需要提供的源码位于安装目录的 `third-party/`；默认词库的原有声明也保留在 `data/`。
+本文件随安装器安装为 `THIRD-PARTY-NOTICES.txt`。完整许可原文位于安装目录的 `third-party/`；默认词库的原有声明也保留在 `data/`。完整来源与对应源码独立保存在本地同版本 `FreeType-<版本>-Sources.tar.xz`，不占用安装器空间，也不上传为发布附件。准确本地文件名、SHA-256 和公开源码仓库见 `third-party/SOURCES.txt`。GPL、MPL 等组件的对应源码义务不因拆包而取消；公开分发前须核对固定修订源码、必要修改及生成脚本的获取方式，并在下载页给出明确说明。
 
 **程序、词库、模型和图标保留各自的许可，不将 FreeType 整包改称为一种许可证。** 本次核对以固定修订和随包材料为边界；不包含未打包的模型、私人词库或上游其他平台组件。
 
 ## 1. 如何核对本包
 
-- `third-party/manifest.json` 列出本次构建的组件、版本、许可文件、源码文件、逐文件 SHA-256 和已知未解决项。
+- `third-party/manifest.json` 列出本次构建的组件、版本、随包许可文件、独立来源包内的源码路径、逐文件 SHA-256 和已知未解决项。
 - Rust 范围为 x64 服务及 x64/x86 输入法 DLL 的普通依赖图；不把仅用于构建或测试的依赖宣称为随包运行时。
 - Go 范围为 Windows 应用实际导入的外部模块，以及 Go 标准库和标准库内附的依赖声明。
 - 一个模块的原始声明可能涉及该模块其他平台或附属部分。保留这些原文不表示其中每一段代码都被链接进 Windows 程序；清单不是逐符号链接分析。
@@ -19,11 +19,11 @@
 
 英文词条、短语、音标及中文释义取自 [ECDICT](https://github.com/skywind3000/ECDICT)，固定修订 `39cfb9672c0906b63569e0453c2e6abfb9ab182a`，MIT，Copyright (c) 2025 Linwei。FreeType 过滤词缀及非字母表达、规整查询编码，并生成只读索引；未复制水杉的英文实现。
 
-拆字数据取自 [rime-radical-pinyin](https://github.com/mirtlecn/rime-radical-pinyin)，固定修订 `87e73d7182916f3db9dbc0b6a4d18a78a775b298`，GPL-3.0，©2026 Mirtle。上游同时声明聚合了 chaizi（CC-BY-3.0）、CHISE ids（GPL-2.0-or-later）和 yi-bai/ids（MIT）；随包保留完整上游源码归档及其中的署名。转换后的拆字索引作为独立数据按 GPL-3.0 分发，不把其许可改成程序的 Apache-2.0。
+拆字数据取自 [rime-radical-pinyin](https://github.com/mirtlecn/rime-radical-pinyin)，固定修订 `87e73d7182916f3db9dbc0b6a4d18a78a775b298`，GPL-3.0，©2026 Mirtle。上游同时声明聚合了 chaizi（CC-BY-3.0）、CHISE ids（GPL-2.0-or-later）和 yi-bai/ids（MIT）；独立来源包保留完整上游源码归档及其中的署名，安装器保留许可与署名。转换后的拆字索引作为独立数据按 GPL-3.0 分发，不把其许可改成程序的 Apache-2.0。
 
 规范读音取自 [pinyin-data](https://github.com/mozillazg/pinyin-data)，固定修订 `fe29ad32bdf352b31a02b9936e537f575432e9a6`，MIT，Copyright (c) 2016 mozillazg。第二读音优先使用现代词典共同收录的数据，缺少读音时留空；原始数据说明与署名一起保留。
 
-来源和 SHA-256 见 `third_party/manifests/input-tools.json`。安装包的 `third-party/data/` 包含各自许可证、原始输入及 FreeType 转换脚本；完整生成输入留在可下载的固定修订，不以少量演示词表替代。查询与拼写建议在本地执行。
+来源和 SHA-256 见 `third_party/manifests/input-tools.json`。安装包的 `third-party/data/` 包含各自许可证；原始输入及 FreeType 转换脚本放入同版本独立来源包；完整生成输入留在可下载的固定修订，不以少量演示词表替代。查询与拼写建议在本地执行。
 
 ### WowType
 
@@ -37,14 +37,14 @@ FreeType 复用其 Rust 引擎、C ABI 和行为测试，并增加 Windows 服�
 
 本次 Windows 构建所用的已修改上游引擎与转换源码带有明确修改标识，具体差异可与该固定修订比较。原有署名、许可及归属声明保留；Apache-2.0 不授予上游商标权。默认词库、模型、OpenCC 和 Unicode 数据的独立许可不由这项代码授权代替。
 
-输入统计另外直接移植 WowType 修订 `bb2a04fd573f1e5f2444ee68f8f71b7ea429b3c5` 的 `settings/wowtype-config`：指标计算、六项概览、六行实体键盘、相对热度、趋势、类型与候选分类页面。FreeType 改用 Go/mygo 原生控件和图表、Windows 扫描码及现有日统计数据；保留今日时段、年度记录和明细，不展示尚未采集的模式与方案分布。该修订同样提供 MIT 或 Apache-2.0，选择 Apache-2.0；`third-party/ui/wowtype-keyboard@<修订>/` 保留许可全文、原始 README、修改声明和未修改源码节选。
+输入统计另外直接移植 WowType 修订 `bb2a04fd573f1e5f2444ee68f8f71b7ea429b3c5` 的 `settings/wowtype-config`：指标计算、六项概览、六行实体键盘、相对热度、趋势、类型与候选分类页面。FreeType 改用 Go/mygo 原生控件和图表、Windows 扫描码及现有日统计数据；保留今日时段、年度记录和明细，不展示尚未采集的模式与方案分布。该修订同样提供 MIT 或 Apache-2.0，选择 Apache-2.0；`third-party/ui/wowtype-keyboard@<修订>/` 保留许可全文、原始 README 和修改声明；未修改源码节选放入独立来源包。
 
 ### Rust 与 Go 模块
 
 - Rust 包由 `Cargo.lock` 固定；许可原文位于 `third-party/rust/<包名>@<版本>/`。包含 `windows` 系列绑定、Serde 和 Unicode 相关组件等。MIT、Apache、Unicode 等声明分别保留，不统一改写成一种许可。
 - mygo 固定为 `v0.10.0`，来源 `https://github.com/egoist/mygo`，采用 MIT 许可。应用和运行时的许可及附属声明位于 `third-party/go/github.com/egoist/mygo@v0.10.0/`。
 - 更新功能使用 `github.com/creativeprojects/go-selfupdate v1.7.1`。它和其余实际导入的 Go 模块按 `windows/app/go.mod`、`go.sum` 固定，原文位于 `third-party/go/<模块>@<版本>/`，完整列表见随包清单。
-- `github.com/hashicorp/go-cleanhttp v0.5.2`、`go-retryablehttp v0.7.8`、`go-version v1.9.0` 使用 MPL-2.0。FreeType 未修改这些模块；每个模块目录的 `source/` 内提供对应的原始 Go 模块 zip，可离线取得其源码。修改这些模块时必须同步更新对应源码及声明。
+- `github.com/hashicorp/go-cleanhttp v0.5.2`、`go-retryablehttp v0.7.8`、`go-version v1.9.0` 使用 MPL-2.0。FreeType 未修改这些模块；本地来源归档的对应模块 `source/` 目录保留原始 Go 模块 zip；模块的固定版本和公开来源见随包清单。修改这些模块时必须同步更新对应源码及声明。
 - Go 运行时使用 Go `1.27.4`，保留 BSD 许可、PATENTS 和标准库内附依赖声明，见 `third-party/toolchain/go@go1.27.4/`。
 - Rust 标准库声明保留在 `third-party/toolchain/rust@<实际版本>/COPYRIGHT-library.html`，版本由构建时的工具链确定。它不表示 FreeType 分发了整个 Rust 编译器。
 
@@ -52,7 +52,7 @@ FreeType 复用其 Rust 引擎、C ABI 和行为测试，并增加 Windows 服�
 
 `golang.org/x/net v0.62.0` 的 `publicsuffix` 表使用 Public Suffix List，来源 `https://publicsuffix.org/`，采用 MPL-2.0。
 
-固定数据修订为 `d6c92f1bbb7433e5db7b8405c25d4035fb8ff376`，仓库为 `https://github.com/publicsuffix/list`。`third-party/data/public-suffix-list@<修订>/` 包含 MPL 原文和 `source/` 中的原始 `public_suffix_list.dat`。FreeType 不修改该数据。构建会核对模块版本及其表中记录的源修订；升级依赖时不能沿用旧数据的声明。
+固定数据修订为 `d6c92f1bbb7433e5db7b8405c25d4035fb8ff376`，仓库为 `https://github.com/publicsuffix/list`。`third-party/data/public-suffix-list@<修订>/` 包含 MPL 原文；原始 `public_suffix_list.dat` 放在独立来源包的同路径 `source/` 目录。FreeType 不修改该数据。构建会核对模块版本及其表中记录的源修订；升级依赖时不能沿用旧数据的声明。
 
 ## 3. 默认数据与图标
 
@@ -60,15 +60,15 @@ FreeType 复用其 Rust 引擎、C ABI 和行为测试，并增加 Windows 服�
 - 万象补充来自 `amzxyz/rime-wanxiang-data` 修订 `4b50697bc3fa45ea7f79faebcc731fb42a3b6d8c`。作者为 amzxyz，其原创字词数据采用 CC BY 4.0；此范围不覆盖其程序代码及第三方组件。只合入字表、基础词、兼容读音、地名、名人和艺人六张核心表，不复制万象程序或 `.gram` 模型。
 - 数据转换包括去除拼音声调、将 ü 转为 v、按引擎量级归一化词频、白霜优先去重、万象补缺、已有两字及以上词融合语料词频、合入项目热词，以及按过滤词表整词移除错条目。原始来源、转换输入摘要和改动说明见 `data/SOURCE.txt`、`data/MANIFEST.json`；生成脚本及固定输入配置位于 FreeType 源码仓库的 `tools/make_default_data.py` 和 `third_party/manifests/default-data.json`。
 - 语料词频 `data/tatoeba-freq.tsv` 来自 `https://tatoeba.org` 2026-11-05 导出的中文句子 `cmn_sentences.tsv.bz2`，采用 CC BY 2.0 FR（`https://creativecommons.org/licenses/by/2.0/fr/`），署名为 Tatoeba contributors（各句作者见 `tatoeba.org` 对应句子页面）。该表原样取自 WowType 修订 `d145a93`（词频统计脚本保留在 `tools/mine_corpus_freq.py`，其头注提及的封装入口 `scripts/make-tatoeba-freq.sh` 位于该上游修订，FreeType 默认不重新生成）。仓库与安装包仅包含统计词频及按权重 `0.3` 融合到默认词库已有词后的结果，不含原始句子；具体参数与过滤词说明保留在 `data/SOURCE.txt` 和 `third-party/data/default@<数据版本>/`。
-- `third-party/data/default@<数据版本>/source/default-data-sources.zip` 随包提供原始词表、完整头部声明、GPL 和万象许可范围、热词、过滤词、语料词频、固定配置及转换工具。解压后按其中的 `README.txt` 重建，无须重新下载上游词库归档。白霜及其派生词表的分发保留 GPL-3.0 条件；万象原始数据的 CC BY 4.0 署名和范围及 Tatoeba 的 CC BY 2.0 FR 署名仍须保留。
+- 独立来源包的 `data/default@<数据版本>/source/default-data-sources.zip` 提供实际参与生成的原始词表、完整头部声明、GPL 和万象许可范围、热词、过滤词、语料词频、固定配置及转换工具。解压后按其中的 `README.txt` 重建，无须重新下载上游词库归档。白霜及其派生词表的分发保留 GPL-3.0 条件；万象原始数据的 CC BY 4.0 署名和范围及 Tatoeba 的 CC BY 2.0 FR 署名仍须保留。
 - 整句增强模型 `nnlm.bin` 来自 WowType contributors 的 `nnlm-2026.11.17` 发布，按 CC BY-SA 4.0 原样分发。模型版本、校验值、下载地址及 LCCC、中文维基百科的训练数据署名见安装目录 `data/neural-model.json`；许可全文见 `data/LICENSE`。
 
 - 词级语言模型 `words.lm` 来自 WowType 的 `lm-2026.11.09` 数据发布，采用 CC BY-SA 4.0，署名为 WowType contributors。本包未修改模型内容，SHA-256 为 `42cb7c4a7cededa29b1a9ff105530085529fefff96535cc051341ebd51605dbe`。训练语料署名包括 LCCC（thu-coai，MIT）和中文维基百科（CC BY-SA 4.0）；发布说明和许可全文位于 `third-party/model/word-lm@lm-2026.11.09/`。再次分发须保留署名、许可及改动说明；改编模型时遵守相同方式共享条件，不将其套用为程序代码许可。
 - GPL-3.0、CC BY 4.0、CC BY-SA 4.0 原文在 `data/LICENSE`；万象的原始许可范围和第三方声明在 `data/WANXIANG-LICENSE-SCOPE.md`、`data/WANXIANG-NOTICE.md`。`third-party/data/default@<数据版本>/` 另保留这些声明。词库和模型以独立数据文件分发。保留 GPL 派生词表的义务，不将独立程序与未修改模型混称为同一衍生作品，也不能因同包分发而省略任一来源的义务。
-- `data/s2t.tsv` 是 OpenCC `1.4.1` 的字符与词组级简繁映射，不含 OpenCC 程序。本包保留映射内容；转换脚本为 `tools/opencc2tsv.py`。OpenCC 项目为 `https://github.com/BYVoid/OpenCC`，采用 Apache-2.0；完整许可和作者名单在 `third-party/data/opencc@1.4.1/`，转换后的表也在其 `source/` 内提供。
+- `data/s2t.tsv` 是 OpenCC `1.4.1` 的字符与词组级简繁映射，不含 OpenCC 程序。本包保留映射内容；转换脚本为 `tools/opencc2tsv.py`。OpenCC 项目为 `https://github.com/BYVoid/OpenCC`，采用 Apache-2.0；完整许可和作者名单在 `third-party/data/opencc@1.4.1/`，运行数据保留在 `data/s2t.tsv`；对应来源副本在独立来源包的 `source/` 内提供。
 - 关于页的 GitHub 标志来自 `primer/octicons` 修订 `68ec2de8d0ddfcbb7497da01d0b7d98eb5593020`，采用 MIT 许可。FreeType 只调整 SVG 填充以跟随文字颜色，许可原文在 `third-party/asset/octicons@<修订>/`。
 
-- 编入引擎的 emoji 关键词来自 WowType 的 `core/src/emoji/cldr.tsv`，使用 Unicode emoji-test.txt 18.0 和 CLDR 中英文数据，按原脚本筛选 emoji 15.0 及以前条目。原文件声明 `Copyright © 1991-2026 Unicode, Inc.`，适用 Unicode License v3；许可和带原始头部的数据位于 `third-party/data/unicode-cldr@wowtype-5656e136/`。许可镜像还提及 LDML 规范文档；本包使用的是数据，不分发该规范文档，不能把数据许可扩张为规范文档许可。
+- 编入引擎的 emoji 关键词来自 WowType 的 `core/src/emoji/cldr.tsv`，使用 Unicode emoji-test.txt 18.0 和 CLDR 中英文数据，按原脚本筛选 emoji 15.0 及以前条目。原文件声明 `Copyright © 1991-2026 Unicode, Inc.`，适用 Unicode License v3；许可位于 `third-party/data/unicode-cldr@wowtype-5656e136/`，带原始头部的数据放入独立来源包。许可镜像还提及 LDML 规范文档；本包使用的是数据，不分发该规范文档，不能把数据许可扩张为规范文档许可。
 
 ## 4. NSIS 安装器
 
@@ -76,10 +76,10 @@ mygo 使用 NSIS `3.13` 及 Modern UI 生成安装器，并使用 LZMA 压缩。
 
 NSIS `COPYING` 区分通用代码的 zlib/libpng 许可、bzip2 压缩模块的 bzip2 许可，以及 LZMA 压缩模块的 CPL-1.0。原文还包含 LZMA 的链接例外；不能把所有部分统一写成 zlib，也不能把该例外当成免除对 LZMA 自身修改的义务。
 
-`third-party/installer/nsis@3.13/` 保留 `COPYING`、Modern UI 许可，以及 `source/nsis-3.13-src.tar.bz2` 对应源码。FreeType 未修改 NSIS 源码；安装器行为由项目的 `windows/app/installer.nsh` 与 mygo 模板生成。源码归档摘要是项目固定输入，不是发布方数字签名。构建会检查实际 NSIS 版本与所附源码版本相同。
+`third-party/installer/nsis@3.13/` 保留 `COPYING` 和 Modern UI 许可；独立来源包的对应目录保留 `source/nsis-3.13-src.tar.bz2` 对应源码。FreeType 未修改 NSIS 源码；安装器行为由项目的 `windows/app/installer.nsh` 与 mygo 模板生成。源码归档摘要是项目固定输入，不是发布方数字签名。构建会检查实际 NSIS 版本与所附源码版本相同。
 
 ## 5. 更新这份声明
 
 升级依赖、替换图标、改动词库或修改上游代码后，重新运行统一构建入口。构建从锁定依赖提取原文；缺许可文件、缺 MPL 对应源码、数据修订不匹配或摘要不符时停止，不能复用另一份安装器的声明。
 
-项目来源登记为 `https://github.com/OUBIGFA/FreeType/tree/main/third_party`。公开发布前核对本次包的许可清单没有未解决项。
+项目来源登记为 `https://github.com/OUBIGFA/FreeType/tree/main/third_party`。公开发布前核对本次包的许可清单没有未解决项，并核对固定修订源码链接、必要修改及生成脚本的取得方式；本地来源归档不上传。来源包还包含该构建源码树的 `project/FreeType-source.tar`，用于核对转换脚本和预编译索引生成代码；安装器与来源包的配对记录在 `build-info.json`。

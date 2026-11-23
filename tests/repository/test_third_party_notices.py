@@ -64,6 +64,53 @@ class ThirdPartyNoticeTests(unittest.TestCase):
         values = list(self.collector.json_stream('  {"Module":{"Path":"first"}}\n{}\n{"Module":{"Path":"second"}}'))
         self.assertEqual(values, [{"Module": {"Path": "first"}}, {}, {"Module": {"Path": "second"}}])
 
+    def test_distribution_keeps_notices_and_moves_sources_to_verified_archive(self):
+        (self.source / "LICENSE").write_text("Mozilla Public License Version 2.0", encoding="utf-8")
+        archive = self.directory / "module.zip"
+        archive.write_bytes(b"exact source")
+        component = self.collector.copy_component(self.output, "go:example.org/mpl", "v1", self.source,
+                                                  source_archive=archive)
+        record = {"format": 1, "components": [component], "unresolved": [],
+                  "files": {p.relative_to(self.output).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+                            for p in self.output.rglob("*") if p.is_file()}}
+        (self.output / "manifest.json").write_text(json.dumps(record), encoding="utf-8")
+        self.assertTrue(hasattr(self.collector, "export_distribution"), "Missing separate source delivery")
+        destination = self.directory / "installed-notices"
+        bundle = self.directory / "FreeType-0.0.1-Sources.tar.xz"
+        result = self.collector.export_distribution(self.output, destination, bundle)
+        self.assertEqual((destination / component["licenseFiles"][0]).read_bytes(),
+                         (self.source / "LICENSE").read_bytes())
+        self.assertFalse((destination / component["sourceFiles"][0]).exists())
+        self.assertEqual(result["components"][0]["sourceFiles"], [])
+        self.assertEqual(result["sources"]["sha256"], hashlib.sha256(bundle.read_bytes()).hexdigest())
+        with tarfile.open(bundle) as contents:
+            self.assertEqual(contents.extractfile(component["sourceFiles"][0]).read(), b"exact source")
+            self.assertEqual(contents.extractfile(component["licenseFiles"][0]).read(),
+                             (self.source / "LICENSE").read_bytes())
+        # A changed source must stop delivery instead of advertising a mismatched archive.
+        (self.output / component["sourceFiles"][0]).write_bytes(b"corrupt source")
+        with self.assertRaisesRegex(ValueError, "snapshot changed"):
+            self.collector.export_distribution(self.output, self.directory / "bad-notices", self.directory / "bad.tar.xz")
+
+    def test_default_source_archive_keeps_only_inputs_used_by_generation(self):
+        (self.source / "dicts").mkdir()
+        (self.source / "main.dict.yaml").write_text("import_tables:\n  - dicts/base\n  - dicts/skip\n...\n", encoding="utf-8")
+        for name in ("base", "skip", "unused", "extra", "english"):
+            (self.source / f"dicts/{name}.dict.yaml").write_text("...\n你\tni\t100\n", encoding="utf-8")
+        (self.source / "LICENSE").write_text("fixture license", encoding="utf-8")
+        model = self.directory / "model-license.txt"
+        model.write_text("model license", encoding="utf-8")
+        sources = [{"name": "primary", "dictionary": "main.dict.yaml", "skipImports": ["dicts/skip"],
+                    "extraChars": ["dicts/extra.dict.yaml"], "english": ["dicts/english.dict.yaml"]}]
+        archive = self.directory / "source.zip"
+        self.collector.archive_default_sources(archive, sources, [self.source], model)
+        with zipfile.ZipFile(archive) as contents:
+            self.assertIn("primary/dicts/base.dict.yaml", contents.namelist())
+            self.assertIn("primary/dicts/extra.dict.yaml", contents.namelist())
+            self.assertIn("primary/dicts/english.dict.yaml", contents.namelist())
+            self.assertNotIn("primary/dicts/unused.dict.yaml", contents.namelist())
+            self.assertNotIn("primary/dicts/skip.dict.yaml", contents.namelist())
+
     def test_upstream_permission_is_verified_from_the_pinned_declaration(self):
         self.assertTrue(hasattr(self.collector, "check_authorization"), "Authorization verification is missing")
         record = self.collector.check_authorization(ROOT)

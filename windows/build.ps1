@@ -64,6 +64,8 @@ if ($ReleaseTag) {
 }
 $Installer = Join-Path $Release "FreeType-$Version-Setup.exe"
 $Scratch = Join-Path $Root "_temp\build-$BuildNumber"
+$SourceBundleName = "FreeType-$Version-Sources.tar.xz"
+$SourceBundle = Join-Path $Scratch $SourceBundleName
 
 function Step($text) { Write-Host "==> $text" -ForegroundColor Cyan }
 
@@ -232,7 +234,7 @@ Invoke-Native python @('-X', 'utf8', 'windows\tools\make_icons.py', 'windows\ass
 Copy-Item -LiteralPath $WhiteIcons -Destination (Join-Path $Resources 'icons') -Recurse
 Copy-Item 'target\release\FreeTypeServer.exe', 'target\release\freetype_tsf.dll' $Bin
 Copy-Item 'target\i686-pc-windows-msvc\release\freetype_tsf.dll' (Join-Path $Bin 'x86')
-foreach ($name in 'lexicon.tsv', 'words.lm', 'english.txt', 'LICENSE', 'SOURCE.txt', 'VERSION', 'MANIFEST.json', 'WANXIANG-LICENSE-SCOPE.md', 'WANXIANG-NOTICE.md') {
+foreach ($name in 'words.lm', 'english.txt', 'LICENSE', 'SOURCE.txt', 'VERSION', 'MANIFEST.json', 'WANXIANG-LICENSE-SCOPE.md', 'WANXIANG-NOTICE.md') {
     Copy-Item (Join-Path $Data $name) (Join-Path $Resources 'data')
 }
 Copy-Item (Join-Path $Data 'nnlm.bin'), 'third_party\manifests\neural-model.json', 'core\data\s2t.tsv' (Join-Path $Resources 'data')
@@ -241,10 +243,10 @@ foreach ($name in 'english-lookup.ftd', 'english-spelling.ftd', 'radical-lookup.
 }
 # Record the packaged inputs without modifying the upstream binary models.
 $StagedData = Join-Path $Resources 'data'
-Compile-Lexicon (Join-Path $Bin 'FreeTypeServer.exe') (Join-Path $StagedData 'lexicon.tsv') (Join-Path $StagedData 'lexicon.ftd')
+Compile-Lexicon (Join-Path $Bin 'FreeTypeServer.exe') (Join-Path $Data 'lexicon.tsv') (Join-Path $StagedData 'lexicon.ftd')
 $DefaultDataVersion = (Get-Content -Raw (Join-Path $Data 'VERSION')).Trim()
 $NeuralDataVersion = (Get-Content -Raw (Join-Path $StagedData 'neural-model.json') | ConvertFrom-Json).version
-$DataVersions = [ordered]@{ 'lexicon.tsv' = $DefaultDataVersion; 'lexicon.ftd' = $DefaultDataVersion; 'english.txt' = $DefaultDataVersion;
+$DataVersions = [ordered]@{ 'lexicon.ftd' = $DefaultDataVersion; 'english.txt' = $DefaultDataVersion;
     'words.lm' = '2026.11.09'; 'nnlm.bin' = $NeuralDataVersion; 's2t.tsv' = '1.4.1' }
 $InputToolsVersion = (Get-Content -LiteralPath (Join-Path $Data 'INPUT-TOOLS.json') -Raw -Encoding UTF8 | ConvertFrom-Json).version
 foreach ($name in 'english-lookup.ftd', 'english-spelling.ftd', 'radical-lookup.ftd') { $DataVersions[$name] = $InputToolsVersion }
@@ -255,7 +257,7 @@ foreach ($entry in $DataVersions.GetEnumerator()) {
 Write-Utf8 (Join-Path $StagedData 'DATA-MANIFEST') (([ordered]@{ format = 1; files = $DataFiles } | ConvertTo-Json -Depth 4) + "`n")
 
 Step 'Collecting third-party notices and corresponding source'
-Invoke-Native python @('-X', 'utf8', 'tools/make_third_party_notices.py', '--out', (Join-Path $Resources 'third-party'))
+Invoke-Native python @('-X', 'utf8', 'tools/make_third_party_notices.py', '--out', (Join-Path $Resources 'third-party'), '--sources', $SourceBundle, '--source-tree', $SourceTree)
 Copy-Item (Join-Path $Root 'third_party\NOTICE.md') (Join-Path $Resources 'THIRD-PARTY-NOTICES.txt')
 
 Step "Building the mygo app and installer (mygo $MygoVersion)"
@@ -324,10 +326,15 @@ if ($NoticeHash -ne (Sha256 (Join-Path $Root 'third_party\NOTICE.md'))) { throw 
 if ($NoticeManifest.unresolved.Count -gt 0) {
     throw 'Unresolved third-party permissions prevent packaging this build'
 }
+if ((Sha256 $SourceBundle) -ne $NoticeManifest.sources.sha256 -or
+    (Get-Item -LiteralPath $SourceBundle).Length -ne $NoticeManifest.sources.bytes) {
+    throw 'Separate corresponding source artifact does not match the installed notice'
+}
 
 if (-not $SkipTests) {
     Step 'Testing installer preparation with disposable processes'
     $env:FREETYPE_TEST_RESOURCES = Join-Path $Stage 'data'
+    $env:FREETYPE_TEST_SOURCE_BUNDLE = $SourceBundle
     Invoke-Native python @('-X', 'utf8', '-m', 'unittest', 'discover', '-s', 'tests/windows', '-v')
 }
 
@@ -337,6 +344,9 @@ Invoke-Native python @('-X', 'utf8', 'tools/capture_build_source.py', '--index',
 Step 'Recording the release'
 New-Item -ItemType Directory -Force -Path $Release | Out-Null
 Copy-Item $Built.FullName $Installer -Force
+Copy-Item -LiteralPath $SourceBundle -Destination (Join-Path $Release $SourceBundleName) -Force
+$SourceBundleHash = Sha256 (Join-Path $Release $SourceBundleName)
+Write-Utf8 (Join-Path $Release "$SourceBundleName.sha256") "$SourceBundleHash *$SourceBundleName`n"
 $InstallerHash = Sha256 $Installer
 Write-Utf8 "$Installer.sha256" "$InstallerHash *FreeType-$Version-Setup.exe`n"
 
@@ -358,6 +368,7 @@ $Info = [ordered]@{
         productVersion = $Version
     }
     installer      = [ordered]@{ file = "FreeType-$Version-Setup.exe"; bytes = (Get-Item $Installer).Length; sha256 = $InstallerHash }
+    correspondingSources = [ordered]@{ file = $SourceBundleName; bytes = (Get-Item -LiteralPath $SourceBundle).Length; sha256 = $SourceBundleHash }
     toolchain      = [ordered]@{
         rustc  = (& rustc --version).Trim()
         cargo  = (& cargo --version).Trim()
@@ -401,6 +412,8 @@ $Info = [ordered]@{
         wordsLmSha256  = Sha256 (Join-Path $Data 'words.lm')
         nnlmSha256     = Sha256 (Join-Path $Data 'nnlm.bin')
         englishSha256  = Sha256 (Join-Path $Data 'english.txt')
+        compiledLexiconSha256 = Sha256 (Join-Path $Stage 'data\lexicon.ftd')
+        compiledLexiconBytes = (Get-Item -LiteralPath (Join-Path $Stage 'data\lexicon.ftd')).Length
     }
 }
 Write-Utf8 (Join-Path $Release 'build-info.json') (($Info | ConvertTo-Json -Depth 5) + "`n")
@@ -409,4 +422,5 @@ Recycle-GeneratedDirectory $Scratch
 Write-Host ''
 Write-Host "Installer : $Installer"
 Write-Host "SHA-256   : $InstallerHash"
+Write-Host "Sources   : $(Join-Path $Release $SourceBundleName)"
 Write-Host "Build     : $BuildNumber (source tree $SourceTree)"

@@ -171,7 +171,7 @@ pub fn load_engine(resources: &Path, store_dir: &Path, lexicon: &str) -> Result<
         if lexicon_path == resources.join("lexicon.tsv") && index.exists() {
             // 完整校验只在安装、更新或文件变化后做一次，结果按文件身份记在本机缓存目录。
             let record = crate::local_dir().join("cache").join("lexicon.verified");
-            std::sync::Arc::new(wowtype_core::lexicon::MappedLexicon::open_verified(&lexicon_path, &index, &record)
+            std::sync::Arc::new(wowtype_core::lexicon::MappedLexicon::open_deployed(&index, &record)
                 .map_err(|e| format!("默认词库索引载入失败（{}）：{e:#}", index.display()))?)
         } else {
             // Existing TSV-only installations and user-selected dictionaries remain readable.

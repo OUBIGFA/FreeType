@@ -118,6 +118,7 @@ class InstallerPreparationTests(unittest.TestCase):
                                   marker.split("\n", 1)[1])
         include.write_text(content, encoding="utf-8-sig")
         shutil.copyfile(INCLUDE.with_name("prepare-install.ps1"), include.with_name("prepare-install.ps1"))
+        shutil.copyfile(INCLUDE.with_name("cleanup-install.ps1"), include.with_name("cleanup-install.ps1"))
         script.write_text(
             'Unicode true\nRequestExecutionLevel user\nSilentInstall silent\n'
             f'Name "FreeType preparation test"\nOutFile "{installer}"\nInstallDir "{install_dir or self.target}"\n'
@@ -335,6 +336,7 @@ class InstallerPreparationTests(unittest.TestCase):
         self.assertNotRegex(content, r'ExecShellWait[^\n]*--unregister-tsf')
         include.write_text(content, encoding="utf-8-sig")
         shutil.copyfile(INCLUDE.with_name("prepare-install.ps1"), include.with_name("prepare-install.ps1"))
+        shutil.copyfile(INCLUDE.with_name("cleanup-install.ps1"), include.with_name("cleanup-install.ps1"))
         installer = self.directory / "make-uninstaller.exe"
         uninstaller = self.directory / "uninstall.exe"
         script = self.directory / "uninstall.nsi"

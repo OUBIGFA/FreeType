@@ -204,6 +204,62 @@ fn compiler_preserves_source_if_target_is_the_same_file() {
     assert_eq!(std::fs::read_to_string(&source).unwrap(), WORDS);
 }
 
+#[test]
+fn deployed_index_works_without_source_and_detects_replacement_damage() {
+    let (source, index) = fixture();
+    let record = index.with_file_name("standalone.verified");
+    MappedLexicon::compile(&source, &index).unwrap();
+    // Shipping only the index must preserve candidates and predictions, not bypass integrity checks.
+    std::fs::rename(&source, source.with_extension("source-only")).unwrap();
+    let loaded = MappedLexicon::open_verified(&source, &index, &record);
+    assert!(loaded.is_ok(), "a deployed index must not require the build-time TSV: {:?}", loaded.as_ref().err());
+    let loaded = loaded.unwrap();
+    assert_eq!(loaded.lookup(&full("ni hao"))[0].word, "你好");
+    assert_eq!(loaded.prediction_index().unwrap().log_frequency("中国"), Some(200_f64.ln() as f32));
+    drop(loaded);
+    std::fs::write(&source, "old installation TSV").unwrap();
+    assert_eq!(MappedLexicon::open_deployed(&index, &record).unwrap().lookup(&full("ni hao"))[0].word, "你好");
+    assert!(MappedLexicon::open_verified(&source, &index, &record).is_err(), "explicit source checks stay strict");
+    let mut bytes = std::fs::read(&index).unwrap();
+    bytes[40] ^= 1;
+    std::fs::write(&index, bytes).unwrap();
+    assert!(MappedLexicon::open_deployed(&index, &record).is_err());
+}
+
+#[test]
+fn legacy_deployed_index_keeps_candidates_and_float_priors() {
+    let (source, index) = fixture();
+    // Captured with the pre-optimization compiler (01927f8); the hex fixture is a fixed old-format artifact.
+    let bytes: Vec<u8> = include_str!("fixtures/lexicon-ftd1.hex").split_whitespace()
+        .flat_map(|line| line.as_bytes().chunks_exact(2).map(|pair|
+            u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap()))
+        .collect();
+    std::fs::write(&source, "ni\t你\t500\nni\t拟\t0.5\nni hao\t你好\t300\nzhong guo\t中国\t200\n").unwrap();
+    std::fs::write(&index, bytes).unwrap();
+    let mapped = MappedLexicon::open(&source, &index).unwrap();
+    assert_eq!(mapped.lookup(&full("ni hao"))[0].word, "你好");
+    assert_eq!(mapped.lookup_common(&full("ni")).len(), 1);
+    assert_eq!(mapped.prediction_index().unwrap().log_frequency("中国"), Some(200_f64.ln() as f32));
+    assert_eq!(mapped.prediction_index().unwrap().log_frequency("拟"), None);
+}
+
+#[test]
+fn compact_records_keep_multibyte_lengths_and_fractional_frequencies() {
+    let (source, index) = fixture();
+    // Both UTF-8 length and syllable count cross a one-byte integer boundary.
+    let reading = vec!["ni"; 130].join(" ");
+    let word = "你".repeat(130);
+    std::fs::write(&source, format!("{WORDS}{reading}\t{word}\t3.25\n")).unwrap();
+    MappedLexicon::compile(&source, &index).unwrap();
+    let mapped = MappedLexicon::open(&source, &index).unwrap();
+    let expected = MemoryLexicon::from_tsv_path(&source).unwrap();
+    assert_eq!(mapped.lookup(&full(&reading)), expected.lookup(&full(&reading)));
+    let mut visited = Vec::new();
+    mapped.for_each_word(&mut |word, freq| visited.push((word.to_owned(), freq)));
+    assert_eq!(visited.last(), Some(&(word, 3.25)));
+    assert_eq!(visited.len(), 15);
+}
+
 #[cfg(windows)]
 #[test]
 fn open_mapping_denies_in_place_writers() {

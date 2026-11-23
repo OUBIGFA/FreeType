@@ -1,6 +1,7 @@
 """Collect notices from the locked Windows dependencies and verified inputs."""
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,7 @@ import tempfile
 import zipfile
 
 from make_default_data import TOOL_INPUTS, checked_download, sha256, source_snapshot
+from rime2tsv import parse_header, resolve_import
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -183,6 +185,23 @@ def archive_default_sources(archive, sources, snapshots, model_license):
     files = {}
     for source, snapshot in zip(sources, snapshots):
         selected = set(source.get("dictionaries", []))
+        if source.get("dictionary"):
+            # Follow the same imports/aliases as the generator, plus its separate character and English inputs.
+            def visit(relative):
+                if relative in selected:
+                    return
+                path = snapshot / relative
+                if not path.resolve().is_relative_to(snapshot.resolve()):
+                    raise ValueError("Source dictionary escapes its snapshot")
+                selected.add(relative)
+                _, imports, _ = parse_header(path.read_text(encoding="utf-8").splitlines())
+                for name in imports:
+                    if name not in source.get("skipImports", []):
+                        imported = resolve_import(source.get("importAliases", {}).get(name, name), str(path.parent))
+                        visit(Path(imported).relative_to(snapshot).as_posix())
+            visit(source["dictionary"])
+            selected.update(source.get("extraChars", []))
+            selected.update(source.get("english", []))
         for path in sorted(snapshot.rglob("*")):
             if not path.is_file():
                 continue
@@ -207,15 +226,17 @@ def archive_default_sources(archive, sources, snapshots, model_license):
         "source-manifest.json 记录原始文件摘要；修改输入后应明确更新其记录与版本，不冒充原始快照。\n"
         "各来源保留各自许可；此归档不把独立程序、模型及数据统一改成一种许可。\n"
     )
-    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+    # The separate source distribution supplies solid XZ compression; stored inner ZIPs
+    # preserve familiar rebuild paths without hiding duplicate text from that compressor.
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_STORED) as bundle:
         for name, path in sorted(files.items()):
             entry = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
-            entry.compress_type = zipfile.ZIP_DEFLATED
+            entry.compress_type = zipfile.ZIP_STORED
             bundle.writestr(entry, path.read_bytes())
         for name, content in {"source-manifest.json": json.dumps(record, ensure_ascii=False, indent=2) + "\n",
                               "README.txt": instructions}.items():
             entry = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
-            entry.compress_type = zipfile.ZIP_DEFLATED
+            entry.compress_type = zipfile.ZIP_STORED
             bundle.writestr(entry, content.encode("utf-8"))
 
 
@@ -237,14 +258,17 @@ def collect(output):
     for source in input_manifest["sources"]:
         archive = ROOT / ".local/third-party" / ("input-tools-" + source["name"] + "-" + source["revision"] + ".zip")
         archive.parent.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_STORED) as bundle:
+            files = {}
             for item in source["files"]:
-                bundle.write(input_sources / source["name"] / item["name"], source["name"] + "/" + item["name"])
-            bundle.write(ROOT / "tools/make_input_tools.py", "tools/make_input_tools.py")
-            bundle.write(input_manifest_path, "third_party/manifests/input-tools.json")
-            bundle.writestr("README.txt", "FreeType independent input lookup data. Original inputs and licenses are retained.\n"
+                files[source["name"] + "/" + item["name"]] = (input_sources / source["name"] / item["name"]).read_bytes()
+            files["tools/make_input_tools.py"] = (ROOT / "tools/make_input_tools.py").read_bytes()
+            files["third_party/manifests/input-tools.json"] = input_manifest_path.read_bytes()
+            files["README.txt"] = ("FreeType independent input lookup data. Original inputs and licenses are retained.\n"
                             "Build with Python 3.11+: python -X utf8 tools/make_input_tools.py\n"
-                            "The manifest pins all sources and hashes; the generator downloads any other required inputs.\n")
+                            "The manifest pins all sources and hashes; the generator downloads any other required inputs.\n").encode("utf-8")
+            for name, content in sorted(files.items()):
+                bundle.writestr(zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0)), content)
         component = copy_component(output, "data:" + source["name"], source["revision"],
                                    ROOT / "third_party/licenses", [source["name"] + "-LICENSE.txt"], archive)
         component["sourceUrl"] = source["repository"]
@@ -322,14 +346,92 @@ def collect(output):
     return manifest
 
 
+def export_distribution(staged, output, source_bundle, source_tree=None):
+    """Keep notices installed; preserve exact corresponding sources in a separate, identified artifact."""
+    manifest = json.loads((staged / "manifest.json").read_text(encoding="utf-8"))
+    source_files = {name for component in manifest["components"] for name in component["sourceFiles"]}
+    if source_tree:
+        # The recorded Git tree includes the exact converters and FTD compiler used for this build.
+        project_source = "project/FreeType-source.tar"
+        target = staged / project_source
+        target.parent.mkdir(parents=True, exist_ok=True)
+        run(["git", "archive", "--format=tar", "--mtime=1970-01-01T00:00:00Z",
+             "--output=" + str(target.resolve()), source_tree])
+        manifest["projectSource"] = {"file": project_source, "tree": source_tree, "sha256": sha256(target)}
+        manifest["files"][project_source] = sha256(target)
+        source_files.add(project_source)
+        (staged / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    for relative, expected in manifest["files"].items():
+        path = staged / relative
+        if not path.resolve().is_relative_to(staged.resolve()) or sha256(path) != expected:
+            raise ValueError("Source/notice snapshot changed: " + relative)
+    source_bundle.parent.mkdir(parents=True, exist_ok=True)
+    # Normalize metadata so the source artifact is reproducible and contains no local paths or identities.
+    with tarfile.open(source_bundle, "w:xz", preset=6) as archive:
+        for relative in sorted([*manifest["files"], "manifest.json"]):
+            path = staged / relative
+            member = tarfile.TarInfo(relative)
+            member.size = path.stat().st_size
+            member.mode = 0o644
+            with path.open("rb") as content:
+                archive.addfile(member, content)
+    # Verify every member before associating the archive with an installer.
+    expected_files = {**manifest["files"], "manifest.json": sha256(staged / "manifest.json")}
+    verified = set()
+    with tarfile.open(source_bundle, "r|xz") as archive:
+        for member in archive:
+            with archive.extractfile(member) as content:
+                if member.name not in expected_files or hashlib.file_digest(content, "sha256").hexdigest() != expected_files[member.name]:
+                    raise ValueError("Source archive verification failed: " + member.name)
+            verified.add(member.name)
+    if verified != expected_files.keys():
+        raise ValueError("Source archive is incomplete")
+    for relative in manifest["files"]:
+        if relative not in source_files:
+            target = output / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(staged / relative, target)
+    manifest["format"] = 2
+    manifest["files"] = {name: digest for name, digest in manifest["files"].items() if name not in source_files}
+    for component in manifest["components"]:
+        component["externalSourceFiles"] = component["sourceFiles"]
+        component["sourceFiles"] = []
+    manifest["sources"] = {"file": source_bundle.name, "sha256": sha256(source_bundle),
+                           "bytes": source_bundle.stat().st_size,
+                           "distribution": "local-only",
+                           "projectRepository": "https://github.com/OUBIGFA/FreeType"}
+    instructions = (
+        "FreeType 第三方源码与本地重建记录\n\n"
+        f"本构建的本地来源归档：{source_bundle.name}\n"
+        f"SHA-256：{manifest['sources']['sha256']}\n\n"
+        "此归档仅供本地重建与核对；不随安装器分发，不作为公开附件\n"
+        "FreeType 公开源码：https://github.com/OUBIGFA/FreeType\n"
+        "组件固定版本及上游来源见 manifest.json；GPL、MPL 等对应源码义务仍适用\n"
+        "公开分发前须核对准确版本、必要修改和生成脚本的源码获取方式，不能仅用许可文本替代\n"
+        "来源包保留原始许可、所需源码、固定数据输入及转换脚本；各组件继续遵循各自许可\n"
+        "manifest.json 中的 externalSourceFiles 是来源包内路径；它们不属于运行所需文件\n"
+    )
+    output.mkdir(parents=True, exist_ok=True)
+    (output / "SOURCES.txt").write_text(instructions, encoding="utf-8", newline="\n")
+    manifest["files"]["SOURCES.txt"] = sha256(output / "SOURCES.txt")
+    (output / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return manifest
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", required=True, type=Path)
+    parser.add_argument("--sources", required=True, type=Path)
+    parser.add_argument("--source-tree", required=True)
     arguments = parser.parse_args()
     if arguments.out.exists():
         parser.error("Use a new output directory; existing notices are not overwritten")
-    manifest = collect(arguments.out)
-    print(f"Collected {len(manifest['components'])} components and {len(manifest['files'])} notice/source files; "
+    parent = Path(os.environ.get("FREETYPE_TEST_TEMP", ROOT / "_temp/notices"))
+    parent.mkdir(parents=True, exist_ok=True)
+    staged = Path(tempfile.mkdtemp(prefix="notice-sources-", dir=parent))
+    collect(staged)
+    manifest = export_distribution(staged, arguments.out, arguments.sources, arguments.source_tree)
+    print(f"Collected {len(manifest['components'])} components and {len(manifest['files'])} notice files; "
           f"{len(manifest['unresolved'])} upstream permission issue remains")
 
 

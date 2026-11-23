@@ -6,6 +6,9 @@
 ; 安装器的语言跟随系统显示语言（简体中文、繁体中文、英文，见 locales\）；
 ; 下面自己的提示也按这三种语言各写一份。
 
+; 32 MiB improves compression of complete dictionaries; normal program memory is unaffected.
+SetCompressorDictSize 32
+
 !ifndef FREETYPE_VERSION
   !define FREETYPE_VERSION "0.0.1"
 !endif
@@ -29,6 +32,10 @@ LangString FT_STOP_FAILED ${LANG_ENGLISH} "Cannot stop FreeType or release its i
 LangString FT_START_FAILED ${LANG_SIMPCHINESE} "输入法服务未启动或词库未加载；更新未完成，待更新记录已保留；请查看服务日志后重试安装"
 LangString FT_START_FAILED ${LANG_TRADCHINESE} "輸入法服務未啟動或詞庫未載入；更新未完成，待更新記錄已保留；請查看服務日誌後重試安裝"
 LangString FT_START_FAILED ${LANG_ENGLISH} "The input service did not start or load the dictionary； the update is incomplete and its pending record is kept； check the service log and run setup again"
+
+LangString FT_CLEANUP_FAILED ${LANG_SIMPCHINESE} "更新已完成；部分旧来源文件未能移入回收站并已保留；详情见安装日志"
+LangString FT_CLEANUP_FAILED ${LANG_TRADCHINESE} "更新已完成；部分舊來源檔案未能移入資源回收筒並已保留；詳情見安裝記錄"
+LangString FT_CLEANUP_FAILED ${LANG_ENGLISH} "Update completed； some old source files were kept because recycling failed； see the installation log"
 
 LangString FT_ENABLE_FAILED ${LANG_SIMPCHINESE} "无法加入当前用户的输入法列表；安装未完成；请重试安装，仍失败时查看服务日志"
 LangString FT_ENABLE_FAILED ${LANG_TRADCHINESE} "無法加入目前使用者的輸入法清單；安裝未完成；請重試安裝，仍失敗時查看服務日誌"
@@ -114,6 +121,9 @@ FunctionEnd
 
 Section "-FreeType preparation"
   Call FreeTypePrepare
+  ; Preserve exact old ownership before the new manifests replace it.
+  CopyFiles /SILENT "$INSTDIR\third-party\manifest.json" "$PLUGINSDIR\third-party.json"
+  CopyFiles /SILENT "$INSTDIR\data\DATA-MANIFEST" "$PLUGINSDIR\data.json"
 SectionEnd
 
 Function FreeTypeEnableForUser
@@ -142,6 +152,24 @@ Function FreeTypeLaunchAfterInstall
     SetErrorLevel 8
     Quit
   ready:
+  ; Recycle retired data only after the new service has loaded the standalone index.
+  SetOutPath "$PLUGINSDIR"
+  File /oname=cleanup-install.ps1 "${__FILEDIR__}\cleanup-install.ps1"
+  System::Call 'Kernel32::SetEnvironmentVariable(t "FREETYPE_INSTALL_DIR", t "$INSTDIR")'
+  System::Call 'Kernel32::SetEnvironmentVariable(t "FREETYPE_PREVIOUS_MANIFESTS", t "$PLUGINSDIR")'
+  System::Call 'Kernel32::SetEnvironmentVariable(t "FREETYPE_INSTALL_SCRIPT", t "$PLUGINSDIR\cleanup-install.ps1")'
+  StrCpy $0 "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
+  IfFileExists "$0" +2 0
+    StrCpy $0 "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
+  nsExec::ExecToLog /TIMEOUT=60000 '"$0" -NoProfile -NonInteractive -Command "& ([scriptblock]::Create([IO.File]::ReadAllText($$env:FREETYPE_INSTALL_SCRIPT)))"'
+  Pop $0
+  System::Call 'Kernel32::SetEnvironmentVariable(t "FREETYPE_INSTALL_DIR", t "")'
+  System::Call 'Kernel32::SetEnvironmentVariable(t "FREETYPE_PREVIOUS_MANIFESTS", t "")'
+  System::Call 'Kernel32::SetEnvironmentVariable(t "FREETYPE_INSTALL_SCRIPT", t "")'
+  StrCmp $0 "0" cleaned
+    MessageBox MB_ICONEXCLAMATION|MB_OK "$(FT_CLEANUP_FAILED)" /SD IDOK
+  cleaned:
+  SetOutPath "$INSTDIR"
   ; 服务已从本次安装目录启动且词库可用，才结束更新事务。
   Delete "${FREETYPE_UPDATE_PENDING}"
   System::Call 'Kernel32::SetEnvironmentVariable(t "FREETYPE_INSTALL_COMPLETED", t "1")'

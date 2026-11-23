@@ -8,8 +8,11 @@ use std::fs::File;
 use std::io::Read;
 
 // Header: magic, syllable/format version, source CRC, entry count, total frequency,
-// end of entries, start of FST. The trailing CRC covers the header and all sections.
-const MAGIC: &[u8; 4] = b"FTD1";
+// end of entries, start of FST. FTD2 uses variable record lengths and signed posting
+// deltas; its FST prior values point to a shared float table. FTD1 remains readable.
+// The trailing CRC covers the header and all sections.
+const MAGIC: &[u8; 4] = b"FTD2";
+const LEGACY_MAGIC: &[u8; 4] = b"FTD1";
 const HEADER: usize = 32;
 const FULL: u8 = 1;
 const INITIAL: u8 = 2;
@@ -33,6 +36,7 @@ pub struct MappedLexicon {
     entries_end: usize,
     count: usize,
     total: f64,
+    compact: bool,
 }
 
 fn checksum(reader: impl Read) -> std::io::Result<u32> {
@@ -79,18 +83,39 @@ fn query_key(query: &[SyllableQuery]) -> Option<Vec<u8>> {
     })))
 }
 
-/// Format version plus size and modification time (100 ns on NTFS) of both files.
-fn verified_identity(source: &Path, index: &Path) -> Option<String> {
+/// Deployed indexes stand alone; optional TSV identities still guard custom/build-time checks.
+fn verified_identity(source: Option<&Path>, index: &Path) -> Option<String> {
     let stamp = |path: &Path| -> Option<String> {
         let meta = fs::metadata(path).ok()?;
         let modified = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
         Some(format!("{} {}", meta.len(), modified.as_nanos()))
     };
-    Some(format!("FTD1 {} {} {}", cache_version(), stamp(index)?, stamp(source)?))
+    let source = match source { Some(path) => stamp(path)?, None => "standalone".into() };
+    Some(format!("FTD2 {} {} {}", cache_version(), stamp(index)?, source))
 }
 
 fn u32_at(bytes: &[u8], pos: usize) -> u32 {
     u32::from_le_bytes(bytes[pos..pos + 4].try_into().unwrap())
+}
+
+// Small record lengths and signed offset deltas need fewer bytes without losing precision or order.
+fn write_integer(bytes: &mut Vec<u8>, mut value: u64) {
+    while value >= 128 {
+        bytes.push(value as u8 | 128);
+        value >>= 7;
+    }
+    bytes.push(value as u8);
+}
+
+fn read_integer(bytes: &[u8], cursor: &mut usize) -> u64 {
+    let mut value = 0_u64;
+    for shift in (0..35).step_by(7) {
+        let byte = bytes[*cursor];
+        *cursor += 1;
+        value |= u64::from(byte & 127) << shift;
+        if byte < 128 { return value; }
+    }
+    unreachable!("validated immutable index offset")
 }
 
 impl MappedLexicon {
@@ -120,8 +145,8 @@ impl MappedLexicon {
         let mut offsets = Vec::with_capacity(lex.len());
         for entry in &lex.entries {
             offsets.push(u32::try_from(bytes.len())?);
-            bytes.extend(u32::try_from(entry.word.len())?.to_le_bytes());
-            bytes.extend(u16::try_from(entry.keys.len())?.to_le_bytes());
+            write_integer(&mut bytes, u64::from(u32::try_from(entry.word.len())?));
+            write_integer(&mut bytes, u64::from(u16::try_from(entry.keys.len())?));
             bytes.extend(entry.freq.to_le_bytes());
             bytes.extend(entry.word.as_bytes());
             for key in &entry.keys {
@@ -139,8 +164,12 @@ impl MappedLexicon {
             for (key, group) in groups {
                 index.insert(key, u64::try_from(bytes.len())?)?;
                 bytes.extend(u32::try_from(group.len())?.to_le_bytes());
+                let mut previous = 0_i64;
                 for id in group {
-                    bytes.extend(offsets[id].to_le_bytes());
+                    let current = i64::from(offsets[id]);
+                    let delta = current - previous;
+                    write_integer(&mut bytes, ((delta << 1) ^ (delta >> 63)) as u64);
+                    previous = current;
                 }
             }
             Ok(())
@@ -173,10 +202,18 @@ impl MappedLexicon {
                 .then_with(|| second.freq.total_cmp(&first.freq))
         });
         words.dedup_by(|first, second| first.word == second.word);
+        // Equal frequencies share their exact f32 representation, keeping FST outputs small
+        // without quantizing ranking scores or storing one float for every word.
+        let mut priors = std::collections::BTreeMap::new();
+        for entry in &words { priors.insert((entry.freq.ln() as f32).to_bits(), 0_u64); }
+        for (bits, offset) in &mut priors {
+            *offset = u64::try_from(bytes.len())?;
+            bytes.extend(bits.to_le_bytes());
+        }
         for entry in words {
             index.insert(
                 prefixed(PRIOR, entry.word.as_bytes()),
-                (entry.freq.ln() as f32).to_bits() as u64,
+                priors[&(entry.freq.ln() as f32).to_bits()],
             )?;
         }
         let index_start = u32::try_from(bytes.len())?;
@@ -190,17 +227,26 @@ impl MappedLexicon {
     /// Validate through buffered reads so startup does not fault the entire mapping
     /// into the working set. Windows denies in-place writers while this file is mapped.
     pub fn open(source: &Path, index_path: &Path) -> Result<Self> {
-        Self::open_checked(source, index_path, true)
+        Self::open_checked(Some(source), index_path, true)
     }
 
-    /// Like [`MappedLexicon::open`], but reading both files in full for their CRCs costs
-    /// about 300 MiB of disk I/O, which dominated startup right after logon (13-26 s).
-    /// After one complete check, `record` stores the size and modification time of both
-    /// files. Later opens with the same identities only check the header and bounds;
+    /// A deployed index needs no TSV. When the source exists, validate it too.
+    /// After one complete CRC check, `record` stores the file identities. Later opens
+    /// with the same identities only check the header and bounds;
     /// any replacement (installer, compiler or user) changes the identity and triggers
     /// the full check again. Silent in-place corruption with an unchanged timestamp is
     /// not detected; the shipped index is immutable and replaced only by rename.
     pub fn open_verified(source: &Path, index_path: &Path, record: &Path) -> Result<Self> {
+        let source = source.try_exists()?.then_some(source);
+        Self::open_remembered(source, index_path, record)
+    }
+
+    /// Installed indexes are authoritative even if an older installation left a TSV behind.
+    pub fn open_deployed(index_path: &Path, record: &Path) -> Result<Self> {
+        Self::open_remembered(None, index_path, record)
+    }
+
+    fn open_remembered(source: Option<&Path>, index_path: &Path, record: &Path) -> Result<Self> {
         let identity = verified_identity(source, index_path);
         let trusted = identity.as_ref().is_some_and(|identity| {
             fs::read_to_string(record).is_ok_and(|saved| saved.trim() == identity)
@@ -216,7 +262,7 @@ impl MappedLexicon {
         Ok(lexicon)
     }
 
-    fn open_checked(source: &Path, index_path: &Path, full: bool) -> Result<Self> {
+    fn open_checked(source: Option<&Path>, index_path: &Path, full: bool) -> Result<Self> {
         let mut options = File::options();
         options.read(true);
         #[cfg(windows)]
@@ -236,10 +282,10 @@ impl MappedLexicon {
         // Compilers publish immutable files by rename; no writable mapping is created.
         let file = unsafe { Mmap::map(&file)? };
         ensure!(
-            &file[..4] == MAGIC && u32_at(&file, 4) == cache_version(),
+            (&file[..4] == MAGIC || &file[..4] == LEGACY_MAGIC) && u32_at(&file, 4) == cache_version(),
             "词库索引版本不匹配"
         );
-        if full {
+        if let Some(source) = source.filter(|_| full) {
             ensure!(
                 checksum(File::open(source)?)? == u32_at(&file, 8),
                 "词库索引与源文件不匹配"
@@ -253,25 +299,38 @@ impl MappedLexicon {
             HEADER <= entries_end && entries_end <= start && start < file.len() - 4,
             "词库索引边界错误"
         );
+        let compact = &file[..4] == MAGIC;
         let index = Map::new(IndexBytes { file, start })?;
         Ok(Self {
             index,
             entries_end,
             count,
             total,
+            compact,
         })
     }
 
     fn entries(&self, key: &[u8]) -> impl Iterator<Item = LexEntry> + '_ {
         let data = self.index.as_fst().as_inner();
-        let postings = self.index.get(key).map_or(&[][..], |offset| {
+        let (mut cursor, mut remaining) = self.index.get(key).map_or((0, 0), |offset| {
             let pos = offset as usize;
             let count = u32_at(&data.file, pos) as usize;
-            &data.file[pos + 4..pos + 4 + count * 4]
+            (pos + 4, count)
         });
-        postings.chunks_exact(4).map(|offset| {
-            let pos = u32_at(offset, 0) as usize;
-            let (word, freq, reading) = self.record(pos);
+        let mut previous = 0_i64;
+        std::iter::from_fn(move || {
+            if remaining == 0 { return None; }
+            remaining -= 1;
+            let pos = if self.compact {
+                let value = read_integer(&data.file, &mut cursor);
+                previous += (value >> 1) as i64 ^ -((value & 1) as i64);
+                previous as usize
+            } else {
+                let offset = u32_at(&data.file, cursor) as usize;
+                cursor += 4;
+                offset
+            };
+            let (word, freq, reading, _) = self.record(pos);
             let keys: Vec<_> = reading
                 .chunks_exact(2)
                 .map(|pair| {
@@ -283,24 +342,34 @@ impl MappedLexicon {
                 .iter()
                 .map(|key| Syllable::from_id(key.id).unwrap().initial_letter())
                 .collect();
-            LexEntry {
+            Some(LexEntry {
                 word: word.to_owned(),
                 keys,
                 initials,
                 freq,
-            }
+            })
         })
     }
 
-    fn record(&self, pos: usize) -> (&str, f64, &[u8]) {
+    fn record(&self, pos: usize) -> (&str, f64, &[u8], usize) {
         let data = &self.index.as_fst().as_inner().file[pos..self.entries_end];
-        let word_end = 14 + u32_at(data, 0) as usize;
-        let syllables = u16::from_le_bytes(data[4..6].try_into().unwrap()) as usize;
-        let freq = f64::from_le_bytes(data[6..14].try_into().unwrap());
+        let (word_len, syllables, mut cursor) = if self.compact {
+            let mut cursor = 0;
+            let word_len = read_integer(data, &mut cursor) as usize;
+            let syllables = read_integer(data, &mut cursor) as usize;
+            (word_len, syllables, cursor)
+        } else {
+            (u32_at(data, 0) as usize, u16::from_le_bytes(data[4..6].try_into().unwrap()) as usize, 6)
+        };
+        let freq = f64::from_le_bytes(data[cursor..cursor + 8].try_into().unwrap());
+        cursor += 8;
+        let word_end = cursor + word_len;
+        let record_end = word_end + 2 * syllables;
         (
-            std::str::from_utf8(&data[14..word_end]).unwrap(),
+            std::str::from_utf8(&data[cursor..word_end]).unwrap(),
             freq,
-            &data[word_end..word_end + 2 * syllables],
+            &data[word_end..record_end],
+            record_end,
         )
     }
 
@@ -422,9 +491,9 @@ impl Lexicon for MappedLexicon {
     fn for_each_word(&self, visit: &mut dyn FnMut(&str, f64)) {
         let mut pos = HEADER;
         while pos < self.entries_end {
-            let (word, freq, reading) = self.record(pos);
+            let (word, freq, _, size) = self.record(pos);
             visit(word, freq);
-            pos += 14 + word.len() + reading.len();
+            pos += size;
         }
     }
 
@@ -437,6 +506,12 @@ impl PredictionIndex for MappedLexicon {
     fn log_frequency(&self, word: &str) -> Option<f32> {
         self.index
             .get(prefixed(PRIOR, word.as_bytes()))
-            .map(|value| f32::from_bits(value as u32))
+            .and_then(|value| {
+                if !self.compact { return Some(f32::from_bits(value as u32)); }
+                let data = self.index.as_fst().as_inner();
+                let pos = usize::try_from(value).ok()?;
+                let bytes = data.file.get(self.entries_end..data.start)?.get(pos.checked_sub(self.entries_end)?..)?;
+                Some(f32::from_le_bytes(bytes.get(..4)?.try_into().ok()?))
+            })
     }
 }
