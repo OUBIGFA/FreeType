@@ -16,7 +16,8 @@ CHECKER = ROOT / "tools" / "check_repo.py"
 
 class RepositoryCheckTests(unittest.TestCase):
     def setUp(self):
-        scratch = Path(os.environ.get("FREETYPE_TEST_TEMP", ROOT / "_temp" / "repository-tests"))
+        # CI passes a relative directory; Git trace output must use an absolute path.
+        scratch = Path(os.environ.get("FREETYPE_TEST_TEMP", ROOT / "_temp" / "repository-tests")).resolve()
         scratch.mkdir(parents=True, exist_ok=True)
         self.repo = Path(tempfile.mkdtemp(prefix="case-", dir=scratch))
         self.git("init", "-q")
