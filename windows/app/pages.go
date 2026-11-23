@@ -686,11 +686,11 @@ func (s *settings) featuresPage(c *ui.Context) {
 	s.appPresetSection(c)
 	s.vimSection(c)
 	section(c, "英文候选与拆字查字", func() {
-		hint(c, "在输入位置打开工具栏，选择英文候选或拆字查字；也可在快捷键页启用专用按键；英文 Esc 返回，拆字选中后返回拼音")
 		changed = s.settingSwitch(c, "features/英文拼写建议", false, &s.config.EnglishCorrection) || changed
 		changed = s.settingSwitch(c, "features/英文上屏补空格", false, &s.config.EnglishSpace) || changed
 		changed = s.settingSwitch(c, "features/英文音标与释义", false, &s.config.EnglishGloss) || changed
 	})
+	hint(c, "在输入位置打开工具栏，选择英文候选或拆字查字；也可在快捷键页启用专用按键；英文 Esc 返回，拆字选中后返回拼音")
 	if changed {
 		s.saveConfig()
 	}
@@ -800,23 +800,36 @@ func (s *settings) dictsPage(c *ui.Context) {
 				row(c, "还没有导入词库", "", nil)
 				return
 			}
-			for _, d := range s.dicts {
-				name := d.Name
-				row(c, name, fmt.Sprintf("%d 条", d.Entries), func() {
-					enabled := d.Enabled
-					if checkbox(c, &enabled, "启用 "+name).Disabled(s.dictionaryBusy).Changed() {
-						s.changeDictionary(d, d.Name, enabled, d.Description)
+			ui.Column(c).FillWidth().Gap(1).Dividers(1, colors(c).border).Children(func() {
+				for _, d := range s.dicts {
+					name := d.Name
+					detail := fmt.Sprintf("%d 条", d.Entries)
+					if !d.Enabled {
+						detail += " · 已停用"
 					}
-					if ui.Button(c, "浏览").Label("浏览 " + name).Disabled(s.dictionaryBusy).Clicked() {
-						s.dictionaryName, s.dictionaryRename, s.dictionaryDescription = name, name, d.Description
-						s.dictionaryQuery = ""
-						s.queryDictionary(0)
+					if desc := strings.TrimSpace(d.Description); desc != "" {
+						detail += " · " + desc
 					}
-					if ui.Button(c, "删除").Label("删除 " + name).Disabled(s.dictionaryBusy).Clicked() {
-						s.removeDictionary(name)
-					}
-				})
-			}
+					row(c, name, detail, func() {
+						enabled := d.Enabled
+						if checkbox(c, &enabled, "启用").Label("启用 " + name).Disabled(s.dictionaryBusy).Changed() {
+							s.changeDictionary(d, d.Name, enabled, d.Description)
+						}
+						browseText := "浏览"
+						if s.dictionaryName == name {
+							browseText = "浏览中"
+						}
+						if ui.Button(c, browseText).Label("浏览 " + name).Disabled(s.dictionaryBusy).Clicked() {
+							s.dictionaryName, s.dictionaryRename, s.dictionaryDescription = name, name, d.Description
+							s.dictionaryQuery = ""
+							s.queryDictionary(0)
+						}
+						if ui.Button(c, "删除").Label("删除 " + name).Disabled(s.dictionaryBusy).Clicked() {
+							s.removeDictionary(name)
+						}
+					})
+				}
+			})
 		})
 	})
 	s.dictionaryBrowser(c)

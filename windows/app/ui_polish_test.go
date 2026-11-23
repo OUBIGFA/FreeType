@@ -264,6 +264,8 @@ func TestSettingsNarrowActionsStayInsideThePage(test *testing.T) {
 		controls     []string
 	}{
 		{"features", "features/指定软件规则", []string{"切入时", "添加 / 更新", "刷新打开的窗口"}},
+		{"features", "features/Vim 程序", []string{"Vim 程序名", "添加 Vim 程序", "移除 Vim 程序 code.exe"}},
+		{"dicts", "dicts/词库词条", []string{"保存名称与说明", "搜索词库词条", "词库上一页", "词库下一页", "删除选中词库词条"}},
 		{"about", "about/检查更新", []string{"检查软件更新", "立即更新"}},
 		{"candidates", "candidates/字体", []string{"字体", "恢复默认"}},
 		{"typing", "typing/翻页键", []string{"- =", "[ ]", ", .", "Tab"}},
@@ -271,13 +273,29 @@ func TestSettingsNarrowActionsStayInsideThePage(test *testing.T) {
 	}
 	for _, scale := range []float32{1, 1.5} {
 		for _, item := range cases {
-			test.Run(fmt.Sprintf("%s/scale-%.1f", item.page, scale), func(test *testing.T) {
-				state, _ := newTestSettings()
+			test.Run(fmt.Sprintf("%s/%s/scale-%.1f", item.page, item.target, scale), func(test *testing.T) {
+				state, backend := newTestSettings()
 				state.syncDir = test.TempDir()
 				state.loadSync()
 				state.sync.Enabled, state.sync.Automatic = true, true
 				state.config.AppPresets = true
+				state.config.VimModeApps = []string{"code.exe", "gvim.exe"}
 				state.config.FontFamily = "SimSun"
+				backend.dicts = []Dictionary{
+					{Name: "专业词库", Entries: 120, Enabled: true, Source: "Rime · 医学.dict.yaml", Description: "日常医学用词"},
+					{Name: "停用词库", Entries: 45, Enabled: false},
+				}
+				state.dicts = backend.dicts
+				state.dictionaryName, state.dictionaryRename, state.dictionaryDescription = "专业词库", "专业词库", "日常医学用词"
+				state.dictionaryPage = &DictionaryPage{
+					Dictionary: backend.dicts[0],
+					Total:      120,
+					Entries: []DictionaryEntry{
+						{Word: "研究", Pinyin: "yan jiu", Weight: 1000},
+						{Word: "临床试验", Pinyin: "lin chuang shi yan", Weight: 800},
+					},
+				}
+				state.dictionarySelected = map[string]bool{}
 				state.locateSetting(setting(item.target))
 				view := ui.NewTester(state.view, 780, 1400)
 				view.SetPreferences(ui.Preferences{TextScale: scale})
@@ -289,7 +307,7 @@ func TestSettingsNarrowActionsStayInsideThePage(test *testing.T) {
 						test.Errorf("%s 在最小宽度下必须完整保留：%+v，存在=%v", control, bounds, found)
 					}
 				}
-				saveUIFrame(test, fmt.Sprintf("%s-narrow-scale-%.1f", item.page, scale), view)
+				saveUIFrame(test, fmt.Sprintf("%s-narrow-scale-%.1f", strings.ReplaceAll(item.target, "/", "-"), scale), view)
 			})
 		}
 	}

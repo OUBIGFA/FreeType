@@ -91,72 +91,119 @@ func (s *settings) deleteSelectedDictionaryEntries() {
 }
 
 func (s *settings) dictionaryBrowser(c *ui.Context) {
+	p := colors(c)
 	section(c, "浏览导入词库", func() {
 		s.settingBlock(c, "dicts/词库词条", func() {
 			if s.dictionaryName == "" {
-				hint(c, "在上方选择一份词库并点击浏览")
+				row(c, "未选择词库", "在上方点击已导入词库的「浏览」查看词条", nil)
 				return
 			}
 			page := s.dictionaryPage
-			ui.Row(c).Gap(12).Wrap().AlignItems(ui.Center).Children(func() {
-				ui.TextInput(c, &s.dictionaryRename).Label("词库名称").Width(210).MaxWidthPercent(100)
-				ui.TextInput(c, &s.dictionaryDescription).Label("词库说明").Placeholder("说明用途或来源，最多 500 字").Width(300).MaxWidthPercent(100)
-				if ui.Button(c, "保存名称与说明").Disabled(s.dictionaryBusy || page == nil).Clicked() {
-					s.changeDictionary(page.Dictionary, s.dictionaryRename, page.Dictionary.Enabled, s.dictionaryDescription)
-				}
-			})
-			if page != nil && page.Dictionary.Source != "" {
-				hint(c, "导入来源："+page.Dictionary.Source)
-			}
-			if ui.SearchField(c, &s.dictionaryQuery).Label("搜索词库词条").Placeholder("搜索词语或拼音").Width(300).MaxWidthPercent(100).Changed() {
-				s.queryDictionary(0)
-			}
-			if page == nil {
-				if s.dictionaryBusy {
-					hint(c, "正在读取词条")
-				} else {
-					hint(c, "词条尚未载入；请重试")
-					if ui.Button(c, "重试读取词条").Clicked() {
-						s.queryDictionary(0)
-					}
-				}
-				return
-			}
-			ui.Row(c).Gap(12).Wrap().AlignItems(ui.Center).Children(func() {
-				ui.Text(c, fmt.Sprintf("共 %d 条匹配；第 %d 页", page.Total, page.Offset/dictionaryPageSize+1))
-				if ui.Button(c, "上一页").Label("词库上一页").Disabled(s.dictionaryBusy || page.Offset == 0).Clicked() {
-					s.queryDictionary(max(0, page.Offset-dictionaryPageSize))
-				}
-				if ui.Button(c, "下一页").Label("词库下一页").Disabled(s.dictionaryBusy || page.Offset+len(page.Entries) >= page.Total).Clicked() {
-					s.queryDictionary(page.Offset + dictionaryPageSize)
-				}
-				all, count := len(page.Entries) > 0, 0
-				for _, entry := range page.Entries {
-					checked := s.dictionarySelected[dictionaryEntryKey(entry)]
-					all = all && checked
-					if checked {
-						count++
-					}
-				}
-				if checkbox(c, &all, "本页全选").Disabled(s.dictionaryBusy).Changed() {
-					for _, entry := range page.Entries {
-						s.dictionarySelected[dictionaryEntryKey(entry)] = all
-					}
-				}
-				if ui.Button(c, "删除选中").Label("删除选中词库词条").Disabled(s.dictionaryBusy || count == 0).Clicked() {
-					s.confirmDictionaryDelete = true
-				}
-			})
-			ui.List(c, nil, len(page.Entries), func(i int) {
-				entry := page.Entries[i]
-				key := dictionaryEntryKey(entry)
-				checked := s.dictionarySelected[key]
-				row(c, entry.Word, fmt.Sprintf("%s  ·  权重 %d", entry.Pinyin, entry.Weight), func() {
-					if checkbox(c, &checked, "").Label("选择 " + entry.Word + " " + entry.Pinyin).Disabled(s.dictionaryBusy).Changed() {
-						s.dictionarySelected[key] = checked
+			ui.Column(c).FillWidth().Gap(1).Dividers(1, p.border).Children(func() {
+				// 词库名称与说明编辑区
+				ui.Column(c).FillWidth().Padding(12, 0, 14, 0).Gap(10).Children(func() {
+					ui.Row(c).FillWidth().Gap(12).Wrap().AlignItems(ui.End).Children(func() {
+						ui.Field(c, "词库名称", func() {
+							ui.TextInput(c, &s.dictionaryRename).Label("词库名称").FillWidth()
+						}).Width(200).MaxWidthPercent(100)
+						ui.Field(c, "词库说明", func() {
+							ui.TextInput(c, &s.dictionaryDescription).Label("词库说明").Placeholder("说明用途或来源，最多 500 字").FillWidth()
+						}).Grow(1).Basis(220).MinWidth(180)
+						if ui.Button(c, "保存名称与说明").Disabled(s.dictionaryBusy || page == nil).Clicked() {
+							s.changeDictionary(page.Dictionary, s.dictionaryRename, page.Dictionary.Enabled, s.dictionaryDescription)
+						}
+					})
+					if page != nil && page.Dictionary.Source != "" {
+						ui.Text(c, "导入来源："+page.Dictionary.Source).FontSize(textSize(c, 12.5)).TextColor(p.muted).LineHeight(1.4).Wrap()
 					}
 				})
-			}).Height(360)
+				// 搜索、翻页与批量操作区
+				ui.Column(c).FillWidth().Padding(12, 0).Gap(10).Children(func() {
+					ui.Row(c).FillWidth().Gap(12).Wrap().AlignItems(ui.Center).Children(func() {
+						if ui.SearchField(c, &s.dictionaryQuery).Label("搜索词库词条").Placeholder("搜索词语或拼音").
+							Grow(1).Basis(220).MinWidth(180).MaxWidthPercent(100).Changed() {
+							s.queryDictionary(0)
+						}
+						if page != nil {
+							totalPages := max(1, (page.Total+dictionaryPageSize-1)/dictionaryPageSize)
+							currentPage := page.Offset/dictionaryPageSize + 1
+							ui.Row(c).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
+								ui.Text(c, fmt.Sprintf("共 %d 条 · 第 %d / %d 页", page.Total, currentPage, totalPages)).
+									FontSize(textSize(c, 13)).TextColor(p.muted).FontFeatures("tnum")
+								if ui.Button(c, "上一页").Label("词库上一页").Disabled(s.dictionaryBusy || page.Offset == 0).Clicked() {
+									s.queryDictionary(max(0, page.Offset-dictionaryPageSize))
+								}
+								if ui.Button(c, "下一页").Label("词库下一页").Disabled(s.dictionaryBusy || page.Offset+len(page.Entries) >= page.Total).Clicked() {
+									s.queryDictionary(page.Offset + dictionaryPageSize)
+								}
+							})
+						}
+					})
+					if page != nil && len(page.Entries) > 0 {
+						all, count := true, 0
+						for _, entry := range page.Entries {
+							checked := s.dictionarySelected[dictionaryEntryKey(entry)]
+							all = all && checked
+							if checked {
+								count++
+							}
+						}
+						ui.Row(c).FillWidth().Gap(12).Wrap().AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
+							ui.Row(c).Gap(12).Wrap().AlignItems(ui.Center).Children(func() {
+								if checkbox(c, &all, "本页全选").Disabled(s.dictionaryBusy).Changed() {
+									for _, entry := range page.Entries {
+										s.dictionarySelected[dictionaryEntryKey(entry)] = all
+									}
+								}
+								if count > 0 {
+									ui.Text(c, fmt.Sprintf("已选 %d 条", count)).FontSize(textSize(c, 13)).TextColor(p.muted).FontFeatures("tnum")
+								}
+							})
+							if ui.Button(c, "删除选中").Label("删除选中词库词条").Disabled(s.dictionaryBusy || count == 0).Clicked() {
+								s.confirmDictionaryDelete = true
+							}
+						})
+					}
+				})
+				// 词条列表或状态提示
+				if page == nil {
+					if s.dictionaryBusy {
+						row(c, "正在读取词条", "", nil)
+					} else {
+						row(c, "词条尚未载入", "读取失败或尚未完成，可点击重试", func() {
+							if ui.Button(c, "重试读取词条").Clicked() {
+								s.queryDictionary(0)
+							}
+						})
+					}
+					return
+				}
+				if len(page.Entries) == 0 {
+					title := "这份词库里没有词条"
+					if strings.TrimSpace(s.dictionaryQuery) != "" {
+						title = "没有匹配的词条"
+					}
+					row(c, title, "", nil)
+					return
+				}
+				ui.List(c, nil, len(page.Entries), func(i int) {
+					entry := page.Entries[i]
+					key := dictionaryEntryKey(entry)
+					checked := s.dictionarySelected[key]
+					item := ui.Row(c).Padding(8, 0).MinHeight(46).Gap(12).AlignItems(ui.Center)
+					if item.Hovered() {
+						item.Background(p.cardHover)
+					}
+					item.Children(func() {
+						if checkbox(c, &checked, "").Label("选择 " + entry.Word + " " + entry.Pinyin).Disabled(s.dictionaryBusy).Changed() {
+							s.dictionarySelected[key] = checked
+						}
+						ui.Text(c, entry.Word).FontWeight(500).Width(132).SingleLine().Tooltip(entry.Word)
+						ui.Text(c, entry.Pinyin).Grow(1).Basis(0).MinWidth(0).SingleLine().TextColor(p.muted).Tooltip(entry.Pinyin)
+						ui.Textf(c, "权重 %d", entry.Weight).FontSize(textSize(c, 13)).TextColor(p.muted).MinWidth(textSize(c, 84)).SingleLine().Shrink(0).TextAlign(ui.End).FontFeatures("tnum")
+					})
+				}).MaxHeight(380)
+			})
 		})
 	})
 	switch ui.AlertDialog(c, &s.confirmDictionaryDelete, "删除选中词条", "只从当前导入词库删除；其他来源和个人词不变；可用备份恢复", "取消", "删除") {
