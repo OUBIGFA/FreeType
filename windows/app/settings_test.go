@@ -115,6 +115,13 @@ func (f *fakeBackend) Call(r Request) (Response, error) {
 		return Response{OK: true, SyncMerge: &SyncMergePreview{Added: 2, Deleted: 1, Conflicts: 1, Versions: 3, Details: []string{"删除 常用语：旧条目"}}}, nil
 	case "merge_sync_settings":
 		return Response{OK: true, SyncMerge: &SyncMergePreview{Added: 2, Deleted: 1, Versions: 3}}, nil
+	case "reset_sync_records":
+		return Response{OK: true}, nil
+	case "import_sync_settings":
+		f.config.PageSize = 9
+		f.common = []string{"按正文恢复的常用语"}
+		c := f.config
+		return Response{OK: true, Config: &c, Status: &Status{Ready: true, Mode: "chinese"}, CommonPhrases: f.common}, nil
 	case "inspect_settings_backup":
 		return Response{OK: true, Report: &ImportReport{Added: 5, Note: "全部设置、1 份词库、1 条快捷短语、1 条常用语、2 条学到的词及使用记录"}}, nil
 	case "import_settings":
@@ -1586,6 +1593,27 @@ func TestDictionaryNameDropsRimeSuffix(t *testing.T) {
 	} {
 		if got := dictionaryName(path); got != want {
 			t.Errorf("dictionaryName(%q) = %q, want %q", path, got, want)
+		}
+	}
+}
+
+func TestSyncProblemClassificationAndRecoveryActions(t *testing.T) {
+	cases := []struct {
+		msg  string
+		want syncProblemKind
+	}{
+		{"同步记录与备份正文不一致", syncProblemRecordsMismatch},
+		{"备份密码不正确，或者云端备份已损坏", syncProblemPassword},
+		{"云端备份已加密；请在云端同步中填写该备份的密码", syncProblemPassword},
+		{"云端备份内容损坏", syncProblemCorruptRemote},
+		{"云端备份已变化，请重新同步", syncProblemTransient},
+		{"本机数据在下载期间已修改，将重新比较版本", syncProblemTransient},
+		{"上传失败：HTTP 500", syncProblemConnection},
+		{"未知失败", syncProblemOther},
+	}
+	for _, item := range cases {
+		if got := classifySyncProblem(item.msg); got != item.want {
+			t.Errorf("classifySyncProblem(%q) = %v, want %v", item.msg, got, item.want)
 		}
 	}
 }

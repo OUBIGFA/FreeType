@@ -151,13 +151,50 @@ pub(crate) fn attach(store: &Store, snapshot: &mut Value, initial_stamp: u64, us
     Ok(())
 }
 
+/// 清理已损坏或不一致的本机同步记录，并按当前数据重建基线。
+pub(crate) fn reset(store: &Store, snapshot: &mut Value, stamp: u64) -> Result<(), String> {
+    let journal_path = store.dir().join(JOURNAL);
+    match fs::remove_file(&journal_path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("清理同步记录失败：{e}")),
+    }
+    let device_path = store.dir().join("sync-record-device.txt");
+    if let Ok(text) = fs::read_to_string(&device_path) {
+        if text.len() != 32 || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
+            let _ = fs::remove_file(&device_path);
+        }
+    }
+    attach(store, snapshot, stamp, true)
+}
+
+fn is_schema_default_config_entry(key_json: &str, value: &Value, defaults: &Value) -> bool {
+    let Ok(parts) = serde_json::from_str::<Vec<String>>(key_json) else {
+        return false;
+    };
+    parts.len() == 2
+        && parts[0] == "config"
+        && !local_config(&parts[1])
+        && defaults.get(&parts[1]) == Some(value)
+}
+
 fn journal_from_snapshot(snapshot: &Value) -> Result<Journal, String> {
     let actual = rows(snapshot)?;
     if let Some(value) = snapshot.get("sync_records").filter(|v| !v.is_null()) {
         let journal: Journal = serde_json::from_value(value.clone()).map_err(error)?;
         validate(&journal)?;
+        let defaults = config_defaults()?;
         let live: BTreeMap<_, _> = journal.records.iter().filter_map(|(k, r)| r.value.as_ref().map(|v| (k.clone(), v.clone()))).collect();
-        if live != actual { return Err("同步记录与备份正文不一致".into()); }
+        let all_live_match = live.iter().all(|(k, v)| actual.get(k) == Some(v));
+        // 旧版快照在反序列化为新版 Config 时会补入新增设置项的默认值；
+        // 仅允许「记录里从未出现且等于默认值的设置字段」通过校验，仍拦截正文篡改与删除冲突。
+        let all_actual_match = actual.iter().all(|(k, v)| {
+            live.get(k) == Some(v)
+                || (!journal.records.contains_key(k) && is_schema_default_config_entry(k, v, &defaults))
+        });
+        if !all_live_match || !all_actual_match {
+            return Err("同步记录与备份正文不一致".into());
+        }
         Ok(journal)
     } else {
         // Older snapshots contain no deletions or per-record clock. They can fill missing

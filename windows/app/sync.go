@@ -499,12 +499,114 @@ func (s *settings) saveSync() bool {
 	return true
 }
 
+type syncProblemKind int
+
+const (
+	syncProblemOther syncProblemKind = iota
+	syncProblemPassword
+	syncProblemTransient
+	syncProblemRecordsMismatch
+	syncProblemCorruptRemote
+	syncProblemConnection
+)
+
+func classifySyncProblem(message string) syncProblemKind {
+	if message == "" {
+		return syncProblemOther
+	}
+	hasAny := func(substrs ...string) bool {
+		for _, s := range substrs {
+			if strings.Contains(message, s) {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case hasAny("备份密码", "已加密", "加密参数", "由更新的 FreeType 加密"):
+		return syncProblemPassword
+	case hasAny("本机数据在", "云端备份已变化", "正在输入", "词库还在载入", "自动同步正在进行"):
+		return syncProblemTransient
+	case hasAny("同步记录", "同步设备记录", "同步差异", "词库来源标识", "词库名称冲突"):
+		return syncProblemRecordsMismatch
+	case hasAny("云端备份", "云端设备信息", "同步信息", "校验失败", "内容损坏", "内容不完整"):
+		return syncProblemCorruptRemote
+	case hasAny("HTTP ", "账号", "连接", "超时", "地址", "存储桶", "区域", "权限", "空间不足", "证书", "tls", "x509", "no such host", "refused", "EOF", "timeout"):
+		return syncProblemConnection
+	default:
+		return syncProblemOther
+	}
+}
+
+func clearRemoteSnapshotsAt(store remoteStore) error {
+	entries, err := store.List("")
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		revision, ok := strings.CutSuffix(entry.Name, ".json")
+		if ok && !entry.Dir && strings.HasPrefix(revision, "sync-") {
+			if err := store.Delete(entry.Name); err != nil {
+				return err
+			}
+		}
+	}
+	devEntries, err := store.List("devices")
+	if err != nil {
+		return err
+	}
+	for _, entry := range devEntries {
+		if !entry.Dir {
+			id, ok := strings.CutSuffix(entry.Name, ".json")
+			if ok && deviceIDPattern.MatchString(id) {
+				if err := store.Delete("devices/" + entry.Name); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		if !deviceIDPattern.MatchString(entry.Name) {
+			continue
+		}
+		revs, err := store.List("devices/" + entry.Name)
+		if err != nil {
+			return err
+		}
+		for _, rev := range revs {
+			if !rev.Dir && strings.HasSuffix(rev.Name, ".json") {
+				if err := store.Delete("devices/" + entry.Name + "/" + rev.Name); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// clearRemoteSnapshots 只清理 FreeType 自己的平铺和旧版快照，不碰同目录下的其他用户文件。
+func clearRemoteSnapshots(store remoteStore) error {
+	if err := clearRemoteSnapshotsAt(store); err != nil {
+		return err
+	}
+	if source, ok := store.(interface{ legacyStore() remoteStore }); ok && source.legacyStore() != nil {
+		if err := clearRemoteSnapshotsAt(source.legacyStore()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // syncTask 在后台做一件要连远端的事；同一时间只做一件，做完显示结果。
 func (s *settings) syncTask(area, doing string, work func(store remoteStore) (string, func(), error)) {
+	s.syncTaskWithError(area, doing, work, nil)
+}
+
+func (s *settings) syncTaskWithError(area, doing string, work func(store remoteStore) (string, func(), error), onErr func()) {
 	if s.syncBusy != "" {
 		return
 	}
 	s.syncMessageArea = area
+	s.confirmSyncResetCloud, s.confirmForceRestore = false, false
 	if !s.saveSync() {
 		return
 	}
@@ -515,6 +617,7 @@ func (s *settings) syncTask(area, doing string, work func(store remoteStore) (st
 	}
 	settings := s.sync
 	s.syncBusy, s.syncMessage, s.syncFailed = doing, "", false
+	s.syncFailedDevice = nil
 	s.background(func() func() {
 		if manager != nil {
 			defer manager.gate.Unlock()
@@ -534,6 +637,9 @@ func (s *settings) syncTask(area, doing string, work func(store remoteStore) (st
 			s.syncBusy = ""
 			if err != nil {
 				s.syncMessage, s.syncFailed = err.Error(), true
+				if onErr != nil {
+					onErr()
+				}
 				return
 			}
 			s.syncMessage = message
@@ -638,7 +744,7 @@ func (s *settings) restoreSync(device syncDevice) {
 
 // 先下载并校验确切快照，再显示具体变更；确认时不重新下载另一份内容。
 func (s *settings) previewSync(device syncDevice) {
-	s.syncTask("transfer", "正在预览同步差异", func(store remoteStore) (string, func(), error) {
+	s.syncTaskWithError("transfer", "正在预览同步差异", func(store remoteStore) (string, func(), error) {
 		incoming, err := tempSnapshot()
 		if err != nil {
 			return "", nil, err
@@ -667,6 +773,9 @@ func (s *settings) previewSync(device syncDevice) {
 			s.syncRestore, s.syncPreview, s.syncPreviewFile, s.syncExpectedFile = device, response.SyncMerge, incoming, expected
 			s.syncReplace = false
 		}, nil
+	}, func() {
+		failed := device
+		s.syncFailedDevice = &failed
 	})
 }
 
@@ -677,11 +786,12 @@ func (s *settings) cancelSyncPreview() {
 		}
 	}
 	s.syncPreview, s.syncPreviewFile, s.syncExpectedFile = nil, "", ""
+	s.confirmForceRestore = false
 }
 
 func (s *settings) applySyncPreview(device syncDevice) {
 	incoming, expected, replace := s.syncPreviewFile, s.syncExpectedFile, s.syncReplace
-	s.syncTask("transfer", "正在应用已预览的备份", func(_ remoteStore) (string, func(), error) {
+	s.syncTaskWithError("transfer", "正在应用已预览的备份", func(_ remoteStore) (string, func(), error) {
 		if err := preserveSyncBackup(s.syncDataDir(), expected); err != nil {
 			return "", nil, err
 		}
@@ -697,6 +807,205 @@ func (s *settings) applySyncPreview(device syncDevice) {
 			s.cancelSyncPreview()
 			s.applyRestored(response)
 		}, nil
+	}, func() {
+		failed := device
+		s.syncFailedDevice = &failed
+	})
+}
+
+func (s *settings) retrySync() {
+	s.syncMessageArea = "plan"
+	s.confirmSyncResetCloud, s.confirmForceRestore = false, false
+	if s.saveSync() && s.autoSync != nil {
+		go s.autoSync.run(time.Now(), true)
+	}
+}
+
+func (s *settings) repairLocalSyncRecordsAndRetry() {
+	manager := s.autoSync
+	config := s.sync
+	var failedSnap *autoSyncState
+	s.syncTaskWithError("plan", "正在重建本机同步记录并重试", func(store remoteStore) (string, func(), error) {
+		if _, err := s.backend.Call(op("reset_sync_records")); err != nil {
+			return "", nil, fmt.Errorf("重建本机同步记录失败：%w", err)
+		}
+		if manager == nil {
+			return "已重建本机同步记录，可重新上传或恢复", nil, nil
+		}
+		manager.mu.Lock()
+		manager.state.Checkpoint = syncCheckpoint{Target: syncTarget(config)}
+		manager.state.Retries = 0
+		manager.state.Failed = false
+		_ = manager.saveLocked()
+		manager.mu.Unlock()
+		msg, err := manager.cycleWith(config, func() (remoteStore, error) { return store, nil })
+		now := time.Now()
+		manager.mu.Lock()
+		manager.state.Last = now
+		if !manager.config.Enabled || !manager.config.Automatic {
+			manager.state.Next = time.Time{}
+		} else {
+			manager.state.Next = nextSyncTime(manager.config, now)
+		}
+		if err != nil {
+			manager.state.Failed = true
+			manager.state.Message = err.Error()
+		} else {
+			manager.state.Failed = false
+			manager.state.Message = msg
+		}
+		_ = manager.saveLocked()
+		snap := manager.state
+		manager.mu.Unlock()
+		manager.publish()
+		if err != nil {
+			failedSnap = &snap
+			return "", nil, err
+		}
+		return msg, func() {
+			s.autoSyncStatus = snap
+			s.syncFailedDevice = nil
+		}, nil
+	}, func() {
+		if failedSnap != nil {
+			s.autoSyncStatus = *failedSnap
+		}
+	})
+}
+
+func (s *settings) resetCloudWithLocal() {
+	manager := s.autoSync
+	config := s.sync
+	id := s.sync.DeviceID
+	s.syncTask("plan", "正在以本机数据重置云端", func(store remoteStore) (string, func(), error) {
+		beforeFile, err := tempSnapshot()
+		if err != nil {
+			return "", nil, err
+		}
+		defer os.Remove(beforeFile)
+		if _, err := s.backend.Call(op("export_settings", "path", beforeFile)); err != nil {
+			return "", nil, fmt.Errorf("生成恢复前备份失败：%w", err)
+		}
+		if err := preserveSyncBackup(s.syncDataDir(), beforeFile); err != nil {
+			return "", nil, err
+		}
+		if _, err := s.backend.Call(op("reset_sync_records")); err != nil {
+			return "", nil, fmt.Errorf("重置本机同步记录失败：%w", err)
+		}
+		freshFile, err := tempSnapshot()
+		if err != nil {
+			return "", nil, err
+		}
+		defer os.Remove(freshFile)
+		response, err := s.backend.Call(op("export_sync_settings", "path", freshFile))
+		if err != nil {
+			return "", nil, fmt.Errorf("生成同步备份失败：%w", err)
+		}
+		hash, err := snapshotHash(freshFile)
+		if err != nil {
+			return "", nil, err
+		}
+		if err := clearRemoteSnapshots(store); err != nil {
+			return "", nil, err
+		}
+		version := syncVersion{Modified: response.ModifiedUnixMS, Origin: id, Hash: hash}
+		if manager != nil {
+			manager.mu.Lock()
+			version = localSyncVersion(&manager.state.Checkpoint, syncTarget(config), hash, response.ModifiedUnixMS, id)
+			manager.state.Checkpoint.Version = version
+			err = manager.saveLocked()
+			manager.mu.Unlock()
+			if err != nil {
+				return "", nil, err
+			}
+		}
+		hostname, _ := os.Hostname()
+		device, err := uploadVersionedSnapshot(store, id, hostname, freshFile, time.Now(), version, config.KeepSnapshots)
+		if err != nil {
+			return "", nil, err
+		}
+		devices, _ := listDevices(store)
+		var snap *autoSyncState
+		if manager != nil {
+			now := time.Now()
+			manager.mu.Lock()
+			manager.state.Failed = false
+			manager.state.Retries = 0
+			manager.state.Last = now
+			manager.state.Message = "已用本机数据重置云端同步"
+			if !manager.config.Enabled || !manager.config.Automatic {
+				manager.state.Next = time.Time{}
+			} else {
+				manager.state.Next = nextSyncTime(manager.config, now)
+			}
+			_ = manager.saveLocked()
+			copied := manager.state
+			snap = &copied
+			manager.mu.Unlock()
+			manager.publish()
+		}
+		return fmt.Sprintf("已以本机数据重置云端；%s", sizeText(device.Size)), func() {
+			s.cancelSyncPreview()
+			s.syncFailedDevice = nil
+			if devices != nil {
+				s.syncDevices, s.syncListed = devices, true
+			}
+			if snap != nil {
+				s.autoSyncStatus = *snap
+			}
+		}, nil
+	})
+}
+
+func (s *settings) forceRestoreSync(device syncDevice) {
+	s.syncTaskWithError("transfer", "正在忽略同步记录并按正文恢复", func(store remoteStore) (string, func(), error) {
+		incoming, err := tempSnapshot()
+		if err != nil {
+			return "", nil, err
+		}
+		defer os.Remove(incoming)
+		expected, err := tempSnapshot()
+		if err != nil {
+			return "", nil, err
+		}
+		defer os.Remove(expected)
+		if err := downloadSnapshot(store, device, incoming); err != nil {
+			return "", nil, err
+		}
+		if _, err := s.backend.Call(op("export_settings", "path", expected)); err != nil {
+			return "", nil, err
+		}
+		if err := preserveSyncBackup(s.syncDataDir(), expected); err != nil {
+			return "", nil, err
+		}
+		response, err := s.backend.Call(op("import_sync_settings", "path", incoming, "expected_path", expected, "ignore_records", true))
+		if err != nil {
+			return "", nil, err
+		}
+		var snap *autoSyncState
+		if s.autoSync != nil {
+			s.autoSync.mu.Lock()
+			s.autoSync.state.Failed = false
+			s.autoSync.state.Retries = 0
+			s.autoSync.state.Checkpoint = syncCheckpoint{Target: syncTarget(s.sync)}
+			s.autoSync.state.Message = "已恢复 " + deviceName(device) + " 的备份"
+			_ = s.autoSync.saveLocked()
+			copied := s.autoSync.state
+			snap = &copied
+			s.autoSync.mu.Unlock()
+			s.autoSync.publish()
+		}
+		return "已按正文恢复 " + deviceName(device) + " 的备份，并重建同步记录", func() {
+			s.syncFailedDevice = nil
+			s.cancelSyncPreview()
+			s.applyRestored(response)
+			if snap != nil {
+				s.autoSyncStatus = *snap
+			}
+		}, nil
+	}, func() {
+		failed := device
+		s.syncFailedDevice = &failed
 	})
 }
 

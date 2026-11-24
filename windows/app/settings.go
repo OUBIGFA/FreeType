@@ -131,6 +131,9 @@ type settings struct {
 	syncMessageArea                   string
 	showSyncHelp                      bool
 	syncFailed                        bool
+	syncFailedDevice                  *syncDevice
+	confirmSyncResetCloud             bool
+	confirmForceRestore               bool
 	syncDevices                       []syncDevice
 	syncListed                        bool
 	syncRestore                       syncDevice

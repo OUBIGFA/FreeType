@@ -492,8 +492,8 @@ var candidateSkinTemplates = []struct {
 }{
 	{"浅色蓝", CandidateSkin{Background: "#ffffff", Border: "#d6d6d6", Text: "#1f1f1f", Muted: "#616161", Accent: "#2b6ce6", AccentText: "#ffffff", AccentFill: true}},
 	{"深色蓝", CandidateSkin{Background: "#24262b", Border: "#3e424b", Text: "#eef0f4", Muted: "#9aa0ac", Accent: "#2f70e8", AccentText: "#ffffff", AccentFill: true}},
-	{"浅色绿", CandidateSkin{Background: "#ffffff", Border: "#d6d6d6", Text: "#1f1f1f", Muted: "#616161", Accent: "#0e8549", AccentText: "#ffffff", AccentFill: true}},
-	{"浅色粉", CandidateSkin{Background: "#ffffff", Border: "#e6d8de", Text: "#1f1f1f", Muted: "#6b5c63", Accent: "#c44569", AccentText: "#ffffff", AccentFill: true}},
+	{"柔和绿", CandidateSkin{Background: "#ffffff", Border: "#d6d6d6", Text: "#1f1f1f", Muted: "#616161", Accent: "#0e8549", AccentText: "#ffffff", AccentFill: true}},
+	{"玫瑰粉", CandidateSkin{Background: "#ffffff", Border: "#e6d8de", Text: "#1f1f1f", Muted: "#6b5c63", Accent: "#c44569", AccentText: "#ffffff", AccentFill: true}},
 	{"暖纸", CandidateSkin{Background: "#fbf8f1", Border: "#e2d9c8", Text: "#2c261f", Muted: "#7a7062", Accent: "#b45309", AccentText: "#ffffff", AccentFill: true}},
 	{"石墨", CandidateSkin{Background: "#1e1e24", Border: "#383844", Text: "#ebebf0", Muted: "#9595a6", Accent: "#6366f1", AccentText: "#ffffff", AccentFill: true}},
 }
@@ -553,18 +553,19 @@ func candidateStyle(id string, dark bool) selectedLook {
 	switch id {
 	case "blue":
 		if dark {
-			return selectedLook{true, ui.Hex("#2f70e8"), ui.Hex("#ffffff")}
+			return selectedLook{true, ui.Hex("#3d7ff0"), ui.Hex("#18181b")}
 		}
 		return selectedLook{true, ui.Hex("#2b6ce6"), ui.Hex("#ffffff")}
 	case "green":
-		return selectedLook{true, ui.Hex("#0e8549"), ui.Hex("#ffffff")}
+		// 微信绿保留绿底白字。
+		return selectedLook{true, ui.Hex("#03d468"), ui.Hex("#ffffff")}
 	case "sogou":
 		if dark {
 			return selectedLook{false, ui.Color{}, ui.Hex("#6c9eff")}
 		}
 		return selectedLook{false, ui.Color{}, ui.Hex("#1d66df")}
 	default:
-		return selectedLook{true, ui.Hex("#c44569"), ui.Hex("#ffffff")}
+		return selectedLook{true, brandPink, ui.Hex("#18181b")}
 	}
 }
 

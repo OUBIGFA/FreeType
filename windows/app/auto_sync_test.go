@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -532,5 +533,122 @@ func TestAutoSyncPublishesLaterRevertEvenWhenCloudHasSameContent(t *testing.T) {
 	}
 	if newestSyncDevice(devices).Modified != 200 {
 		t.Fatal("相同内容不能掩盖较晚的主动恢复", devices)
+	}
+}
+
+func TestSyncRecoveryUIResetsLocalRecordsResetsCloudAndForceRestores(t *testing.T) {
+	s, b := newTestSettings()
+	s.syncDir = t.TempDir()
+	s.loadSync()
+	s.sync.Enabled, s.sync.DeviceID = true, deviceA
+	if !s.saveSync() {
+		t.Fatal(s.syncMessage)
+	}
+	store := &memStore{files: map[string][]byte{
+		"sync-20260101000000-bad.json":           []byte("corrupt"),
+		"devices/" + deviceB + ".json":           []byte("legacy-index"),
+		"devices/" + deviceB + "/100-1.json":     []byte("legacy-snap"),
+		"notes.txt":                              []byte("keep-unrelated-user-file"),
+	}}
+	s.newStore = func(syncSettings) (remoteStore, error) { return store, nil }
+	manager, err := newAutoSync(s.syncDir, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.openStore = func(syncSettings) (remoteStore, error) { return store, nil }
+	s.autoSync = manager
+	s.autoSyncStatus = autoSyncState{Failed: true, Message: "同步记录与备份正文不一致"}
+	s.page = "sync"
+
+	tt := ui.NewTester(s.view, 1000, 1800)
+	tt.Frame()
+	for _, label := range []string{"重建本机同步记录并重试", "查看云端备份", "以本机数据重置云端"} {
+		if !tt.HasText(label) {
+			t.Fatalf("同步报错后应提供解决按钮「%s」：%q", label, tt.Texts())
+		}
+	}
+
+	// 1. 先测试「以本机数据重置云端」（含二次确认、本地保底备份、清理 FreeType 云端旧文件、保留无关文件）
+	if err := tt.Click("以本机数据重置云端"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !tt.HasText("确认以本机重置云端") {
+		t.Fatal("点击重置云端后应先显示确认按钮")
+	}
+	if err := tt.Click("确认以本机重置云端"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if b.last("reset_sync_records") == nil {
+		t.Fatal("重置云端应先重置本机同步记录")
+	}
+	if s.autoSyncStatus.Failed {
+		t.Fatalf("重置云端完成后应清除错误状态：%+v", s.autoSyncStatus)
+	}
+	if string(store.files["notes.txt"]) != "keep-unrelated-user-file" {
+		t.Fatal("重置云端不能误删同目录下的其他用户文件")
+	}
+	for key := range store.files {
+		if strings.HasPrefix(key, "devices/") || strings.HasPrefix(key, "sync-20260101000000-bad") {
+			t.Fatalf("重置云端未清理旧云端备份：%s", key)
+		}
+	}
+	backups, err := os.ReadDir(filepath.Join(s.syncDir, "sync-backups"))
+	if err != nil || len(backups) == 0 {
+		t.Fatalf("重置云端前必须在本机保留恢复前备份：%v", err)
+	}
+
+	// 2. 测试「重建本机同步记录并重试」
+	beforeCalls := len(b.calls)
+	s.autoSyncStatus = autoSyncState{Failed: true, Message: "同步记录与备份正文不一致"}
+	tt.Frame()
+	if err := tt.Click("重建本机同步记录并重试"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	foundReset := false
+	for _, call := range b.calls[beforeCalls:] {
+		if call["op"] == "reset_sync_records" {
+			foundReset = true
+		}
+	}
+	if !foundReset || s.autoSyncStatus.Failed {
+		t.Fatalf("重建本机记录并重试未执行或仍失败：reset=%v status=%+v", foundReset, s.autoSyncStatus)
+	}
+
+	// 3. 测试从云端备份预览失败（同步记录不一致）后「忽略同步记录并恢复」
+	remote := filepath.Join(t.TempDir(), "remote.json")
+	if err := os.WriteFile(remote, []byte(`{"format":"freetype-settings","version":1}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	hash, _ := snapshotHash(remote)
+	badDev, err := uploadVersionedSnapshot(store, deviceB, "坏记录电脑", remote, time.Now(), syncVersion{Modified: 200, Origin: deviceB, Hash: hash}, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.syncDevices, s.syncListed = []syncDevice{badDev}, true
+	b.failRequest = "preview_sync_merge"
+	s.previewSync(badDev)
+	b.failRequest = ""
+	s.syncMessage = "同步记录与备份正文不一致"
+	tt.Frame()
+	if !tt.HasText("忽略同步记录并恢复") {
+		t.Fatalf("预览失败后应出现按正文恢复按钮：%q", tt.Texts())
+	}
+	if err := tt.Click("忽略同步记录并恢复"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if err := tt.Click("确认按正文恢复"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	lastImport := b.last("import_sync_settings")
+	if lastImport == nil || lastImport["ignore_records"] != true {
+		t.Fatalf("按正文恢复必须传 ignore_records=true：%v", lastImport)
+	}
+	if len(s.common) != 1 || s.common[0] != "按正文恢复的常用语" {
+		t.Fatalf("按正文恢复后界面未刷新：%v", s.common)
 	}
 }

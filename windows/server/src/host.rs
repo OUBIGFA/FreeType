@@ -1407,7 +1407,32 @@ impl Host {
         response
     }
 
-    fn import_sync_settings(&mut self, path: &Path, expected_path: &Path) -> Response {
+    fn reset_sync_records(&mut self) -> Response {
+        if self.clients.values().any(|client| client.state.busy()) {
+            return Response::error("正在输入，请结束输入后再重置同步记录");
+        }
+        let Some(engine) = self.engine.as_deref() else {
+            return Response::error("词库还在载入，请稍后再试");
+        };
+        let (text, _) = match backup::snapshot(&self.store, &self.config, self.mode, &self.recent_emoji, engine) {
+            Ok(snapshot) => snapshot,
+            Err(error) => return Response::error(error),
+        };
+        let mut snapshot: serde_json::Value = match serde_json::from_str(&text) {
+            Ok(value) => value,
+            Err(error) => return Response::error(error.to_string()),
+        };
+        let stamp = match backup::modified_unix_ms(&self.store, &self.config) {
+            Ok(mtime) => wowtype_core::now_ms().max(mtime).max(self.sync_modified_ms),
+            Err(error) => return Response::error(error),
+        };
+        if let Err(error) = crate::sync_merge::reset(&self.store, &mut snapshot, stamp) {
+            return Response::error(error);
+        }
+        Response::ok()
+    }
+
+    fn import_sync_settings(&mut self, path: &Path, expected_path: &Path, ignore_records: bool) -> Response {
         if self.clients.values().any(|client| client.state.busy()) {
             return Response::error("正在输入，自动同步将在稍后重试");
         }
@@ -1424,6 +1449,17 @@ impl Host {
         let expected: serde_json::Value = match serde_json::from_str(&expected) { Ok(value) => value, Err(error) => return Response::error(error.to_string()) };
         if crate::sync_merge::without_records(actual) != crate::sync_merge::without_records(expected) { return Response::error("本机数据在下载期间已修改，将重新比较版本"); }
         // 检查和恢复在同一宿主请求中完成，期间不处理其他输入或设置修改。
+        if ignore_records {
+            let prepared = match backup::read_ignoring_records(path) {
+                Ok(prepared) => prepared,
+                Err(error) => return Response::error(error),
+            };
+            let response = self.import_prepared(prepared);
+            if response.ok {
+                let _ = std::fs::remove_file(self.store.dir().join("sync-records.json"));
+            }
+            return response;
+        }
         self.import_settings(path)
     }
 
@@ -1461,12 +1497,13 @@ impl Host {
             | Request::SetCommonPhrases { .. } | Request::ImportCommonPhrases { .. }
             | Request::ImportDictionary { .. } | Request::RemoveDictionary { .. }
             | Request::UpdateDictionary { .. } | Request::DeleteDictionaryEntries { .. }
-            | Request::MergeSyncSettings { .. } | Request::ImportSyncSettings { .. }
+            | Request::MergeSyncSettings { .. } | Request::ImportSyncSettings { .. } | Request::ResetSyncRecords
             | Request::ImportLearning { .. } | Request::ImportSettings { .. } | Request::MergeSettings { .. }
             | Request::ForgetWords { .. } | Request::AddUserWord { .. } | Request::ClearLearned
             | Request::ToggleMode { .. } | Request::Command { .. } | Request::Reload);
         let record_edit = may_edit && !matches!(&request,
-            Request::ToggleMode { .. } | Request::Command { command: Command::OpenSettings | Command::Toolbar | Command::EmojiPanel | Command::EnglishCandidates | Command::RadicalLookup });
+            Request::ResetSyncRecords
+            | Request::ToggleMode { .. } | Request::Command { command: Command::OpenSettings | Command::Toolbar | Command::EmojiPanel | Command::EnglishCandidates | Command::RadicalLookup });
         let user_restore = matches!(&request, Request::ImportSettings { .. } | Request::ImportSyncSettings { .. } | Request::ImportLearning { .. });
         let scan = match &request {
             Request::PhysicalKey { key, scan, .. } if !key.test => Some(*scan),
@@ -1770,7 +1807,8 @@ impl Host {
                 self.export_settings(Path::new(&path), parts.as_deref().unwrap_or(&BackupPart::ALL))
             }
             Request::ExportSyncSettings { path } => self.export_sync_settings(Path::new(&path)),
-            Request::ImportSyncSettings { path, expected_path } => self.import_sync_settings(Path::new(&path), Path::new(&expected_path)),
+            Request::ImportSyncSettings { path, expected_path, ignore_records } => self.import_sync_settings(Path::new(&path), Path::new(&expected_path), ignore_records),
+            Request::ResetSyncRecords => self.reset_sync_records(),
             Request::InspectSettingsBackup { path } => Self::report(backup::read(Path::new(&path)).map(|data| data.report())),
             Request::ImportSettings { path } => self.import_settings(Path::new(&path)),
             Request::PreviewSyncMerge { path } => match self.prepare_sync_merge(Path::new(&path), None) {

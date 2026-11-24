@@ -335,6 +335,27 @@ func (a *autoSync) stillConfigured(c syncSettings) bool {
 }
 
 func (a *autoSync) cycle(c syncSettings) (string, error) {
+	return a.cycleWith(c, func() (remoteStore, error) {
+		store, err := a.openStore(c)
+		if err != nil {
+			return nil, err
+		}
+		// 后台请求必须有结束时间，否则一次断网会永久占用同步队列。
+		switch s := store.(type) {
+		case *webdavStore:
+			s.client.Timeout = 2 * time.Minute
+		case *s3Store:
+			s.client.Timeout = 2 * time.Minute
+		}
+		// 超时按具体的存储设好以后，再套上加密层。
+		if c.Encrypt && c.EncryptPassword == "" {
+			return nil, errNoPassword
+		}
+		return withBackupPassword(store, c), nil
+	})
+}
+
+func (a *autoSync) cycleWith(c syncSettings, connect func() (remoteStore, error)) (string, error) {
 	if err := validateSyncPlan(c); err != nil {
 		return "", err
 	}
@@ -365,22 +386,10 @@ func (a *autoSync) cycle(c syncSettings) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	store, err := a.openStore(c)
+	store, err := connect()
 	if err != nil {
 		return "", err
 	}
-	// 后台请求必须有结束时间，否则一次断网会永久占用同步队列。
-	switch s := store.(type) {
-	case *webdavStore:
-		s.client.Timeout = 2 * time.Minute
-	case *s3Store:
-		s.client.Timeout = 2 * time.Minute
-	}
-	// 超时按具体的存储设好以后，再套上加密层。
-	if c.Encrypt && c.EncryptPassword == "" {
-		return "", errNoPassword
-	}
-	store = withBackupPassword(store, c)
 	devices, err := readDevices(store, true)
 	if err != nil {
 		return "", err

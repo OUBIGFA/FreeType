@@ -149,16 +149,16 @@ func (s *settings) syncPage(c *ui.Context) {
 							}
 						}
 						if ui.PrimaryButton(c, "立即同步").Disabled(busy || s.autoSync == nil).Clicked() {
-							s.syncMessageArea = "plan"
-							if s.saveSync() {
-								go s.autoSync.run(time.Now(), true)
-							}
+							s.retrySync()
 						}
 						if ui.Button(c, "打开恢复前备份").Clicked() && s.openFolder != nil {
 							s.openFolder(filepath.Join(s.syncDataDir(), "sync-backups"))
 						}
 					})
 					s.syncFeedback(c, "plan")
+					if !s.autoSyncStatus.Failed && s.syncMessageArea == "plan" && s.syncFailed && s.syncMessage != "" {
+						s.syncRecoveryActions(c, "plan", s.syncMessage, busy)
+					}
 				})
 			})
 		})
@@ -175,7 +175,12 @@ func (s *settings) syncPage(c *ui.Context) {
 						s.uploadSync()
 					}
 				})
-				ui.Column(c).Padding(0, 0).Children(func() { s.syncFeedback(c, "transfer") })
+				ui.Column(c).FillWidth().Padding(0, 0).Gap(8).Children(func() {
+					s.syncFeedback(c, "transfer")
+					if (s.syncMessageArea == "transfer" || s.syncMessageArea == "") && s.syncFailed && s.syncMessage != "" {
+						s.syncRecoveryActions(c, "transfer", s.syncMessage, busy)
+					}
+				})
 			}, hasDevices, func() {
 				if s.syncListed && len(s.syncDevices) == 0 {
 					ui.Text(c, "云端还没有备份").FontSize(textSize(c, 12.5)).TextColor(colors(c).muted).Wrap().Padding(8, 0)
@@ -307,6 +312,9 @@ func (s *settings) syncStatusSummary(c *ui.Context) {
 	p := colors(c)
 	ui.Column(c).FillWidth().Gap(10).Padding(0, 0, 12, 0).BorderWidth(0, 0, 1, 0).BorderColor(p.subBorder).Children(func() {
 		ui.Text(c, message).FontSize(textSize(c, 14)).FontWeight(600).TextColor(color).LineHeight(1.4).Wrap()
+		if status.Failed {
+			s.syncRecoveryActions(c, "plan", message, s.syncBusy != "" || status.Busy)
+		}
 		ui.Row(c).Gap(16).Wrap().AlignItems(ui.Start).Children(func() {
 			for _, item := range []struct {
 				label string
@@ -332,5 +340,128 @@ func (s *settings) syncStatusSummary(c *ui.Context) {
 				ui.Text(c, fmt.Sprintf("%d 次", status.Count)).FontSize(textSize(c, 18)).FontWeight(600).FontFeatures("tnum")
 			})
 		})
+	})
+}
+
+func (s *settings) syncRecoveryActions(c *ui.Context, area, message string, busy bool) {
+	p := colors(c)
+	kind := classifySyncProblem(message)
+	var guidance string
+	switch kind {
+	case syncProblemRecordsMismatch:
+		guidance = "同步记录与当前数据不一致，可能是跨版本同步或记录文件损坏；可先重建本机记录后重试，仍失败时可按本机或云端备份重置"
+	case syncProblemCorruptRemote:
+		guidance = "云端备份文件可能未传完、被修改或已损坏；可刷新设备列表确认，或用本机数据重新初始化云端"
+	case syncProblemPassword:
+		guidance = "云端存在加密备份或备份密码不匹配；请先核对并保存备份密码后再重试，若已遗忘密码可用本机数据重置云端"
+	case syncProblemConnection:
+		guidance = "无法连接同步服务或凭据权限不足；请检查地址、账号密码与网络后再重试"
+	case syncProblemTransient:
+		guidance = "同步期间本机或云端数据发生变化，或正在输入中；可直接重试一次"
+	default:
+		guidance = "同步未能完成；可先重试一次，仍失败时可重建本机同步记录或以本机数据重置云端"
+	}
+	ui.Column(c).Key("sync-recovery-" + area).FillWidth().Padding(10, 12).Radius(controlRadius).
+		Background(p.card).Border(1, p.subBorder).Gap(8).Children(func() {
+		ui.Text(c, guidance).FontSize(textSize(c, 12.5)).TextColor(p.muted).LineHeight(1.45).Wrap()
+		ui.Row(c).FillWidth().Wrap().GapX(8).GapY(8).AlignItems(ui.Center).Children(func() {
+			switch kind {
+			case syncProblemRecordsMismatch:
+				if ui.Button(c, "重建本机同步记录并重试").Disabled(busy).Clicked() {
+					s.repairLocalSyncRecordsAndRetry()
+				}
+				if area == "transfer" && s.syncFailedDevice != nil {
+					if ui.Button(c, "忽略同步记录并恢复").Disabled(busy).Clicked() {
+						s.confirmForceRestore = true
+						s.confirmSyncResetCloud = false
+					}
+				} else if area == "plan" {
+					if ui.Button(c, "查看云端备份").Disabled(busy).Clicked() {
+						s.locateSetting(setting("sync/上传与恢复"))
+						s.refreshSyncDevices()
+					}
+				}
+				if ui.Button(c, "以本机数据重置云端").Disabled(busy).Clicked() {
+					s.confirmSyncResetCloud = true
+					s.confirmForceRestore = false
+				}
+			case syncProblemCorruptRemote:
+				if ui.Button(c, "刷新设备列表").Disabled(busy).Clicked() {
+					s.refreshSyncDevices()
+				}
+				if ui.Button(c, "以本机数据重置云端").Disabled(busy).Clicked() {
+					s.confirmSyncResetCloud = true
+					s.confirmForceRestore = false
+				}
+			case syncProblemPassword:
+				if ui.Button(c, "填写备份密码").Disabled(busy).Clicked() {
+					s.locateSetting(setting("sync/备份密码"))
+				}
+				if ui.Button(c, "重试同步").Disabled(busy || s.autoSync == nil).Clicked() {
+					s.retrySync()
+				}
+				if ui.Button(c, "以本机数据重置云端").Disabled(busy).Clicked() {
+					s.confirmSyncResetCloud = true
+					s.confirmForceRestore = false
+				}
+			case syncProblemConnection:
+				if ui.Button(c, "定位到同步服务").Disabled(busy).Clicked() {
+					s.locateSetting(setting("sync/同步服务"))
+				}
+				if ui.Button(c, "测试连接").Disabled(busy).Clicked() {
+					s.testSync()
+				}
+				if ui.Button(c, "重试同步").Disabled(busy || s.autoSync == nil).Clicked() {
+					s.retrySync()
+				}
+			case syncProblemTransient:
+				if area == "transfer" && s.syncFailedDevice != nil {
+					if ui.Button(c, "重新预览").Disabled(busy).Clicked() {
+						s.previewSync(*s.syncFailedDevice)
+					}
+				} else if ui.Button(c, "立即重试").Disabled(busy || s.autoSync == nil).Clicked() {
+					s.retrySync()
+				}
+			default:
+				if ui.Button(c, "立即重试").Disabled(busy || s.autoSync == nil).Clicked() {
+					s.retrySync()
+				}
+				if ui.Button(c, "重建本机同步记录并重试").Disabled(busy).Clicked() {
+					s.repairLocalSyncRecordsAndRetry()
+				}
+				if ui.Button(c, "以本机数据重置云端").Disabled(busy).Clicked() {
+					s.confirmSyncResetCloud = true
+					s.confirmForceRestore = false
+				}
+			}
+		})
+		if s.confirmSyncResetCloud {
+			ui.Column(c).FillWidth().Padding(8, 10).Radius(controlRadius).Background(p.subtle).Border(1, p.subBorder).Gap(8).Children(func() {
+				ui.Text(c, "将先在本机保存恢复前备份，再删除云端旧同步文件并上传当前数据；其他电脑的旧备份将被清理，请确认本机数据完整后再继续").
+					FontSize(textSize(c, 12.5)).LineHeight(1.45).Wrap()
+				ui.Row(c).FillWidth().Wrap().Gap(8).Children(func() {
+					if ui.Button(c, "取消").Disabled(busy).Clicked() {
+						s.confirmSyncResetCloud = false
+					}
+					if ui.PrimaryButton(c, "确认以本机重置云端").Disabled(busy).Clicked() {
+						s.resetCloudWithLocal()
+					}
+				})
+			})
+		}
+		if s.confirmForceRestore && s.syncFailedDevice != nil && area == "transfer" {
+			ui.Column(c).FillWidth().Padding(8, 10).Radius(controlRadius).Background(p.subtle).Border(1, p.subBorder).Gap(8).Children(func() {
+				ui.Text(c, "将先保存本机恢复前备份，再忽略该备份的同步记录并按正文整份替换本机数据，同时重建同步记录").
+					FontSize(textSize(c, 12.5)).LineHeight(1.45).Wrap()
+				ui.Row(c).FillWidth().Wrap().Gap(8).Children(func() {
+					if ui.Button(c, "取消").Disabled(busy).Clicked() {
+						s.confirmForceRestore = false
+					}
+					if ui.PrimaryButton(c, "确认按正文恢复").Disabled(busy).Clicked() {
+						s.forceRestoreSync(*s.syncFailedDevice)
+					}
+				})
+			})
+		}
 	})
 }

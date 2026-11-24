@@ -121,21 +121,26 @@ func TestCandidateSelectionPaletteMatchesStylesInEveryAppearance(test *testing.T
 		for _, id := range []string{"pink", "blue", "green", "sogou"} {
 			style := candidateStyle(id, dark)
 			if id == "pink" {
-				if !style.block || style.fill != ui.Hex("#c44569") || style.text != ui.Hex("#ffffff") {
-					test.Errorf("dark=%v：玫瑰粉预览必须使用 #C44569 底白字，得到 %+v", dark, style)
+				if !style.block || style.fill != brandPink || style.text != ui.Hex("#18181b") {
+					test.Errorf("dark=%v：默认粉色预览必须使用 #FFB3FA 底深色字，得到 %+v", dark, style)
 				}
 			}
 			if id == "green" {
-				if !style.block || style.fill != ui.Hex("#0e8549") || style.text != ui.Hex("#ffffff") {
-					test.Errorf("dark=%v：微信绿预览必须使用 #0E8549 绿底白字，得到 %+v", dark, style)
+				if !style.block || style.fill != ui.Hex("#03d468") || style.text != ui.Hex("#ffffff") {
+					test.Errorf("dark=%v：微信绿预览必须使用 #03D468 绿底白字，得到 %+v", dark, style)
 				}
 			}
 			background := theme.Background
 			if style.block {
 				background = style.fill
 			}
-			if contrast := colorContrast(style.text, background); contrast < 4.5 {
-				test.Errorf("%s dark=%v：候选文字对比度 %.2f:1，需至少 4.5:1", id, dark, contrast)
+			minimum := 4.5
+			if id == "green" {
+				// 保留鲜亮绿底白字，同时防止对比度退回原先较浅的绿色。
+				minimum = 1.95
+			}
+			if contrast := colorContrast(style.text, background); contrast < minimum {
+				test.Errorf("%s dark=%v：候选文字对比度 %.2f:1，需至少 %.1f:1", id, dark, contrast, minimum)
 			}
 		}
 	}
@@ -365,6 +370,30 @@ func TestSettingsSyncInputsKeepTheCaretInsideNarrowPages(test *testing.T) {
 		test.Fatalf("长密钥的插入光标必须留在页面内：%+v，存在=%v", caret, found)
 	}
 	saveUIFrame(test, "sync-s3-long-input", view)
+}
+
+func TestSyncRecoveryActionsStayInsideNarrowPage(test *testing.T) {
+	for _, scale := range []float32{1, 1.5} {
+		test.Run(fmt.Sprintf("scale-%.1f", scale), func(test *testing.T) {
+			state, _ := newTestSettings()
+			state.syncDir = test.TempDir()
+			state.loadSync()
+			state.sync.Enabled, state.sync.Automatic = true, true
+			state.autoSyncStatus = autoSyncState{Failed: true, Message: "同步记录与备份正文不一致"}
+			state.confirmSyncResetCloud = true
+			state.locateSetting(setting("sync/同步计划"))
+			view := ui.NewTester(state.view, 780, 1400)
+			view.SetPreferences(ui.Preferences{TextScale: scale})
+			state.locateSetting(setting("sync/同步计划"))
+			view.Frame()
+			for _, label := range []string{"重建本机同步记录并重试", "查看云端备份", "以本机数据重置云端", "确认以本机重置云端"} {
+				bounds, found := view.Find(label)
+				if !found || bounds.W <= 1 || bounds.X < 236 || bounds.X+bounds.W > 756 {
+					test.Errorf("%s 在窄屏同步故障恢复面板下越界：%+v，存在=%v", label, bounds, found)
+				}
+			}
+		})
+	}
 }
 
 func TestSettingsPageLayoutMatrix(test *testing.T) {

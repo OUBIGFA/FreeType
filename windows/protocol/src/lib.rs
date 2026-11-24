@@ -930,7 +930,14 @@ pub enum Request {
     /// 自动同步的完整快照及数据修改时间；导出本身不算修改。
     ExportSyncSettings { path: String },
     /// 仅当当前数据仍与 expected_path 一致且没有组字时整份恢复。
-    ImportSyncSettings { path: String, expected_path: String },
+    ImportSyncSettings {
+        path: String,
+        expected_path: String,
+        #[serde(default)]
+        ignore_records: bool,
+    },
+    /// 重建本机同步变更记录，用于同步记录损坏或与正文不一致时恢复。
+    ResetSyncRecords,
     InspectSettingsBackup { path: String },
     ImportSettings { path: String },
     PreviewSyncMerge { path: String },
@@ -1406,6 +1413,26 @@ mod tests {
             decode::<Request>(br#"{"op":"command","command":"toggle_punct"}"#).unwrap(),
             Request::Command {
                 command: Command::TogglePunct
+            }
+        );
+        assert_eq!(
+            decode::<Request>(br#"{"op":"reset_sync_records"}"#).unwrap(),
+            Request::ResetSyncRecords
+        );
+        assert_eq!(
+            decode::<Request>(br#"{"op":"import_sync_settings","path":"a.json","expected_path":"b.json"}"#).unwrap(),
+            Request::ImportSyncSettings {
+                path: "a.json".into(),
+                expected_path: "b.json".into(),
+                ignore_records: false,
+            }
+        );
+        assert_eq!(
+            decode::<Request>(br#"{"op":"import_sync_settings","path":"a.json","expected_path":"b.json","ignore_records":true}"#).unwrap(),
+            Request::ImportSyncSettings {
+                path: "a.json".into(),
+                expected_path: "b.json".into(),
+                ignore_records: true,
             }
         );
     }

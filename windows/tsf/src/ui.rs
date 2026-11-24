@@ -210,17 +210,19 @@ fn theme_for_appearance(style: &str, custom: Option<&CandidateSkin>, light: bool
         };
         return Theme { background, border, text, muted, hover, accent, accent_text, emphasis };
     }
+    let wechat_green = rgb(0x03, 0xd4, 0x68);
     // (底色块, 块上的字, 提示字色)
     let (accent, accent_text, emphasis) = match (style, light) {
         ("blue", true) => (Some(rgb(0x2b, 0x6c, 0xe6)), white, rgb(0x2b, 0x6c, 0xe6)),
-        ("blue", false) => (Some(rgb(0x2f, 0x70, 0xe8)), white, rgb(0x6c, 0x9e, 0xff)),
-        ("green", true) => (Some(rgb(0x0e, 0x85, 0x49)), white, rgb(0x0e, 0x85, 0x49)),
-        ("green", false) => (Some(rgb(0x0e, 0x85, 0x49)), white, rgb(0x34, 0xc7, 0x7b)),
+        ("blue", false) => (Some(rgb(0x3d, 0x7f, 0xf0)), rgb(0x18, 0x18, 0x1b), rgb(0x6c, 0x9e, 0xff)),
+        // 微信绿候选保留绿底白字；浅色主题的单字提示仍用深绿。
+        ("green", true) => (Some(wechat_green), white, rgb(0x06, 0x82, 0x4a)),
+        ("green", false) => (Some(wechat_green), white, wechat_green),
         ("sogou", true) => (None, rgb(0x1d, 0x66, 0xdf), rgb(0x1d, 0x66, 0xdf)),
         ("sogou", false) => (None, rgb(0x6c, 0x9e, 0xff), rgb(0x6c, 0x9e, 0xff)),
-        // 默认：沉稳玫瑰粉，底色与文字在浅色、深色模式下均保证 >= 4.5:1 对比度
-        (_, true) => (Some(rgb(0xc4, 0x45, 0x69)), white, rgb(0xc4, 0x45, 0x69)),
-        (_, false) => (Some(rgb(0xc4, 0x45, 0x69)), white, rgb(0xf0, 0x8c, 0xa9)),
+        // 默认：品牌粉色。粉色很浅，块上用深色字（和设置窗口一样）；提示字用深一档的粉
+        (_, true) => (Some(rgb(0xff, 0xb3, 0xfa)), rgb(0x18, 0x18, 0x1b), rgb(0xc0, 0x3c, 0xb4)),
+        (_, false) => (Some(rgb(0xff, 0xb3, 0xfa)), rgb(0x18, 0x18, 0x1b), rgb(0xff, 0xb3, 0xfa)),
     };
     // 鼠标停留的底用中性灰，几种强调色都配得上
     if light {

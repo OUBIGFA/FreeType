@@ -288,6 +288,19 @@ pub(crate) fn read(path: &Path) -> Result<PreparedBackup, String> {
     from_text(&text)
 }
 
+/// 忽略内嵌的 `sync_records` 只校验并解析备份正文，用于同步记录不一致时的主动整份恢复。
+pub(crate) fn read_ignoring_records(path: &Path) -> Result<PreparedBackup, String> {
+    let text = fs::read_to_string(path).map_err(|error| format!("读取全部设置备份失败：{error}"))?;
+    let mut value: Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
+        .map_err(|error| format!("全部设置备份格式不正确：{error}"))?;
+    if let Some(object) = value.as_object_mut() {
+        object.remove("sync_records");
+    }
+    let parts = present_parts(&mut value)?;
+    let data = serde_json::from_value(value).map_err(|error| format!("全部设置备份格式不正确：{error}"))?;
+    prepare(data, parts)
+}
+
 pub(crate) fn from_text(text: &str) -> Result<PreparedBackup, String> {
     let mut value: Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
         .map_err(|error| format!("全部设置备份格式不正确：{error}"))?;
