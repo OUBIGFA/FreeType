@@ -71,37 +71,51 @@ fn dictionary_annotations_fit_screen_width_without_changing_commit_candidates() 
 
 #[test]
 fn candidate_text_palette_matches_styles_in_both_appearances() {
-    fn luminance(color: COLORREF) -> f64 {
-        let linear = |value: u32| {
-            let value = f64::from(value) / 255.0;
-            if value <= 0.04045 { value / 12.92 } else { ((value + 0.055) / 1.055).powf(2.4) }
-        };
-        0.2126 * linear(color.0 & 255) + 0.7152 * linear((color.0 >> 8) & 255)
-            + 0.0722 * linear((color.0 >> 16) & 255)
-    }
-    fn contrast(first: COLORREF, second: COLORREF) -> f64 {
-        let (first, second) = (luminance(first), luminance(second));
-        (first.max(second) + 0.05) / (first.min(second) + 0.05)
-    }
     for light in [true, false] {
         for style in ["pink", "blue", "green", "sogou"] {
-            let palette = theme_for_appearance(style, light);
+            let palette = theme_for_appearance(style, None, light);
+            if style == "pink" {
+                assert_eq!(palette.accent, Some(rgb(0xc4, 0x45, 0x69)));
+                assert_eq!(palette.accent_text, rgb(0xff, 0xff, 0xff));
+            }
             if style == "green" {
-                assert_eq!(palette.accent, Some(rgb(0x03, 0xd4, 0x68)));
+                assert_eq!(palette.accent, Some(rgb(0x0e, 0x85, 0x49)));
                 assert_eq!(palette.accent_text, rgb(0xff, 0xff, 0xff));
             }
             for (name, text, background) in [
                 ("selected", palette.accent_text, palette.accent.unwrap_or(palette.background)),
                 ("muted", palette.muted, palette.background),
                 ("text", palette.text, palette.background),
+                ("emphasis", palette.emphasis, palette.background),
             ] {
-                let ratio = contrast(text, background);
-                // 保留鲜亮绿底白字，同时防止对比度退回原先较浅的绿色。
-                let minimum = if style == "green" && name == "selected" { 1.95 } else { 4.5 };
-                assert!(ratio >= minimum, "{style} light={light} {name}: {ratio:.2}:1");
+                let ratio = contrast_ratio(text, background);
+                assert!(ratio >= 4.5, "{style} light={light} {name}: {ratio:.2}:1");
             }
         }
     }
+    let custom_skin = CandidateSkin {
+        background: "#fbf8f1".into(),
+        border: "#e2d9c8".into(),
+        text: "#2c261f".into(),
+        muted: "#7a7062".into(),
+        accent: "#b45309".into(),
+        accent_text: "#ffffff".into(),
+        accent_fill: true,
+    };
+    let custom = theme_for_appearance("custom", Some(&custom_skin), true);
+    assert_eq!(custom.background, rgb(0xfb, 0xf8, 0xf1));
+    assert_eq!(custom.border, rgb(0xe2, 0xd9, 0xc8));
+    assert_eq!(custom.text, rgb(0x2c, 0x26, 0x1f));
+    assert_eq!(custom.muted, rgb(0x7a, 0x70, 0x62));
+    assert_eq!(custom.accent, Some(rgb(0xb4, 0x53, 0x09)));
+    assert_eq!(custom.accent_text, rgb(0xff, 0xff, 0xff));
+    assert_eq!(custom.hover, blend_rgb(custom.background, custom.text, 0.08));
+    assert_eq!(custom.emphasis, rgb(0xb4, 0x53, 0x09));
+
+    let no_fill = CandidateSkin { accent_fill: false, ..custom_skin.clone() };
+    let no_fill_theme = theme_for_appearance("custom", Some(&no_fill), true);
+    assert_eq!(no_fill_theme.accent, None);
+    assert_eq!(no_fill_theme.emphasis, no_fill_theme.text, "浅色高亮字对比度不足时提示字应回退到正文色");
 }
 
 pub(crate) struct PrivateDesktop {
@@ -520,4 +534,51 @@ fn candidate_window_updates_clicks_and_hides_on_a_private_desktop() {
     window.update(&Frame::default(), None);
     assert!(!window.visible());
     set_click_handler(None);
+}
+
+#[test]
+fn custom_candidate_skin_renders_configured_colors_and_block_toggle() {
+    let _desktop = PrivateDesktop::new();
+    let assert_close = |actual: [i32; 3], expected: [i32; 3], what: &str| {
+        for (a, e) in actual.iter().zip(expected.iter()) {
+            assert!((a - e).abs() <= 2, "{what}: actual={actual:?} expected={expected:?}");
+        }
+    };
+    let skin = CandidateSkin {
+        background: "#fbf8f1".into(),
+        border: "#e2d9c8".into(),
+        text: "#2c261f".into(),
+        muted: "#7a7062".into(),
+        accent: "#b45309".into(),
+        accent_text: "#ffffff".into(),
+        accent_fill: true,
+    };
+    let view = View {
+        preedit: "ni".into(),
+        candidates: vec!["你".into(), "拟".into()],
+        cursor: Some(0),
+        font_size: 18,
+        font_family: "Microsoft YaHei".into(),
+        candidate_style: "custom".into(),
+        candidate_skin: Some(skin.clone()),
+        ..View::default()
+    };
+    let (layout, pixels) = rendered(view.clone(), 1.0);
+    // DIB pixels are BGR; check window background, border, and selected block fill.
+    assert_close(pixel_at(&layout, &pixels, 2, 2), [0xf1, 0xf8, 0xfb], "窗口背景");
+    assert_close(pixel_at(&layout, &pixels, layout.width / 2, 0), [0xc8, 0xd9, 0xe2], "窗口边框");
+    let item = layout.items[0];
+    assert_close(pixel_at(&layout, &pixels, item.left + 2, item.top + 2), [0x09, 0x53, 0xb4], "选中底色块");
+
+    let no_fill = View {
+        candidate_skin: Some(CandidateSkin { accent_fill: false, ..skin }),
+        ..view
+    };
+    let (layout_no_fill, pixels_no_fill) = rendered(no_fill, 1.0);
+    let item_no_fill = layout_no_fill.items[0];
+    assert_close(
+        pixel_at(&layout_no_fill, &pixels_no_fill, item_no_fill.left + 2, item_no_fill.top + 2),
+        [0xf1, 0xf8, 0xfb],
+        "关闭底色块后选中项周围保持窗口背景",
+    );
 }

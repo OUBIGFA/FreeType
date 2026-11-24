@@ -398,10 +398,41 @@ fn letters_compose_and_space_commits() {
     assert!(frame.forgettable);
     assert_eq!(frame.font_family, freetype_protocol::DEFAULT_FONT);
     assert_eq!(frame.candidate_style, "pink", "候选窗拿到设置里的强调色，默认粉色");
+    assert_eq!(frame.candidate_skin, None, "内置样式不下发自定义皮肤颜色");
     let frame = press(&mut host, 0x20);
     assert_eq!(frame.commit.as_deref(), Some("你好"));
     assert!(frame.preedit.is_empty());
     assert!(frame.candidates.is_empty());
+    cleanup(&host);
+}
+
+#[test]
+fn custom_candidate_skin_is_sent_only_when_selected_and_preserved_in_config() {
+    let mut host = host("custom-skin");
+    configure(&mut host, |c| {
+        c.candidate_style = "custom".into();
+        c.candidate_skin = freetype_protocol::CandidateSkin {
+            background: " #FBF8F1 ".into(),
+            border: "#E2D9C8".into(),
+            text: "#2C261F".into(),
+            muted: "#7A7062".into(),
+            accent: "#B45309".into(),
+            accent_text: "#FFFFFF".into(),
+            accent_fill: false,
+        };
+    });
+    let frame = typing(&mut host, "ni");
+    assert_eq!(frame.candidate_style, "custom");
+    let skin = frame.candidate_skin.expect("选择自定义配色时应下发皮肤颜色");
+    assert_eq!(skin.background, "#fbf8f1");
+    assert_eq!(skin.accent, "#b45309");
+    assert!(!skin.accent_fill);
+
+    configure(&mut host, |c| c.candidate_style = "blue".into());
+    let frame = typing(&mut host, "h");
+    assert_eq!(frame.candidate_style, "blue");
+    assert_eq!(frame.candidate_skin, None);
+    assert_eq!(host.config.candidate_skin.background, "#fbf8f1", "切回内置样式后应保留自定义配色");
     cleanup(&host);
 }
 
@@ -1324,6 +1355,16 @@ fn settings_backup_restores_all_data_including_unsaved_learning_and_custom_lexic
         c.show_settings_after_update = true;
         c.brand_icon = "custom".into();
         c.custom_brand_icon = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==".into();
+        c.candidate_style = "custom".into();
+        c.candidate_skin = freetype_protocol::CandidateSkin {
+            background: "#24262b".into(),
+            border: "#3e424b".into(),
+            text: "#eef0f4".into(),
+            muted: "#9aa0ac".into(),
+            accent: "#2f70e8".into(),
+            accent_text: "#ffffff".into(),
+            accent_fill: false,
+        };
         c.lexicon = main_lexicon.to_string_lossy().into();
         c.default_mode = DefaultMode::Global;
     });
@@ -1353,6 +1394,9 @@ fn settings_backup_restores_all_data_including_unsaved_learning_and_custom_lexic
     assert_eq!(data["config"]["show_settings_after_update"], true);
     assert_eq!(data["config"]["brand_icon"], "custom");
     assert_eq!(data["config"]["custom_brand_icon"], source.config.custom_brand_icon);
+    assert_eq!(data["config"]["candidate_style"], "custom");
+    assert_eq!(data["config"]["candidate_skin"]["background"], "#24262b");
+    assert_eq!(data["config"]["candidate_skin"]["accent_fill"], false);
 
     let mut target = learning_host("settings-target");
     target.engine.as_ref().unwrap().record_selection_with_pinyin("旧词", Some("jiu ci"));
@@ -1369,6 +1413,8 @@ fn settings_backup_restores_all_data_including_unsaved_learning_and_custom_lexic
     assert!(target.config.show_settings_after_update, "全部设置备份也应恢复安装后显示设置页的开关");
     assert_eq!(target.config.brand_icon, "custom");
     assert_eq!(target.config.custom_brand_icon, source.config.custom_brand_icon);
+    assert_eq!(target.config.candidate_style, "custom");
+    assert_eq!(target.config.candidate_skin, source.config.candidate_skin);
     assert_eq!(target.mode, Mode::English);
     assert_eq!(target.store.list_quick_phrases()[0].text, "第一行\n第二行");
     assert_eq!(target.store.load_common_phrases().unwrap(), vec!["常用FreeType"]);

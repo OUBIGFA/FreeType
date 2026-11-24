@@ -10,7 +10,7 @@
 
 use std::cell::RefCell;
 
-use freetype_protocol::{CandidateAction, Frame, Panel};
+use freetype_protocol::{parse_hex_rgb, CandidateAction, CandidateSkin, Frame, Panel};
 use windows::core::{w, HSTRING, PCWSTR, Result};
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND};
@@ -135,6 +135,36 @@ fn rgb(r: u8, g: u8, b: u8) -> COLORREF {
     COLORREF(u32::from(r) | (u32::from(g) << 8) | (u32::from(b) << 16))
 }
 
+fn channels(color: COLORREF) -> (u8, u8, u8) {
+    ((color.0 & 0xff) as u8, ((color.0 >> 8) & 0xff) as u8, ((color.0 >> 16) & 0xff) as u8)
+}
+
+fn parse_color(hex: &str, fallback: COLORREF) -> COLORREF {
+    parse_hex_rgb(hex).map_or(fallback, |(r, g, b)| rgb(r, g, b))
+}
+
+fn blend_rgb(a: COLORREF, b: COLORREF, t: f32) -> COLORREF {
+    let (ar, ag, ab) = channels(a);
+    let (br, bg, bb) = channels(b);
+    let mix = |x: u8, y: u8| -> u8 {
+        (f32::from(x) * (1.0 - t) + f32::from(y) * t).round().clamp(0.0, 255.0) as u8
+    };
+    rgb(mix(ar, br), mix(ag, bg), mix(ab, bb))
+}
+
+fn contrast_ratio(a: COLORREF, b: COLORREF) -> f64 {
+    fn luminance(color: COLORREF) -> f64 {
+        let linear = |value: u8| {
+            let value = f64::from(value) / 255.0;
+            if value <= 0.04045 { value / 12.92 } else { ((value + 0.055) / 1.055).powf(2.4) }
+        };
+        let (r, g, b) = channels(color);
+        0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
+    }
+    let (first, second) = (luminance(a), luminance(b));
+    (first.max(second) + 0.05) / (first.min(second) + 0.05)
+}
+
 fn light_mode() -> bool {
     let mut value = 1u32;
     let mut size = 4u32;
@@ -152,30 +182,45 @@ fn light_mode() -> bool {
     value != 0
 }
 
-/// 按设置里的候选强调色（`Config::candidate_style`）和系统浅色 / 深色配色。
-/// 设置页的预览（windows/app/pages.go 的 candidateStyles）用同样的颜色，改一边要改另一边。
-fn theme(style: &str) -> Theme {
-    theme_for_appearance(style, light_mode())
+/// 按设置里的候选皮肤（`Config::candidate_style` / `Config::candidate_skin`）和系统浅色 / 深色配色。
+/// 设置页的预览（windows/app/pages.go 的 resolveCandidateTheme）用同样的颜色，改一边要改另一边。
+fn theme(style: &str, custom: Option<&CandidateSkin>) -> Theme {
+    theme_for_appearance(style, custom, light_mode())
 }
 
 // 显式接收外观，便于在不修改用户系统主题的情况下验证两套候选文字颜色。
-fn theme_for_appearance(style: &str, light: bool) -> Theme {
+fn theme_for_appearance(style: &str, custom: Option<&CandidateSkin>, light: bool) -> Theme {
     let white = rgb(0xff, 0xff, 0xff);
-    let wechat_green = rgb(0x03, 0xd4, 0x68);
+    if style == "custom" {
+        let defaults = CandidateSkin::default();
+        let skin = custom.unwrap_or(&defaults);
+        let background = parse_color(&skin.background, white);
+        let border = parse_color(&skin.border, rgb(0xd6, 0xd6, 0xd6));
+        let text = parse_color(&skin.text, rgb(0x1f, 0x1f, 0x1f));
+        let muted = parse_color(&skin.muted, rgb(0x61, 0x61, 0x61));
+        let accent_rgb = parse_color(&skin.accent, rgb(0x2b, 0x6c, 0xe6));
+        let accent_text = parse_color(&skin.accent_text, white);
+        let hover = blend_rgb(background, text, 0.08);
+        let accent = skin.accent_fill.then_some(accent_rgb);
+        let emphasis_candidate = if skin.accent_fill { accent_rgb } else { accent_text };
+        let emphasis = if contrast_ratio(emphasis_candidate, background) >= 3.0 {
+            emphasis_candidate
+        } else {
+            text
+        };
+        return Theme { background, border, text, muted, hover, accent, accent_text, emphasis };
+    }
     // (底色块, 块上的字, 提示字色)
     let (accent, accent_text, emphasis) = match (style, light) {
-        // 以前的蓝色
         ("blue", true) => (Some(rgb(0x2b, 0x6c, 0xe6)), white, rgb(0x2b, 0x6c, 0xe6)),
-        ("blue", false) => (Some(rgb(0x3d, 0x7f, 0xf0)), rgb(0x18, 0x18, 0x1b), rgb(0x6c, 0x9e, 0xff)),
-        // 微信绿候选保留绿底白字；浅色主题的单字提示仍用深绿。
-        ("green", true) => (Some(wechat_green), white, rgb(0x06, 0x82, 0x4a)),
-        ("green", false) => (Some(wechat_green), white, wechat_green),
-        // 搜狗那样：没有底色块，选中的字是蓝色
+        ("blue", false) => (Some(rgb(0x2f, 0x70, 0xe8)), white, rgb(0x6c, 0x9e, 0xff)),
+        ("green", true) => (Some(rgb(0x0e, 0x85, 0x49)), white, rgb(0x0e, 0x85, 0x49)),
+        ("green", false) => (Some(rgb(0x0e, 0x85, 0x49)), white, rgb(0x34, 0xc7, 0x7b)),
         ("sogou", true) => (None, rgb(0x1d, 0x66, 0xdf), rgb(0x1d, 0x66, 0xdf)),
         ("sogou", false) => (None, rgb(0x6c, 0x9e, 0xff), rgb(0x6c, 0x9e, 0xff)),
-        // 默认：品牌粉色。粉色很浅，块上用深色字（和设置窗口一样）；提示字用深一档的粉
-        (_, true) => (Some(rgb(0xff, 0xb3, 0xfa)), rgb(0x18, 0x18, 0x1b), rgb(0xc0, 0x3c, 0xb4)),
-        (_, false) => (Some(rgb(0xff, 0xb3, 0xfa)), rgb(0x18, 0x18, 0x1b), rgb(0xff, 0xb3, 0xfa)),
+        // 默认：沉稳玫瑰粉，底色与文字在浅色、深色模式下均保证 >= 4.5:1 对比度
+        (_, true) => (Some(rgb(0xc4, 0x45, 0x69)), white, rgb(0xc4, 0x45, 0x69)),
+        (_, false) => (Some(rgb(0xc4, 0x45, 0x69)), white, rgb(0xf0, 0x8c, 0xa9)),
     };
     // 鼠标停留的底用中性灰，几种强调色都配得上
     if light {
@@ -227,6 +272,7 @@ struct View {
     wrap: bool,
     /// 候选强调色，见 [`theme`]。
     candidate_style: String,
+    candidate_skin: Option<CandidateSkin>,
     candidate_wheel: bool,
     revision: u64,
     pin_slots: Vec<Option<u8>>,
@@ -519,7 +565,7 @@ fn paint(hwnd: HWND, data: &mut Data) {
 /// 窗口和离屏回归使用同一条绘制路径，验证实际字体与表情，不用近似预览代替候选窗。
 fn draw(hdc: HDC, data: &Data) -> Result<()> {
         let (w, h) = (data.layout.width, data.layout.height);
-        let t = theme(&data.view.candidate_style);
+        let t = theme(&data.view.candidate_style, data.view.candidate_skin.as_ref());
         let painter = Painter::new(hdc, &rect(0, 0, w, h), t.background)?;
         painter.border(&rect(0, 0, w, h), t.border);
         let radius = 4.0 * data.scale;
@@ -615,7 +661,7 @@ fn show_candidate_menu(owner: HWND, data: &Data, entries: Vec<(String, Click)>) 
     unsafe {
         let _ = GetCursorPos(&mut pt);
     }
-    menu::show(owner, pt, entries, data.view.font_family.clone(), data.scale);
+    menu::show(owner, pt, entries, data.view.font_family.clone(), data.scale, data.view.candidate_style.clone(), data.view.candidate_skin.clone());
 }
 
 /// 将高分辨率滚轮的零碎移动折合成系统的一格（120）。
@@ -997,6 +1043,7 @@ impl CandidateWindow {
             wrap_width: 0,
             available_width: 0,
             candidate_style: frame.candidate_style.clone(),
+            candidate_skin: frame.candidate_skin.clone(),
             vertical: frame.vertical,
             panel: frame.panel,
             columns: frame.columns,
@@ -1166,6 +1213,8 @@ mod menu {
         hovered: Option<usize>,
         texts: Vec<Text>,
         scale: f32,
+        style: String,
+        skin: Option<CandidateSkin>,
     }
 
     fn data(hwnd: HWND) -> Option<&'static mut MenuData> {
@@ -1176,7 +1225,7 @@ mod menu {
         MENU.with(|m| *m.borrow())
     }
 
-    pub fn show(_owner: HWND, at: POINT, entries: Vec<(String, Click)>, family: String, scale: f32) {
+    pub fn show(_owner: HWND, at: POINT, entries: Vec<(String, Click)>, family: String, scale: f32, style: String, skin: Option<CandidateSkin>) {
         let Some(hwnd) = hwnd() else {
             return;
         };
@@ -1207,6 +1256,8 @@ mod menu {
                     hovered: None,
                     texts,
                     scale,
+                    style,
+                    skin,
                 })) as _,
             ) as *mut MenuData;
             if !old.is_null() {
@@ -1258,8 +1309,8 @@ mod menu {
             let hdc = CreateCompatibleDC(Some(target));
             let bitmap = CreateCompatibleBitmap(target, w, h);
             let old_bitmap = SelectObject(hdc, bitmap.into());
-            // 菜单只用到背景、边框、文字和停留底色，和强调色无关
-            let t = theme("");
+            // 右键菜单跟随当前皮肤的背景、边框、文字和悬停底色
+            let t = theme(&d.style, d.skin.as_ref());
             let result = Painter::new(hdc, &rect(0, 0, w, h), t.background).and_then(|painter| {
                 painter.border(&rect(0, 0, w, h), t.border);
                 for (i, text) in d.texts.iter().enumerate() {

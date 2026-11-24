@@ -223,6 +223,75 @@ pub struct AppWindow {
     pub title: String,
 }
 
+/// 自定义候选窗皮肤颜色（十六进制 `#rrggbb`）。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CandidateSkin {
+    pub background: String,
+    pub border: String,
+    pub text: String,
+    pub muted: String,
+    pub accent: String,
+    pub accent_text: String,
+    pub accent_fill: bool,
+}
+
+impl Default for CandidateSkin {
+    fn default() -> Self {
+        Self {
+            background: "#ffffff".into(),
+            border: "#d6d6d6".into(),
+            text: "#1f1f1f".into(),
+            muted: "#616161".into(),
+            accent: "#2b6ce6".into(),
+            accent_text: "#ffffff".into(),
+            accent_fill: true,
+        }
+    }
+}
+
+/// 解析十六进制 RGB 颜色（支持 `#rrggbb`、`rrggbb`、`#rgb`、`rgb`）。
+pub fn parse_hex_rgb(raw: &str) -> Option<(u8, u8, u8)> {
+    let trimmed = raw.trim();
+    let hex = trimmed.strip_prefix('#').unwrap_or(trimmed);
+    if !hex.is_ascii() {
+        return None;
+    }
+    match hex.len() {
+        6 => {
+            let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+            let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+            let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+            Some((r, g, b))
+        }
+        3 => {
+            let nibble = |s: &str| u8::from_str_radix(s, 16).ok().map(|v| v * 17);
+            Some((nibble(&hex[0..1])?, nibble(&hex[1..2])?, nibble(&hex[2..3])?))
+        }
+        _ => None,
+    }
+}
+
+/// 规范化十六进制 RGB 颜色为小写 `#rrggbb`；无效输入返回 `None`。
+pub fn normalize_hex_color(raw: &str) -> Option<String> {
+    let (r, g, b) = parse_hex_rgb(raw)?;
+    Some(format!("#{r:02x}{g:02x}{b:02x}"))
+}
+
+impl CandidateSkin {
+    /// 将无效颜色回退为默认值，并统一格式化为小写 `#rrggbb`。
+    pub fn sanitized(mut self) -> Self {
+        let d = Self::default();
+        self.background = normalize_hex_color(&self.background).unwrap_or(d.background);
+        self.border = normalize_hex_color(&self.border).unwrap_or(d.border);
+        self.text = normalize_hex_color(&self.text).unwrap_or(d.text);
+        self.muted = normalize_hex_color(&self.muted).unwrap_or(d.muted);
+        self.accent = normalize_hex_color(&self.accent).unwrap_or(d.accent);
+        self.accent_text = normalize_hex_color(&self.accent_text).unwrap_or(d.accent_text);
+        self
+    }
+}
+
 /// 用户设置，存为 `%APPDATA%\FreeType\config.json`。缺的字段取默认值。
 ///
 /// 取值是字符串的几项（快捷键、位置等）只认下面列出的写法，别的在 [`Config::sanitized`] 里换成默认值。
@@ -238,8 +307,10 @@ pub struct Config {
     pub font_size: u32,
     /// 候选窗字体（字体族名）。
     pub font_family: String,
-    /// 选中候选的样子：pink 品牌粉、blue 蓝、green 微信绿、sogou 不画底色块只换字色。
+    /// 选中候选的样式：pink 玫瑰粉、blue 蓝、green 微信绿、sogou 无底色块、custom 自定义配色。
     pub candidate_style: String,
+    /// 自定义候选窗皮肤颜色；切换内置样式后仍保留。
+    pub candidate_skin: CandidateSkin,
     /// 窗口、托盘及系统输入指示器的品牌图标：default、white、custom。
     pub brand_icon: String,
     /// 自定义图像转为 256 px PNG 后以 Base64 保存，让备份和同步不依赖本机路径。
@@ -405,6 +476,7 @@ impl Default for Config {
             font_size: 18,
             font_family: DEFAULT_FONT.into(),
             candidate_style: "pink".into(),
+            candidate_skin: CandidateSkin::default(),
             brand_icon: "default".into(),
             custom_brand_icon: String::new(),
             candidate_wheel: false,
@@ -489,7 +561,7 @@ impl Default for Config {
 
 /// 双拼方案。
 pub const SHUANGPIN_SCHEMES: [&str; 7] = ["ziranma", "xiaohe", "microsoft", "sogou", "abc", "ziguang", "pinyinjiajia"];
-pub const CANDIDATE_STYLES: [&str; 4] = ["pink", "blue", "green", "sogou"];
+pub const CANDIDATE_STYLES: [&str; 5] = ["pink", "blue", "green", "sogou", "custom"];
 pub const SHIFT_TOGGLES: [&str; 4] = ["both", "left", "right", "off"];
 pub const SELECT_KEYS: [&str; 3] = ["off", "semicolon", "quote"];
 pub const ARROW_KEYS: [&str; 2] = ["candidates", "caret"];
@@ -560,6 +632,7 @@ impl Config {
         self.page_keys &= 0xf;
         self.digit_punct_fullwidth &= digit_punct::ALL;
         pick(&mut self.candidate_style, &CANDIDATE_STYLES, &d.candidate_style);
+        self.candidate_skin = self.candidate_skin.sanitized();
         pick(&mut self.brand_icon, &["default", "white", "custom"], &d.brand_icon);
         // 显示端只导入 256 px PNG；限制配置体积，保留未选中的自定义图标供再次选择。
         if self.custom_brand_icon.len() > 512 * 1024 { self.custom_brand_icon.clear(); }
@@ -1010,6 +1083,9 @@ pub struct Frame {
     /// 候选强调色，见 [`Config::candidate_style`]。
     #[serde(default)]
     pub candidate_style: String,
+    /// 自定义皮肤颜色；仅在 `candidate_style` 为 `custom` 时由服务端下发。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidate_skin: Option<CandidateSkin>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub candidate_wheel: bool,
     /// 候选竖排。
@@ -1266,6 +1342,8 @@ mod tests {
         assert_eq!(config.candidate_style, "pink");
         let sogou = Config { candidate_style: "sogou".into(), ..Config::default() }.sanitized();
         assert_eq!(sogou.candidate_style, "sogou");
+        let custom = Config { candidate_style: "custom".into(), ..Config::default() }.sanitized();
+        assert_eq!(custom.candidate_style, "custom");
         let arrow = Config { arrow_keys: "other".into(), ..Config::default() }.sanitized();
         assert_eq!(arrow.arrow_keys, "candidates");
         let caret = Config { arrow_keys: "caret".into(), ..Config::default() }.sanitized();
@@ -1335,5 +1413,41 @@ mod tests {
     #[test]
     fn pipe_name_has_sid() {
         assert_eq!(pipe_name("S-1-5-21-1"), r"\\.\pipe\FreeType-S-1-5-21-1");
+    }
+
+    #[test]
+    fn custom_candidate_skin_parses_normalizes_and_keeps_old_defaults() {
+        assert_eq!(parse_hex_rgb(" #1A2b3C "), Some((0x1a, 0x2b, 0x3c)));
+        assert_eq!(parse_hex_rgb("abc"), Some((0xaa, 0xbb, 0xcc)));
+        assert_eq!(parse_hex_rgb("#12345"), None);
+        assert_eq!(parse_hex_rgb("xyz"), None);
+        assert_eq!(normalize_hex_color(" #0E8549 "), Some("#0e8549".into()));
+
+        let old: Config = serde_json::from_str(r#"{"candidate_style":"blue"}"#).unwrap();
+        assert_eq!(old.candidate_skin, CandidateSkin::default());
+
+        let dirty = serde_json::from_value::<Config>(serde_json::json!({
+            "candidate_style": "custom",
+            "candidate_skin": {
+                "background": " #FBF8F1 ",
+                "border": "invalid",
+                "text": "123",
+                "muted": "#6B5C63",
+                "accent": "#C44569",
+                "accent_text": "bad-hex",
+                "accent_fill": false
+            }
+        })).unwrap().sanitized();
+        assert_eq!(dirty.candidate_style, "custom");
+        assert_eq!(dirty.candidate_skin.background, "#fbf8f1");
+        assert_eq!(dirty.candidate_skin.border, CandidateSkin::default().border);
+        assert_eq!(dirty.candidate_skin.text, "#112233");
+        assert_eq!(dirty.candidate_skin.muted, "#6b5c63");
+        assert_eq!(dirty.candidate_skin.accent, "#c44569");
+        assert_eq!(dirty.candidate_skin.accent_text, CandidateSkin::default().accent_text);
+        assert!(!dirty.candidate_skin.accent_fill);
+
+        let restored: Config = decode(&encode(&dirty)).unwrap();
+        assert_eq!(restored, dirty);
     }
 }

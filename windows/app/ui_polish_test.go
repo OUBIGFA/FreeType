@@ -70,22 +70,6 @@ func TestInputFeatureManagementViewsRenderRealControls(test *testing.T) {
 	}
 }
 
-func colorLuminance(color ui.Color) float64 {
-	linear := func(channel uint8) float64 {
-		value := float64(channel) / 255
-		if value <= 0.04045 {
-			return value / 12.92
-		}
-		return math.Pow((value+0.055)/1.055, 2.4)
-	}
-	return 0.2126*linear(color.R) + 0.7152*linear(color.G) + 0.0722*linear(color.B)
-}
-
-func colorContrast(first, second ui.Color) float64 {
-	firstLight, secondLight := colorLuminance(first), colorLuminance(second)
-	return (math.Max(firstLight, secondLight) + 0.05) / (math.Min(firstLight, secondLight) + 0.05)
-}
-
 func TestSettingsRowsShareInsetsAndTitleAlignment(test *testing.T) {
 	checked := false
 	view := ui.NewTester(func(context *ui.Context) {
@@ -136,24 +120,45 @@ func TestCandidateSelectionPaletteMatchesStylesInEveryAppearance(test *testing.T
 		}
 		for _, id := range []string{"pink", "blue", "green", "sogou"} {
 			style := candidateStyle(id, dark)
+			if id == "pink" {
+				if !style.block || style.fill != ui.Hex("#c44569") || style.text != ui.Hex("#ffffff") {
+					test.Errorf("dark=%v：玫瑰粉预览必须使用 #C44569 底白字，得到 %+v", dark, style)
+				}
+			}
 			if id == "green" {
-				if !style.block || style.fill != ui.Hex("#03d468") || style.text != ui.Hex("#ffffff") {
-					test.Errorf("dark=%v：微信绿预览必须使用 #03D468 绿底白字，得到 %+v", dark, style)
+				if !style.block || style.fill != ui.Hex("#0e8549") || style.text != ui.Hex("#ffffff") {
+					test.Errorf("dark=%v：微信绿预览必须使用 #0E8549 绿底白字，得到 %+v", dark, style)
 				}
 			}
 			background := theme.Background
 			if style.block {
 				background = style.fill
 			}
-			minimum := 4.5
-			if id == "green" {
-				// 保留鲜亮绿底白字，同时防止对比度退回原先较浅的绿色。
-				minimum = 1.95
-			}
-			if contrast := colorContrast(style.text, background); contrast < minimum {
-				test.Errorf("%s dark=%v：候选文字对比度 %.2f:1，需至少 %.1f:1", id, dark, contrast, minimum)
+			if contrast := colorContrast(style.text, background); contrast < 4.5 {
+				test.Errorf("%s dark=%v：候选文字对比度 %.2f:1，需至少 4.5:1", id, dark, contrast)
 			}
 		}
+	}
+
+	cfg := defaultConfig()
+	cfg.CandidateStyle = "custom"
+	cfg.CandidateSkin = CandidateSkin{
+		Background: "#fbf8f1",
+		Border:     "#e2d9c8",
+		Text:       "#2c261f",
+		Muted:      "#7a7062",
+		Accent:     "#b45309",
+		AccentText: "#ffffff",
+		AccentFill: true,
+	}
+	ct := resolveCandidateTheme(cfg, false)
+	if !ct.block || ct.background != ui.Hex("#fbf8f1") || ct.border != ui.Hex("#e2d9c8") || ct.accent != ui.Hex("#b45309") {
+		test.Fatalf("自定义皮肤解析不正确：%+v", ct)
+	}
+	cfg.CandidateSkin.AccentFill = false
+	ctNoFill := resolveCandidateTheme(cfg, true)
+	if ctNoFill.block || ctNoFill.text != ui.Hex("#2c261f") {
+		test.Fatalf("关闭底色块后应保留正文颜色并取消底色块：%+v", ctNoFill)
 	}
 }
 
@@ -268,6 +273,7 @@ func TestSettingsNarrowActionsStayInsideThePage(test *testing.T) {
 		{"dicts", "dicts/词库词条", []string{"保存名称与说明", "搜索词库词条", "词库上一页", "词库下一页", "删除选中词库词条"}},
 		{"about", "about/检查更新", []string{"检查软件更新", "立即更新"}},
 		{"candidates", "candidates/字体", []string{"字体", "恢复默认"}},
+		{"candidates", "candidates/自定义配色", []string{"窗口背景", "选中背景", "选中文字", "恢复默认配色"}},
 		{"typing", "typing/翻页键", []string{"- =", "[ ]", ", .", "Tab"}},
 		{"sync", "sync/同步计划", []string{"保存同步计划", "立即同步", "打开恢复前备份", "今日自动尝试"}},
 	}
@@ -281,6 +287,9 @@ func TestSettingsNarrowActionsStayInsideThePage(test *testing.T) {
 				state.config.AppPresets = true
 				state.config.VimModeApps = []string{"code.exe", "gvim.exe"}
 				state.config.FontFamily = "SimSun"
+				if item.target == "candidates/自定义配色" {
+					state.config.CandidateStyle = "custom"
+				}
 				backend.dicts = []Dictionary{
 					{Name: "专业词库", Entries: 120, Enabled: true, Source: "Rime · 医学.dict.yaml", Description: "日常医学用词"},
 					{Name: "停用词库", Entries: 45, Enabled: false},

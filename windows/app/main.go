@@ -156,8 +156,16 @@ func (a *app) openSettings() {
 		StateKey:      "settings",
 		Content:       ui.View(s.view),
 	})
-	s.apply = func(fn func()) { win.Update(fn) }
-	win.OnClosed(func() { s.cancelSyncPreview(); a.win, a.settings = nil, nil })
+	s.apply = func(fn func()) {
+		if a.win == win {
+			win.Update(fn)
+		}
+	}
+	win.OnClosed(func() {
+		s.flushPendingSave()
+		s.cancelSyncPreview()
+		a.win, a.settings = nil, nil
+	})
 	a.win, a.settings = win, s
 	if err := a.setBrandIcon(a.iconConfig); err != nil {
 		s.notice = "更新图标失败：" + err.Error()

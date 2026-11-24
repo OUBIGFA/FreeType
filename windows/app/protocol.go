@@ -2,6 +2,29 @@ package main
 
 // 服务进程管道消息（与 windows/protocol/src/lib.rs 一致）：每条请求、应答各一行 JSON。
 
+// CandidateSkin 是自定义候选窗皮肤颜色（十六进制 #rrggbb）。
+type CandidateSkin struct {
+	Background string `json:"background"`
+	Border     string `json:"border"`
+	Text       string `json:"text"`
+	Muted      string `json:"muted"`
+	Accent     string `json:"accent"`
+	AccentText string `json:"accent_text"`
+	AccentFill bool   `json:"accent_fill"`
+}
+
+func defaultCandidateSkin() CandidateSkin {
+	return CandidateSkin{
+		Background: "#ffffff",
+		Border:     "#d6d6d6",
+		Text:       "#1f1f1f",
+		Muted:      "#616161",
+		Accent:     "#2b6ce6",
+		AccentText: "#ffffff",
+		AccentFill: true,
+	}
+}
+
 // Config 是用户设置，字段名与服务进程的 config.json 相同。
 // 必须列全：保存时整份发回服务进程，少一个字段那一项就回到默认值。
 type Config struct {
@@ -9,8 +32,9 @@ type Config struct {
 	Horizontal bool   `json:"horizontal"`
 	FontSize   int    `json:"font_size"`
 	FontFamily string `json:"font_family"`
-	// CandidateStyle 是选中候选的样子：pink blue green sogou。
-	CandidateStyle string `json:"candidate_style"`
+	// CandidateStyle 是选中候选的样式：pink blue green sogou custom。
+	CandidateStyle string        `json:"candidate_style"`
+	CandidateSkin  CandidateSkin `json:"candidate_skin"`
 	// 品牌图标更新窗口、托盘和系统输入指示器；自定义 PNG 随设置保存。
 	BrandIcon           string `json:"brand_icon"`
 	CustomBrandIcon     string `json:"custom_brand_icon,omitempty"`
@@ -102,7 +126,7 @@ type Config struct {
 func defaultConfig() Config {
 	return Config{
 		EnglishCorrection: true, EnglishSpace: true, EnglishGloss: true, HotkeyEnglish: "off", HotkeyRadical: "off",
-		PageSize: 7, Horizontal: true, FontSize: 18, FontFamily: "Microsoft YaHei", CandidateStyle: "pink", BrandIcon: "default", PinBadge: "paperclip",
+		PageSize: 7, Horizontal: true, FontSize: 18, FontFamily: "Microsoft YaHei", CandidateStyle: "pink", CandidateSkin: defaultCandidateSkin(), BrandIcon: "default", PinBadge: "paperclip",
 		InlinePreedit: "segmented", CandidatePreedit: true, CandidateFollow: true, CandidateSingleLine: true,
 		FuzzyGroups: fuzzyDefault, ShuangpinScheme: "xiaohe", TypoCorrection: true, TypoKinds: 15,
 		ShiftToggle: "both", PageKeys: pageKeyMinus, SelectKeys: "off", PickChar: true, ArrowKeys: "candidates", NumpadDot: true,
@@ -317,7 +341,7 @@ var (
 		{"xiaohe", "小鹤双拼"}, {"ziranma", "自然码"}, {"microsoft", "微软双拼"}, {"sogou", "搜狗双拼"},
 		{"abc", "智能 ABC"}, {"ziguang", "紫光双拼"}, {"pinyinjiajia", "拼音加加"},
 	}
-	candidateStyleChoices = []choice{{"pink", "默认粉色"}, {"blue", "蓝色"}, {"green", "微信绿"}, {"sogou", "搜狗样式 无底色块"}}
+	candidateStyleChoices = []choice{{"pink", "默认粉色"}, {"blue", "蓝色"}, {"green", "微信绿"}, {"sogou", "搜狗样式 无底色块"}, {"custom", "自定义配色"}}
 	shiftToggles          = []choice{{"both", "左 Shift 或右 Shift"}, {"left", "仅左 Shift"}, {"right", "仅右 Shift"}, {"off", "关闭 Shift 切换"}}
 	selectKeys            = []choice{{"off", "关闭"}, {"semicolon", "分号选第 2 项"}, {"quote", "分号、引号选第 2、3 项"}}
 	arrowKeys             = []choice{{"candidates", "移动候选高亮"}, {"caret", "移动拼音光标"}}

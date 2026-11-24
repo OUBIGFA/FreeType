@@ -109,3 +109,28 @@ fn independent_additions_and_deletions_merge_without_resurrecting_old_snapshots(
     assert!(a.handle(0, Request::ListCommonPhrases).common_phrases.unwrap().contains(&"旧条目".into()),
         "主动整份恢复后的词条应作为新修改同步，而不是立即被旧删除记录撤掉");
 }
+
+#[test]
+fn candidate_style_and_skin_sync_across_devices() {
+    let (mut a, mut b) = (host("skin-a"), host("skin-b"));
+    let (af, bf) = (a.data_dir().join("export.json"), b.data_dir().join("export.json"));
+    let mut config = a.config().clone();
+    config.candidate_style = "custom".into();
+    config.candidate_skin = freetype_protocol::CandidateSkin {
+        background: "#1e1e24".into(),
+        border: "#383844".into(),
+        text: "#ebebf0".into(),
+        muted: "#9595a6".into(),
+        accent: "#6366f1".into(),
+        accent_text: "#ffffff".into(),
+        accent_fill: false,
+    };
+    assert!(a.handle(0, Request::SetConfig { config: config.clone() }).ok);
+    call(&mut a, serde_json::json!({"op":"export_sync_settings","path":af}));
+    call(&mut b, serde_json::json!({"op":"export_sync_settings","path":bf}));
+    call(&mut b, serde_json::json!({"op":"merge_sync_settings","path":af,"expected_path":bf}));
+    assert_eq!(b.config().candidate_style, "custom");
+    assert_eq!(b.config().candidate_skin, config.candidate_skin);
+    let _ = std::fs::remove_dir_all(a.data_dir());
+    let _ = std::fs::remove_dir_all(b.data_dir());
+}

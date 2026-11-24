@@ -136,3 +136,44 @@ func TestPhraseEditsWaitForTheSavedListAndKeepTheNextInput(t *testing.T) {
 		})
 	}
 }
+
+func TestScheduledColorSaveCoalescesEditsAndFlushesOnDemand(t *testing.T) {
+	b := &delayedConfigBackend{requests: make(chan Config, 4), release: make(chan struct{}, 4)}
+	s := newSettings(b, "0.0.1")
+	changes := make(chan func(), 4)
+	s.apply = func(fn func()) { changes <- fn }
+	s.config.CandidateStyle = "custom"
+	s.config.CandidateSkin.Background = "#111111"
+	s.scheduleSaveConfig()
+	s.config.CandidateSkin.Background = "#222222"
+	s.scheduleSaveConfig()
+	s.config.CandidateSkin.Background = "#333333"
+	s.scheduleSaveConfig()
+	select {
+	case <-b.requests:
+		t.Fatal("debounced color edits fired immediately")
+	case <-time.After(40 * time.Millisecond):
+	}
+	select {
+	case fn := <-changes:
+		fn()
+	case <-time.After(time.Second):
+		t.Fatal("debounced save timer did not trigger")
+	}
+	saved := <-b.requests
+	b.release <- struct{}{}
+	(<-changes)()
+	if saved.CandidateSkin.Background != "#333333" {
+		t.Fatalf("coalesced save did not carry latest color: %+v", saved.CandidateSkin)
+	}
+
+	s.config.CandidateSkin.Background = "#444444"
+	s.scheduleSaveConfig()
+	s.flushPendingSave()
+	flushed := <-b.requests
+	b.release <- struct{}{}
+	(<-changes)()
+	if flushed.CandidateSkin.Background != "#444444" || s.pendingSave {
+		t.Fatalf("flushPendingSave did not send immediately: %+v pending=%v", flushed.CandidateSkin, s.pendingSave)
+	}
+}

@@ -434,6 +434,45 @@ func TestCandidatesPagePreviewsFont(t *testing.T) {
 	}
 }
 
+func TestCandidatesPageCustomSkinTemplatesToggleAndPreservation(t *testing.T) {
+	s, b := newTestSettings()
+	tt := open(t, s, "候选窗与外观")
+	if tt.HasText("选中底色块") || tt.HasText("窗口背景") {
+		t.Fatal("内置样式下不应展开自定义皮肤配色面板")
+	}
+	s.config.CandidateStyle = "custom"
+	s.saveConfig()
+	tt.Frame()
+	for _, text := range []string{"选中底色块", "窗口背景", "窗口边框", "候选文字", "拼音与序号", "选中背景", "选中文字", "暖纸", "恢复默认配色"} {
+		if !tt.HasText(text) {
+			t.Fatalf("自定义皮肤面板缺少「%s」：%q", text, tt.Texts())
+		}
+	}
+	if err := tt.Click("暖纸"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if b.config.CandidateSkin.Background != "#fbf8f1" || b.config.CandidateSkin.Accent != "#b45309" {
+		t.Fatalf("点击模板未保存对应配色：%+v", b.config.CandidateSkin)
+	}
+	if err := tt.Click("选中底色块"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if b.config.CandidateSkin.AccentFill || tt.HasText("选中背景") {
+		t.Fatalf("关闭选中底色块后应隐藏选中背景色项：%+v", b.config.CandidateSkin)
+	}
+	s.config.CandidateStyle = "pink"
+	s.saveConfig()
+	tt.Frame()
+	if b.config.CandidateSkin.Background != "#fbf8f1" {
+		t.Fatalf("切回内置样式不应丢失自定义配色：%+v", b.config.CandidateSkin)
+	}
+	if results := findSettings("皮肤"); len(results) < 2 {
+		t.Fatalf("搜索「皮肤」应定位候选皮肤与自定义配色：%v", results)
+	}
+}
+
 func TestShortcutsPageSavesHotkey(t *testing.T) {
 	s, b := newTestSettings()
 	tt := open(t, s, "快捷键")

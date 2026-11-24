@@ -757,6 +757,7 @@ impl Host {
         frame.font_size = self.config.font_size;
         frame.font_family = self.config.font_family.clone();
         frame.candidate_style = self.config.candidate_style.clone();
+        frame.candidate_skin = (self.config.candidate_style == "custom").then(|| self.config.candidate_skin.clone());
         frame.candidate_wheel = self.config.candidate_wheel;
         frame.hide_candidate_preedit = !self.config.candidate_preedit;
         frame.preedit_size = self.config.preedit_size;

@@ -28,7 +28,9 @@ var settingsItems = []settingItem{
 	{"candidates/品牌图标", "品牌图标", "窗口和托盘立即换图；系统图标更新需管理员授权；自定义支持 PNG、JPEG、WebP，原文件移动后仍可显示", "品牌外观", "icon logo 品牌 白色 默认 自定义 图标 外观 语言栏 重启 资源管理器"},
 	{"candidates/字体", "字体", "设置候选窗和提示的字体；默认使用微软雅黑", "外观", "微软雅黑 Microsoft YaHei SimSun 宋体 KaiTi 楷体"},
 	{"candidates/字号", "字号", "设置字号，范围为 12–36 像素；以 100% 显示缩放为准", "外观", ""},
-	{"candidates/候选强调色", "候选强调色", "选择当前候选的标记样式；搜狗样式使用蓝色文字", "外观", "粉色 蓝色 绿色 搜狗 微信"},
+	{"candidates/候选强调色", "候选皮肤", "选择候选窗配色方案；支持内置样式与自定义皮肤颜色", "外观", "强调色 皮肤 配色 颜色 粉色 蓝色 绿色 搜狗 微信 自定义"},
+	{"candidates/选中底色块", "选中底色块", "关闭后不画底色块，仅改变选中候选的文字颜色", "外观", "搜狗 无底色 高亮 背景块 皮肤"},
+	{"candidates/自定义配色", "自定义皮肤颜色", "分别调整窗口背景、边框、文字与选中高亮颜色；切换内置样式后仍会保留", "外观", "皮肤 颜色 背景 边框 字体 拼音 高亮 自定义 HEX 配色 主题"},
 	{"candidates/每页候选个数", "每页候选个数", "", "外观", ""},
 	{"candidates/滚轮翻页", "滚轮翻页", "需启用 Windows 鼠标设置中的非活动窗口滚动", "外观", "鼠标 翻页"},
 	{"candidates/固定排位角标", "固定排位角标", "", "外观", "置顶 图钉 回形针 圆点"},
@@ -254,6 +256,10 @@ func (s *settings) showSetting(id string) bool { return s.locatedSetting == id }
 // 定位隐藏选项只改变显示，不替用户打开它的前提开关。
 func (s *settings) unavailableReason(id string) string {
 	switch id {
+	case "candidates/选中底色块", "candidates/自定义配色":
+		if s.config.CandidateStyle != "custom" {
+			return "请先将候选皮肤设为「自定义配色」"
+		}
 	case "typing/双拼方案":
 		if !s.config.Shuangpin {
 			return "请先开启双拼，再选择方案"

@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
@@ -306,6 +308,7 @@ func (s *settings) candidatesPage(c *ui.Context) {
 		return
 	}
 	changed := false
+	colorChanged := false
 	s.candidatePreview(c)
 	section(c, "外观", func() {
 		s.settingRow(c, "candidates/字体", func() {
@@ -330,8 +333,75 @@ func (s *settings) candidatesPage(c *ui.Context) {
 				}
 			})
 		})
-		s.settingRow(c, "candidates/候选强调色", func() {
-			changed = choose(c, "候选强调色", candidateStyleChoices, &s.config.CandidateStyle, 220) || changed
+		settingGroup(c, func() {
+			s.settingRow(c, "candidates/候选强调色", func() {
+				changed = choose(c, "候选皮肤", candidateStyleChoices, &s.config.CandidateStyle, 220) || changed
+			})
+		}, s.config.CandidateStyle == "custom" || s.showSetting("candidates/选中底色块") || s.showSetting("candidates/自定义配色"), func() {
+			ui.Column(c).FillWidth().Children(func() {
+				changed = s.settingSwitch(c, "candidates/选中底色块", true, &s.config.CandidateSkin.AccentFill) || changed
+				s.settingBlock(c, "candidates/自定义配色", func() {
+					subContent(c, func() {
+						p := colors(c)
+						ui.Text(c, "从模板快速开始，或单独调整下方各部分颜色").FontSize(textSize(c, 12.5)).TextColor(p.muted).Wrap()
+						ui.Row(c).FillWidth().Wrap().GapX(8).GapY(8).AlignItems(ui.Center).Children(func() {
+							for _, tpl := range candidateSkinTemplates {
+								if ui.Button(c, tpl.name).Clicked() {
+									s.config.CandidateSkin = tpl.skin
+									changed = true
+								}
+							}
+							if ui.Button(c, "恢复默认配色").Clicked() {
+								s.config.CandidateSkin = defaultCandidateSkin()
+								changed = true
+							}
+						})
+						d := defaultCandidateSkin()
+						type skinColorField struct {
+							label, fallback string
+							field           *string
+						}
+						fields := []skinColorField{
+							{"窗口背景", d.Background, &s.config.CandidateSkin.Background},
+							{"窗口边框", d.Border, &s.config.CandidateSkin.Border},
+							{"候选文字", d.Text, &s.config.CandidateSkin.Text},
+							{"拼音与序号", d.Muted, &s.config.CandidateSkin.Muted},
+						}
+						if s.config.CandidateSkin.AccentFill {
+							fields = append(fields, skinColorField{"选中背景", d.Accent, &s.config.CandidateSkin.Accent})
+						}
+						fields = append(fields, skinColorField{"选中文字", d.AccentText, &s.config.CandidateSkin.AccentText})
+						ui.Row(c).FillWidth().Wrap().GapX(10).GapY(10).Children(func() {
+							for _, item := range fields {
+								col := parseSkinColor(*item.field, item.fallback)
+								ui.Row(c).AlignItems(ui.Center).Gap(10).Padding(6, 10).Radius(controlRadius).
+									Background(p.card).Border(1, p.subBorder).MinWidth(max(176, textSize(c, 176))).MaxWidthPercent(100).Children(func() {
+									ui.Column(c).Grow(1).MinWidth(0).Gap(1).Children(func() {
+										ui.Text(c, item.label).FontSize(textSize(c, 13)).FontWeight(500).SingleLine()
+										ui.Text(c, strings.ToUpper(formatHexRGB(col))).FontSize(textSize(c, 12)).TextColor(p.muted).FontFeatures("tnum").SingleLine()
+									})
+									if ui.ColorWell(c, &col).Label(item.label).Changed() {
+										col.A = 255
+										*item.field = formatHexRGB(col)
+										colorChanged = true
+									}
+								})
+							}
+						})
+						bg := parseSkinColor(s.config.CandidateSkin.Background, d.Background)
+						textCol := parseSkinColor(s.config.CandidateSkin.Text, d.Text)
+						accentCol := parseSkinColor(s.config.CandidateSkin.Accent, d.Accent)
+						accentTextCol := parseSkinColor(s.config.CandidateSkin.AccentText, d.AccentText)
+						selBg := bg
+						if s.config.CandidateSkin.AccentFill {
+							selBg = accentCol
+						}
+						if colorContrast(textCol, bg) < 3 || colorContrast(accentTextCol, selBg) < 3 {
+							ui.Text(c, "当前文字与背景对比度较低，可能不易辨认").FontSize(textSize(c, 12.5)).TextColor(p.muted).Wrap()
+						}
+					})
+				})
+			})
 		})
 		s.settingRow(c, "candidates/每页候选个数", func() {
 			size := fmt.Sprint(s.config.PageSize)
@@ -398,6 +468,8 @@ func (s *settings) candidatesPage(c *ui.Context) {
 	hint(c, "任务栏图标需重启资源管理器后生效")
 	if changed {
 		s.saveConfig()
+	} else if colorChanged {
+		s.scheduleSaveConfig()
 	}
 }
 
@@ -408,31 +480,139 @@ type selectedLook struct {
 	text  ui.Color // 选中候选的字（和序号）
 }
 
-// candidateStyle 和候选窗（windows/tsf/src/ui.rs 的 theme）用一样的颜色，改一边要改另一边。
+type candidateTheme struct {
+	background, border, text, muted ui.Color
+	block                           bool
+	accent, accentText              ui.Color
+}
+
+var candidateSkinTemplates = []struct {
+	name string
+	skin CandidateSkin
+}{
+	{"浅色蓝", CandidateSkin{Background: "#ffffff", Border: "#d6d6d6", Text: "#1f1f1f", Muted: "#616161", Accent: "#2b6ce6", AccentText: "#ffffff", AccentFill: true}},
+	{"深色蓝", CandidateSkin{Background: "#24262b", Border: "#3e424b", Text: "#eef0f4", Muted: "#9aa0ac", Accent: "#2f70e8", AccentText: "#ffffff", AccentFill: true}},
+	{"浅色绿", CandidateSkin{Background: "#ffffff", Border: "#d6d6d6", Text: "#1f1f1f", Muted: "#616161", Accent: "#0e8549", AccentText: "#ffffff", AccentFill: true}},
+	{"浅色粉", CandidateSkin{Background: "#ffffff", Border: "#e6d8de", Text: "#1f1f1f", Muted: "#6b5c63", Accent: "#c44569", AccentText: "#ffffff", AccentFill: true}},
+	{"暖纸", CandidateSkin{Background: "#fbf8f1", Border: "#e2d9c8", Text: "#2c261f", Muted: "#7a7062", Accent: "#b45309", AccentText: "#ffffff", AccentFill: true}},
+	{"石墨", CandidateSkin{Background: "#1e1e24", Border: "#383844", Text: "#ebebf0", Muted: "#9595a6", Accent: "#6366f1", AccentText: "#ffffff", AccentFill: true}},
+}
+
+func parseHexRGB(raw string) (ui.Color, bool) {
+	hex := strings.TrimPrefix(strings.TrimSpace(raw), "#")
+	switch len(hex) {
+	case 3:
+		v, err := strconv.ParseUint(hex, 16, 12)
+		if err != nil {
+			return ui.Color{}, false
+		}
+		return ui.RGB(uint8((v>>8)&0xf)*17, uint8((v>>4)&0xf)*17, uint8(v&0xf)*17), true
+	case 6:
+		v, err := strconv.ParseUint(hex, 16, 24)
+		if err != nil {
+			return ui.Color{}, false
+		}
+		return ui.RGB(uint8(v>>16), uint8((v>>8)&0xff), uint8(v&0xff)), true
+	default:
+		return ui.Color{}, false
+	}
+}
+
+func parseSkinColor(hex, fallback string) ui.Color {
+	if col, ok := parseHexRGB(hex); ok {
+		return col
+	}
+	if col, ok := parseHexRGB(fallback); ok {
+		return col
+	}
+	return ui.RGB(255, 255, 255)
+}
+
+func formatHexRGB(c ui.Color) string {
+	return fmt.Sprintf("#%02x%02x%02x", c.R, c.G, c.B)
+}
+
+func colorLuminance(color ui.Color) float64 {
+	linear := func(channel uint8) float64 {
+		value := float64(channel) / 255
+		if value <= 0.04045 {
+			return value / 12.92
+		}
+		return math.Pow((value+0.055)/1.055, 2.4)
+	}
+	return 0.2126*linear(color.R) + 0.7152*linear(color.G) + 0.0722*linear(color.B)
+}
+
+func colorContrast(first, second ui.Color) float64 {
+	firstLight, secondLight := colorLuminance(first), colorLuminance(second)
+	return (math.Max(firstLight, secondLight) + 0.05) / (math.Min(firstLight, secondLight) + 0.05)
+}
+
+// candidateStyle 和候选窗（windows/tsf/src/ui.rs 的 theme_for_appearance）用一样的颜色，改一边要改另一边。
 func candidateStyle(id string, dark bool) selectedLook {
 	switch id {
 	case "blue":
 		if dark {
-			return selectedLook{true, ui.Hex("#3d7ff0"), ui.Hex("#18181b")}
+			return selectedLook{true, ui.Hex("#2f70e8"), ui.Hex("#ffffff")}
 		}
 		return selectedLook{true, ui.Hex("#2b6ce6"), ui.Hex("#ffffff")}
 	case "green":
-		// 微信绿略微加深，让浅色与深色外观中的白字更清楚。
-		return selectedLook{true, ui.Hex("#03d468"), ui.Hex("#ffffff")}
+		return selectedLook{true, ui.Hex("#0e8549"), ui.Hex("#ffffff")}
 	case "sogou":
 		if dark {
 			return selectedLook{false, ui.Color{}, ui.Hex("#6c9eff")}
 		}
 		return selectedLook{false, ui.Color{}, ui.Hex("#1d66df")}
 	default:
-		return selectedLook{true, brandPink, ui.Hex("#18181b")}
+		return selectedLook{true, ui.Hex("#c44569"), ui.Hex("#ffffff")}
 	}
 }
 
-// candidatePreview 按现在的字体、字号、排列和强调色画一个候选窗的样子。
+func resolveCandidateTheme(cfg Config, dark bool) candidateTheme {
+	if cfg.CandidateStyle == "custom" {
+		d := defaultCandidateSkin()
+		return candidateTheme{
+			background: parseSkinColor(cfg.CandidateSkin.Background, d.Background),
+			border:     parseSkinColor(cfg.CandidateSkin.Border, d.Border),
+			text:       parseSkinColor(cfg.CandidateSkin.Text, d.Text),
+			muted:      parseSkinColor(cfg.CandidateSkin.Muted, d.Muted),
+			block:      cfg.CandidateSkin.AccentFill,
+			accent:     parseSkinColor(cfg.CandidateSkin.Accent, d.Accent),
+			accentText: parseSkinColor(cfg.CandidateSkin.AccentText, d.AccentText),
+		}
+	}
+	look := candidateStyle(cfg.CandidateStyle, dark)
+	if dark {
+		return candidateTheme{
+			background: ui.Hex("#2b2b2b"),
+			border:     ui.Hex("#484848"),
+			text:       ui.Hex("#eeeeee"),
+			muted:      ui.Hex("#9a9a9a"),
+			block:      look.block,
+			accent:     look.fill,
+			accentText: look.text,
+		}
+	}
+	return candidateTheme{
+		background: ui.Hex("#ffffff"),
+		border:     ui.Hex("#d6d6d6"),
+		text:       ui.Hex("#1f1f1f"),
+		muted:      ui.Hex("#616161"),
+		block:      look.block,
+		accent:     look.fill,
+		accentText: look.text,
+	}
+}
+
+// candidatePreview 按现在的字体、字号、排列和皮肤颜色画一个候选窗的样子。
 func (s *settings) candidatePreview(c *ui.Context) {
 	p := colors(c)
 	t := c.Theme()
+	ct := resolveCandidateTheme(s.config, t.Dark)
+	popupBg, popupBorder, mutedText, normalText := ct.background, ct.border, ct.muted, ct.text
+	if c.Preferences().HighContrast {
+		popupBg, popupBorder, mutedText, normalText = p.card, p.border, p.muted, t.Text
+	}
 	family, size := s.config.FontFamily, textSize(c, float32(s.config.FontSize))
 	all := []string{"你好", "拟好", "你", "泥", "妮", "逆", "呢", "倪", "腻", "溺"}
 	words := all[:min(max(s.config.PageSize, 1), len(all))]
@@ -444,7 +624,7 @@ func (s *settings) candidatePreview(c *ui.Context) {
 			// 外层用可视宽度对齐；内层按候选宽度收起，放不下时才缩到可视宽度。
 			ui.Row(c).FillWidth().Justify(ui.Center).Label("候选预览区域").Children(func() {
 				ui.ScrollHorizontal(c).MinWidth(0).Shrink(1).Padding(2, 2, 10, 2).Children(func() {
-					popup := ui.Column(c).Padding(8, 10).Radius(panelRadius).Background(p.card).Border(1, p.border).
+					popup := ui.Column(c).Padding(8, 10).Radius(panelRadius).Background(popupBg).Border(1, popupBorder).
 						Label("候选预览窗口").AlignSelf(ui.Start).Shrink(0).Gap(4)
 					if !c.Preferences().HighContrast {
 						alpha := float32(0.06)
@@ -463,7 +643,7 @@ func (s *settings) candidatePreview(c *ui.Context) {
 							if s.config.PreeditSize > 0 {
 								preeditSize = textSize(c, float32(s.config.PreeditSize))
 							}
-							ui.Text(c, preedit).Font(family).FontSize(preeditSize).TextColor(p.muted).Padding(0, 4)
+							ui.Text(c, preedit).Font(family).FontSize(preeditSize).TextColor(mutedText).Padding(0, 4)
 						}
 						list := ui.Row(c).Gap(2)
 						if !s.config.Horizontal {
@@ -473,19 +653,18 @@ func (s *settings) candidatePreview(c *ui.Context) {
 							defer func() {
 								// 和真的候选窗一样，最后是翻页箭头
 								ui.Row(c).Gap(6).Padding(3, 8).Children(func() {
-									ui.Text(c, "‹").Font(family).FontSize(size).TextColor(p.muted)
-									ui.Text(c, "›").Font(family).FontSize(size).TextColor(t.Text)
+									ui.Text(c, "‹").Font(family).FontSize(size).TextColor(mutedText)
+									ui.Text(c, "›").Font(family).FontSize(size).TextColor(normalText)
 								})
 							}()
-							style := candidateStyle(s.config.CandidateStyle, t.Dark)
 							for i, w := range words {
 								item := ui.Row(c).Gap(4).Padding(4, 8).Radius(controlRadius).AlignItems(ui.Center).Shrink(0)
-								label, text := p.muted, t.Text
+								label, text := mutedText, normalText
 								if i == 0 {
-									if style.block {
-										item.Background(style.fill)
+									if ct.block {
+										item.Background(ct.accent)
 									}
-									label, text = style.text, style.text
+									label, text = ct.accentText, ct.accentText
 								}
 								item.Children(func() {
 									ui.Text(c, fmt.Sprint((i+1)%10)).Font(family).FontSize(size * 0.78).TextColor(label)

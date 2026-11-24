@@ -22,8 +22,10 @@ type settings struct {
 	// inline：后台的事也在当前线程做完（测试用）。
 	inline bool
 	// 保存请求按操作顺序发送；旧应答不能覆盖用户随后改过的界面值。
-	configSaveTail <-chan struct{}
-	configRevision uint64
+	configSaveTail   <-chan struct{}
+	configRevision   uint64
+	pendingSaveTimer *time.Timer
+	pendingSave      bool
 	// 启动结束与再次打开窗口都可刷新；晚到的旧快照不能覆盖较新的结果。
 	refreshRevision uint64
 	// 保存失败时恢复已确认的图标，避免预览与实际托盘显示不同的外观。
@@ -229,6 +231,11 @@ func (s *settings) refresh() {
 
 // saveConfig 把整份设置交给服务进程（立即生效）。
 func (s *settings) saveConfig() {
+	if s.pendingSaveTimer != nil {
+		s.pendingSaveTimer.Stop()
+		s.pendingSaveTimer = nil
+	}
+	s.pendingSave = false
 	c := s.config
 	c.AppPresetRules = slices.Clone(c.AppPresetRules)
 	s.configRevision++
@@ -273,6 +280,31 @@ func (s *settings) saveConfig() {
 			s.wordsLoaded = false
 		}
 	})
+}
+
+// scheduleSaveConfig 合并连续的颜色拖动，避免每次移动都通过管道写入配置。
+func (s *settings) scheduleSaveConfig() {
+	if s.inline {
+		s.saveConfig()
+		return
+	}
+	s.pendingSave = true
+	if s.pendingSaveTimer != nil {
+		s.pendingSaveTimer.Stop()
+	}
+	s.pendingSaveTimer = time.AfterFunc(120*time.Millisecond, func() {
+		s.apply(func() {
+			if s.pendingSave {
+				s.saveConfig()
+			}
+		})
+	})
+}
+
+func (s *settings) flushPendingSave() {
+	if s.pendingSave {
+		s.saveConfig()
+	}
 }
 
 // run 发一条命令（切中英、标点、简繁），刷新状态。
