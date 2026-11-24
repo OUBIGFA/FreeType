@@ -9,21 +9,60 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-func TestStatsOverviewSpreadsColumnsToEqualSideInsets(t *testing.T) {
+func TestStatsOverviewAlignsEqualColumnsAcrossWidths(t *testing.T) {
 	s, _ := newTestSettings()
-	m := typingMetrics{todayChars: 167, totalChars: 227, todayActive: 120000, totalActive: 180000, streak: 2, longestStreak: 2}
-	view := ui.NewTester(func(c *ui.Context) { s.statsOverview(c, m) }, 708, 300)
-	for _, width := range []int{708, 860, 708} {
-		view.SetSize(width, 300)
-		first, firstOK := view.Find("今日输入")
-		last, lastOK := view.Find("2 分钟")
-		if !firstOK || !lastOK {
-			t.Fatal("Overview must retain its first and last columns")
+	now := time.Date(2026, 11, 24, 12, 0, 0, 0, time.Local)
+	m := typingMetrics{
+		todayChars: 12345, totalChars: 67890, todayActive: 120000, totalActive: 180000,
+		todaySpeed: 75, averageSpeed: 70, averagePerDay: 33945, recordedDays: 2,
+		streak: 2, longestStreak: 5, bestDay: "2026-11-24", bestChars: 12345,
+		fastestDay: "2026-11-24", fastestSpeed: 75,
+	}
+	view := ui.NewTester(func(c *ui.Context) { s.statsOverview(c, m, now) }, 708, 360)
+	for _, width := range []int{488, 708, 860, 708} {
+		view.SetSize(width, 360)
+		pairs := [][2]string{{"今日输入", "今日速度"}, {"累计输入", "平均速度"}, {"今日活跃", "连续天数"}}
+		var xs []float32
+		for _, pair := range pairs {
+			top, topOK := view.Find(pair[0])
+			bottom, bottomOK := view.Find(pair[1])
+			if !topOK || !bottomOK {
+				t.Fatalf("Overview must retain %s and %s at width %d", pair[0], pair[1], width)
+			}
+			if math.Abs(float64(top.X-bottom.X)) > 1 {
+				t.Errorf("Overview columns misaligned at width %d: %s.X=%.1f %s.X=%.1f", width, pair[0], top.X, pair[1], bottom.X)
+			}
+			xs = append(xs, top.X)
 		}
-		left, right := first.X, float32(width)-last.X-last.W
-		if math.Abs(float64(left-right)) > 2 {
-			t.Errorf("Overview columns leave unequal margins at width %d: left=%.1f right=%.1f", width, left, right)
+		gap1, gap2 := xs[1]-xs[0], xs[2]-xs[1]
+		if math.Abs(float64(gap1-gap2)) > 2 {
+			t.Errorf("Overview columns must stay equal width at width %d: xs=%v", width, xs)
 		}
+		lastVal, lastOK := view.Find("2 分钟")
+		if !lastOK || lastVal.X+lastVal.W > float32(width) {
+			t.Errorf("Overview third column overflows width %d: %+v", width, lastVal)
+		}
+	}
+}
+
+func TestStatsFormatCountAndDayLabel(t *testing.T) {
+	for _, tc := range []struct {
+		n    uint64
+		want string
+	}{{0, "0"}, {999, "999"}, {1000, "1,000"}, {12345, "12,345"}, {1234567, "1,234,567"}} {
+		if got := formatCount(tc.n); got != tc.want {
+			t.Errorf("formatCount(%d)=%q, want %q", tc.n, got, tc.want)
+		}
+	}
+	now := time.Date(2026, 11, 24, 12, 0, 0, 0, time.Local)
+	if got := statsDayLabel("2026-11-24", now); got != "11月24日" {
+		t.Errorf("same-year statsDayLabel=%q, want 11月24日", got)
+	}
+	if got := statsDayLabel("2025-12-31", now); got != "2025-12-31" {
+		t.Errorf("cross-year statsDayLabel=%q, want 2025-12-31", got)
+	}
+	if got := statsDayLabel("bad-date", now); got != "bad-date" {
+		t.Errorf("invalid statsDayLabel=%q, want bad-date", got)
 	}
 }
 

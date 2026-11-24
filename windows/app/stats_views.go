@@ -5,8 +5,10 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo/ui"
@@ -62,7 +64,7 @@ func (s *settings) statsPage(c *ui.Context) {
 		return
 	}
 	now := time.Now()
-	s.statsOverview(c, statsMetrics(s.stats, now))
+	s.statsOverview(c, statsMetrics(s.stats, now), now)
 	hint(c, "速度只统计汉字与字母；两次上屏间隔超过 10 秒视为休息，不计入活跃时长")
 	ui.Row(c).FillWidth().Justify(ui.SpaceBetween).AlignItems(ui.Center).Wrap().Gap(10).Margin(18, 0, 0, 0).Children(func() {
 		ui.Segmented(c, &s.statsTab, "按键", "趋势", "类型", "候选").Label("统计分类")
@@ -137,52 +139,112 @@ func statsActiveParts(milliseconds uint64) [][2]string {
 	return [][2]string{{fmt.Sprint(minutes / 60), "小时"}, {fmt.Sprint(minutes % 60), "分钟"}}
 }
 
-func (s *settings) statsOverview(c *ui.Context, m typingMetrics) {
+func formatCount(n uint64) string {
+	s := strconv.FormatUint(n, 10)
+	if len(s) <= 3 {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + (len(s)-1)/3)
+	rem := len(s) % 3
+	if rem == 0 {
+		rem = 3
+	}
+	b.WriteString(s[:rem])
+	for i := rem; i < len(s); i += 3 {
+		b.WriteByte(',')
+		b.WriteString(s[i : i+3])
+	}
+	return b.String()
+}
+
+func statsDayLabel(date string, now time.Time) string {
+	parsed, err := time.Parse(time.DateOnly, date)
+	if err != nil {
+		return date
+	}
+	if parsed.Year() == now.Year() {
+		return parsed.Format("1月2日")
+	}
+	return parsed.Format(time.DateOnly)
+}
+
+func (s *settings) statsOverview(c *ui.Context, m typingMetrics, now time.Time) {
 	p := colors(c)
+	type overviewItem struct {
+		title, valueLabel string
+		parts             [][2]string
+		notes             []string
+	}
+	var bestNotes []string
+	if m.bestDay != "" {
+		bestNotes = []string{fmt.Sprintf("最高 %s", formatCount(m.bestChars)), statsDayLabel(m.bestDay, now)}
+	}
+	avgNotes := []string{"暂无记录"}
+	if m.recordedDays > 0 {
+		avgNotes = []string{
+			fmt.Sprintf("日均 %s", formatCount(uint64(math.Round(max(0, m.averagePerDay))))),
+			fmt.Sprintf("%d 天有记录", m.recordedDays),
+		}
+	}
+	var activeNotes []string
+	if m.totalActive > 0 {
+		activeNotes = []string{"累计 " + statsActive(m.totalActive)}
+	}
+	var fastestNotes []string
+	if m.fastestDay != "" {
+		fastestNotes = []string{
+			fmt.Sprintf("最快 %s", formatCount(uint64(math.Round(max(0, m.fastestSpeed))))),
+			statsDayLabel(m.fastestDay, now),
+		}
+	}
+	rows := [][]overviewItem{
+		{
+			{title: "今日输入", parts: [][2]string{{formatCount(m.todayChars), "字符"}}, notes: bestNotes},
+			{title: "累计输入", parts: [][2]string{{formatCount(m.totalChars), "字符"}}, notes: avgNotes},
+			{title: "今日活跃", valueLabel: statsActive(m.todayActive), parts: statsActiveParts(m.todayActive), notes: activeNotes},
+		},
+		{
+			{title: "今日速度", parts: [][2]string{{formatCount(uint64(math.Round(max(0, m.todaySpeed)))), "字/分钟"}}, notes: fastestNotes},
+			{title: "平均速度", parts: [][2]string{{formatCount(uint64(math.Round(max(0, m.averageSpeed)))), "字/分钟"}}},
+			{title: "连续天数", parts: [][2]string{{formatCount(uint64(max(0, m.streak))), "天"}}, notes: []string{fmt.Sprintf("最长 %d 天", m.longestStreak)}},
+		},
+	}
 	section(c, "概览", func() {
-		// 按各列内容定宽，把剩余宽度分给列间距，避免短列后面留下大片空白。
-		ui.Grid(c).FillWidth().ColumnTracks(ui.FitContent(), ui.FitContent(), ui.FitContent()).Justify(ui.SpaceBetween).GapX(24).GapY(20).Padding(16, 0).Children(func() {
-			best := ""
-			if m.bestDay != "" {
-				best = fmt.Sprintf("单日最多 %d 字符 · %s", m.bestChars, m.bestDay)
+		for rowIndex, items := range rows {
+			rowBox := ui.Row(c).FillWidth().AlignItems(ui.Stretch).Gap(25).Dividers(1, p.subBorder)
+			if rowIndex == 0 {
+				rowBox.Padding(14, 0, 16, 0)
+			} else {
+				rowBox.Padding(16, 0, 14, 0)
 			}
-			fastest := ""
-			if m.fastestDay != "" {
-				fastest = fmt.Sprintf("单日最快 %.0f 字/分钟 · %s", m.fastestSpeed, m.fastestDay)
-			}
-			type overviewItem struct {
-				title, valueLabel, note string
-				parts                   [][2]string
-			}
-			items := []overviewItem{
-				{title: "今日输入", parts: [][2]string{{fmt.Sprint(m.todayChars), "字符"}}, note: best},
-				{title: "累计输入", parts: [][2]string{{fmt.Sprint(m.totalChars), "字符"}}, note: fmt.Sprintf("日均 %.0f 字符 · %d 天有记录", m.averagePerDay, m.recordedDays)},
-				{title: "今日活跃", valueLabel: statsActive(m.todayActive), parts: statsActiveParts(m.todayActive), note: "累计 " + statsActive(m.totalActive)},
-				{title: "今日速度", parts: [][2]string{{fmt.Sprintf("%.0f", m.todaySpeed), "字/分钟"}}, note: fastest},
-				{title: "平均速度", parts: [][2]string{{fmt.Sprintf("%.0f", m.averageSpeed), "字/分钟"}}},
-				{title: "连续天数", parts: [][2]string{{fmt.Sprint(m.streak), "天"}}, note: fmt.Sprintf("最长 %d 天", m.longestStreak)},
-			}
-			for _, item := range items {
-				ui.Column(c).Gap(4).MinWidth(0).Children(func() {
-					ui.Text(c, item.title).FontSize(textSize(c, 12.5)).TextColor(p.muted)
-					valueRow := ui.Row(c).Wrap().Gap(4).AlignItems(ui.End)
-					if item.valueLabel != "" {
-						valueRow.Label(item.valueLabel)
-					}
-					valueRow.Children(func() {
-						for _, part := range item.parts {
-							ui.Text(c, part[0]).FontSize(textSize(c, 26)).FontWeight(600).FontFeatures("tnum").Wrap()
-							if part[1] != "" {
-								ui.Text(c, part[1]).FontSize(textSize(c, 12)).TextColor(p.muted).Padding(0, 0, 3, 0)
+			rowBox.Children(func() {
+				for _, item := range items {
+					ui.Column(c).Grow(1).Basis(0).MinWidth(0).Gap(6).Children(func() {
+						ui.Text(c, item.title).FontSize(textSize(c, 13)).FontWeight(500).TextColor(p.muted)
+						valueRow := ui.Row(c).Wrap().Gap(4).AlignItems(ui.End)
+						if item.valueLabel != "" {
+							valueRow.Label(item.valueLabel)
+						}
+						valueRow.Children(func() {
+							for _, part := range item.parts {
+								ui.Text(c, part[0]).FontSize(textSize(c, 26)).FontWeight(600).FontFeatures("tnum").Wrap()
+								if part[1] != "" {
+									ui.Text(c, part[1]).FontSize(textSize(c, 13)).TextColor(p.muted).Padding(0, 0, 3, 0)
+								}
 							}
+						})
+						if len(item.notes) > 0 {
+							ui.Row(c).FillWidth().Wrap().Gap(8).AlignItems(ui.Center).Children(func() {
+								for _, note := range item.notes {
+									ui.Text(c, note).FontSize(textSize(c, 12.5)).TextColor(p.muted).FontFeatures("tnum").LineHeight(1.35).Wrap()
+								}
+							})
 						}
 					})
-					if item.note != "" {
-						ui.Text(c, item.note).FontSize(textSize(c, 12)).TextColor(p.muted).FontFeatures("tnum").Wrap()
-					}
-				})
-			}
-		})
+				}
+			})
+		}
 	})
 }
 
