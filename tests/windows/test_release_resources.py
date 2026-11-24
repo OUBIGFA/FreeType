@@ -64,7 +64,7 @@ class ReleaseResourceTests(unittest.TestCase):
         identifiers = {component["id"] for component in manifest["components"]}
         self.assertTrue({"go:github.com/egoist/mygo", "rust:windows", "toolchain:go",
                          "toolchain:rust", "installer:nsis", "data:public-suffix-list",
-                         "data:opencc", "asset:octicons", "engine:wowtype-core", "data:unicode-cldr",
+                         "data:opencc", "asset:octicons", "asset:solar-icons", "engine:wowtype-core", "data:unicode-cldr",
                          "model:word-lm", "data:default"}.issubset(identifiers))
         self.assertEqual(manifest["unresolved"], [])
         self.assertEqual(manifest["authorizationRecordSha256"], hashlib.sha256(

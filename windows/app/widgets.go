@@ -1,6 +1,8 @@
 package main
 
 import (
+	"embed"
+
 	"github.com/egoist/mygo/ui"
 )
 
@@ -87,30 +89,41 @@ func colors(c *ui.Context) palette {
 	}
 }
 
-// stroked 把一组描边路径包成 24×24 的图标（颜色跟文字走）。
-func stroked(paths string) *ui.SVG {
-	return ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">` + paths + `</svg>`))
+// 界面图标取自 Solar Icons 的 Linear 风格，SVG 原样保存在 assets/solar，
+// 许可与署名文本随应用一起嵌入。ui.Icon 只取图形覆盖范围并按文字颜色着色，
+// 所以原文件里的 stroke="black" 不必改写，深浅主题都跟随文字颜色。
+//
+//go:embed assets/solar/*.svg assets/solar-icons-*.txt
+var solarAssets embed.FS
+
+// solar 读取一个内置的 Solar Linear 图标；缺文件属于构建错误，启动即报出。
+func solar(name string) *ui.SVG {
+	data, err := solarAssets.ReadFile("assets/solar/" + name + ".svg")
+	if err != nil {
+		panic(err)
+	}
+	return ui.MustParseSVG(data)
 }
 
-// 侧边栏图标（自己画的简单线条）。
+// 侧边栏图标，按页面含义选取 Solar Linear 图标。
 var icons = struct {
 	general, candidates, typing, features, shortcuts, dicts, phrases, common, learned, stats, sync, about *ui.SVG
 }{
-	general:    stroked(`<path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/>`),
-	candidates: stroked(`<rect x="3" y="6" width="18" height="12" rx="2.5"/><path d="M7 12h3M13 12h4"/>`),
-	typing:     stroked(`<rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/>`),
-	features:   stroked(`<path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M18 15l.8 2.2L21 18l-2.2.8L18 21l-.8-2.2L15 18l2.2-.8z"/>`),
-	shortcuts:  stroked(`<rect x="3" y="3" width="8" height="8" rx="2"/><rect x="13" y="13" width="8" height="8" rx="2"/><path d="M13 7h4a2 2 0 0 1 2 2v2M11 17H7a2 2 0 0 1-2-2v-2"/>`),
-	dicts:      stroked(`<path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 21V5M8 7h7M8 11h5"/>`),
-	phrases:    stroked(`<path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12h5"/>`),
-	common:     stroked(`<path d="M4 4h16v14H8l-4 3z"/><path d="M8 8h8M8 11h8M8 14h5"/>`),
-	learned:    stroked(`<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/>`),
-	stats:      stroked(`<path d="M3 3v18h18M8 16v-4m5 4V8m5 8v-6"/>`),
-	sync:       stroked(`<path d="M7 18a4 4 0 0 1-.6-7.96A6 6 0 0 1 18 9.5a4.25 4.25 0 0 1-.5 8.5"/><path d="M12 12v8M9 15l3-3 3 3"/>`),
-	about:      stroked(`<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5h.01"/>`),
+	general:    solar("settings"),
+	candidates: solar("palette"),
+	typing:     solar("keyboard"),
+	features:   solar("stars-minimalistic"),
+	shortcuts:  solar("command"),
+	dicts:      solar("book"),
+	phrases:    solar("chat-round-line"),
+	common:     solar("clipboard-text"),
+	learned:    solar("history"),
+	stats:      solar("chart-2"),
+	sync:       solar("cloud-upload"),
+	about:      solar("info-circle"),
 }
 
-var statusCheck = stroked(`<path d="M5 12l4 4L19 6"/>`)
+var statusCheck = solar("check")
 
 // navItem 是左边导航的一项：图标和名字；选中时浅灰底。点了返回 true。
 func navItem(c *ui.Context, icon *ui.SVG, name string, chosen bool) bool {

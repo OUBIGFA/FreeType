@@ -48,6 +48,13 @@
       "license": "MIT；见 windows/app/assets/octicons-license.txt"
     },
     {
+      "name": "Solar Icons",
+      "repository": "https://github.com/saoudi-h/solar-icons",
+      "revision": "ab241e1bf578dcfe45b0197aee59bd9a08b5fe68",
+      "use": "设置窗口侧边栏与运行状态的 Linear 风格图标；SVG 原样取自 packages/core/svgs/*/Linear，位于 windows/app/assets/solar，并嵌入应用",
+      "license": "图标设计 CC BY 4.0（Solar Icons Set by 480 Design），打包项目 MIT；见 windows/app/assets/solar-icons-license.txt 与 solar-icons-third-party-license.txt"
+    },
+    {
       "name": "msime-windows",
       "repository": "https://github.com/metasequoiaime/msime-windows",
       "revision": "26796f3ed646e2ce75ba39bca6f1352caca9fd67",

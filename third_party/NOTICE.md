@@ -67,6 +67,7 @@ FreeType 复用其 Rust 引擎、C ABI 和行为测试，并增加 Windows 服�
 - GPL-3.0、CC BY 4.0、CC BY-SA 4.0 原文在 `data/LICENSE`；万象的原始许可范围和第三方声明在 `data/WANXIANG-LICENSE-SCOPE.md`、`data/WANXIANG-NOTICE.md`。`third-party/data/default@<数据版本>/` 另保留这些声明。词库和模型以独立数据文件分发。保留 GPL 派生词表的义务，不将独立程序与未修改模型混称为同一衍生作品，也不能因同包分发而省略任一来源的义务。
 - `data/s2t.tsv` 是 OpenCC `1.4.1` 的字符与词组级简繁映射，不含 OpenCC 程序。本包保留映射内容；转换脚本为 `tools/opencc2tsv.py`。OpenCC 项目为 `https://github.com/BYVoid/OpenCC`，采用 Apache-2.0；完整许可和作者名单在 `third-party/data/opencc@1.4.1/`，运行数据保留在 `data/s2t.tsv`；对应来源副本在独立来源包的 `source/` 内提供。
 - 关于页的 GitHub 标志来自 `primer/octicons` 修订 `68ec2de8d0ddfcbb7497da01d0b7d98eb5593020`，采用 MIT 许可。FreeType 只调整 SVG 填充以跟随文字颜色，许可原文在 `third-party/asset/octicons@<修订>/`。
+- 设置窗口的侧边栏与状态图标来自 `saoudi-h/solar-icons` 修订 `ab241e1bf578dcfe45b0197aee59bd9a08b5fe68` 的 Linear 风格 SVG。图标设计为 Solar Icons Set，作者 480 Design（`https://www.figma.com/community/file/1166831539721848736`），采用 CC BY 4.0（`https://creativecommons.org/licenses/by/4.0/`）；打包项目由 Hakim Saoudi 以 MIT 许可发布。FreeType 未修改图形，显示时按界面文字颜色着色。许可原文在 `third-party/asset/solar-icons@<修订>/`。
 
 - 编入引擎的 emoji 关键词来自 WowType 的 `core/src/emoji/cldr.tsv`，使用 Unicode emoji-test.txt 18.0 和 CLDR 中英文数据，按原脚本筛选 emoji 15.0 及以前条目。原文件声明 `Copyright © 1991-2026 Unicode, Inc.`，适用 Unicode License v3；许可位于 `third-party/data/unicode-cldr@wowtype-5656e136/`，带原始头部的数据放入独立来源包。许可镜像还提及 LDML 规范文档；本包使用的是数据，不分发该规范文档，不能把数据许可扩张为规范文档许可。
 

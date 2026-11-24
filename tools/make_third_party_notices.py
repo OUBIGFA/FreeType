@@ -302,6 +302,10 @@ def collect(output):
     components.append(nsis_component)
     components.append(copy_component(output, "asset:octicons", "68ec2de8d0ddfcbb7497da01d0b7d98eb5593020",
                                      APP / "assets", ["octicons-license.txt"]))
+    # Solar 图标设计为 CC BY 4.0、打包项目为 MIT；两份原文都随安装包分发以满足署名要求。
+    components.append(copy_component(output, "asset:solar-icons", "ab241e1bf578dcfe45b0197aee59bd9a08b5fe68",
+                                     APP / "assets", ["solar-icons-license.txt",
+                                                      "solar-icons-third-party-license.txt"]))
     components.append(copy_component(output, "data:opencc", "1.4.1",
                                      ROOT / "third_party/licenses", ["OpenCC-LICENSE.txt", "OpenCC-AUTHORS.txt"],
                                      ROOT / "core/data/s2t.tsv"))
