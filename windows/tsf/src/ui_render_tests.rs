@@ -5,7 +5,7 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::StationsAndDesktops::{
     CreateDesktopW, GetThreadDesktop, SetThreadDesktop, DESKTOP_CONTROL_FLAGS,
-    DESKTOP_CREATEMENU, DESKTOP_CREATEWINDOW, DESKTOP_READOBJECTS, DESKTOP_WRITEOBJECTS, HDESK,
+    DESKTOP_CREATEMENU, DESKTOP_HOOKCONTROL, DESKTOP_CREATEWINDOW, DESKTOP_READOBJECTS, DESKTOP_WRITEOBJECTS, HDESK,
 };
 use windows::Win32::System::Threading::GetCurrentThreadId;
 
@@ -140,7 +140,9 @@ impl PrivateDesktop {
                     PCWSTR::null(),
                     None,
                     DESKTOP_CONTROL_FLAGS(0),
-                    DESKTOP_CREATEMENU.0 | DESKTOP_CREATEWINDOW.0 | DESKTOP_READOBJECTS.0 | DESKTOP_WRITEOBJECTS.0,
+                    // 联想点击监视要在桌面上装本线程鼠标钩子
+                    DESKTOP_CREATEMENU.0 | DESKTOP_CREATEWINDOW.0 | DESKTOP_HOOKCONTROL.0
+                        | DESKTOP_READOBJECTS.0 | DESKTOP_WRITEOBJECTS.0,
                     None,
                 )
                 .expect("必须能建立独立桌面，不能退回用户桌面测试").0 as usize
@@ -583,4 +585,66 @@ fn custom_candidate_skin_renders_configured_colors_and_block_toggle() {
         [0xf1, 0xf8, 0xfb],
         "关闭底色块后选中项周围保持窗口背景",
     );
+}
+
+#[test]
+fn prediction_dismisses_on_clicks_outside_the_candidate_window() {
+    use std::rc::Rc;
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        DispatchMessageW, PeekMessageW, SendMessageW, MSG, PM_REMOVE, WM_ACTIVATEAPP,
+    };
+    let _desktop = PrivateDesktop::new();
+    let instance = HINSTANCE(unsafe { GetModuleHandleW(None).unwrap() }.0);
+    let window = CandidateWindow::new(instance).unwrap();
+    let other = popup(instance, CLASS_NAME).unwrap();
+    let clicks = Rc::new(RefCell::new(Vec::new()));
+    let captured = clicks.clone();
+    set_click_handler(Some(Box::new(move |click| captured.borrow_mut().push(click))));
+    // 私有桌面收不到真实鼠标输入：按系统调用钩子的方式把按下交给它，再处理投递的消息
+    let press = |target: HWND, msg: u32| unsafe {
+        let info = MOUSEHOOKSTRUCT { hwnd: target, ..Default::default() };
+        outside_click_proc(HC_ACTION as i32, WPARAM(msg as usize), LPARAM(&info as *const _ as isize));
+        let mut msg = MSG::default();
+        while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() { DispatchMessageW(&msg); }
+    };
+    let watching = || OUTSIDE.with(Cell::get).is_some();
+    let mut frame = Frame {
+        candidates: vec!["好".into(), "一起".into()],
+        cursor: Some(0), predict: true, page_revision: 1,
+        font_size: 18, font_family: "Microsoft YaHei".into(),
+        ..Frame::default()
+    };
+    window.update(&frame, Some(rect(100, 100, 2, 20)));
+    assert!(watching(), "联想显示时装上点击监视");
+    press(window.hwnd, WM_LBUTTONDOWN);
+    press(other, WM_MOUSEMOVE);
+    assert!(clicks.borrow().is_empty(), "点在联想窗里面或只移动鼠标都不收起");
+
+    press(other, WM_LBUTTONDOWN);
+    assert_eq!(clicks.borrow().as_slice(), [Click::Dismiss], "点在联想窗外面就收起");
+    assert!(!watching());
+    clicks.borrow_mut().clear();
+
+    frame.page_revision += 1;
+    frame.commit = Some("好".into());
+    window.update(&frame, Some(rect(100, 100, 2, 20)));
+    press(other, WM_NCRBUTTONDOWN);
+    assert_eq!(clicks.borrow().as_slice(), [Click::Dismiss], "右键标题栏等非客户区也收起");
+    clicks.borrow_mut().clear();
+
+    window.update(&frame, Some(rect(100, 100, 2, 20)));
+    unsafe { SendMessageW(window.hwnd, WM_ACTIVATEAPP, Some(WPARAM(0)), Some(LPARAM(0))); }
+    assert_eq!(clicks.borrow().as_slice(), [Click::Dismiss], "切到别的程序也收起");
+    clicks.borrow_mut().clear();
+
+    window.update(&Frame { predict: false, ..frame.clone() }, Some(rect(100, 100, 2, 20)));
+    assert!(!watching(), "普通候选不装点击监视");
+    unsafe { SendMessageW(window.hwnd, WM_ACTIVATEAPP, Some(WPARAM(0)), Some(LPARAM(0))); }
+    assert!(clicks.borrow().is_empty(), "普通候选不受影响");
+    window.update(&frame, Some(rect(100, 100, 2, 20)));
+    window.hide();
+    assert!(!watching(), "收起窗口时卸下点击监视");
+    set_click_handler(None);
+    unsafe { let _ = DestroyWindow(other); }
 }

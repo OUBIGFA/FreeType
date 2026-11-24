@@ -8,7 +8,7 @@
 //!
 //! 颜色跟随系统的浅色 / 深色模式。字体、字号来自设置。
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use freetype_protocol::{parse_hex_rgb, CandidateAction, CandidateSkin, Frame, Panel};
 use windows::core::{w, HSTRING, PCWSTR, Result};
@@ -35,7 +35,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MA_NOACTIVATE, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE, WM_APP, WM_CAPTURECHANGED, WM_LBUTTONDOWN,
     WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP, WM_SETCURSOR, WM_TIMER,
     WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    CallNextHookEx, SetWindowsHookExW, UnhookWindowsHookEx, HC_ACTION, HHOOK, MOUSEHOOKSTRUCT, WH_MOUSE,
+    WM_ACTIVATEAPP, WM_MBUTTONDOWN, WM_NCLBUTTONDOWN, WM_NCMBUTTONDOWN, WM_NCRBUTTONDOWN, WM_NCXBUTTONDOWN,
+    WM_RBUTTONDOWN, WM_XBUTTONDOWN,
 };
+use windows::Win32::System::Threading::GetCurrentThreadId;
 
 const CLASS_NAME: PCWSTR = w!("FreeTypeCandidateWindow");
 const MENU_CLASS: PCWSTR = w!("FreeTypeCandidateMenu");
@@ -56,6 +60,8 @@ const PREDICT_MS: u32 = 6000;
 const PREDICTION_SPACE_TIMER: usize = 5;
 /// 按住多久算长按。
 const LONG_PRESS_MS: u32 = 500;
+/// 联想显示时，本线程里点到候选窗以外（见 [`watch_outside_clicks`]）。
+const WM_OUTSIDE_CLICK: u32 = WM_APP + 4;
 /// 鼠标离开窗口（TrackMouseEvent）。
 const WM_MOUSELEAVE: u32 = 0x02a3;
 
@@ -82,6 +88,58 @@ thread_local! {
     static MENU: RefCell<Option<HWND>> = const { RefCell::new(None) };
     /// 文本服务挪光标的处理函数：返回 true 表示还没挪成，过一会儿再叫一次。
     static CARET_HANDLER: RefCell<Option<Box<dyn Fn() -> bool>>> = const { RefCell::new(None) };
+    /// 联想显示期间装着的本线程鼠标钩子，和要通知的候选窗。
+    static OUTSIDE: Cell<Option<(HHOOK, HWND)>> = const { Cell::new(None) };
+}
+
+/// 联想显示时盯住本线程的鼠标按下，跟联想计时器同开同关。
+///
+/// 联想没有组字，应用不会因为点击结束它，只能自己看。只装线程钩子：不进别的进程，
+/// 也看不到别的程序里的点击；切到别的程序由候选窗收到的 `WM_ACTIVATEAPP` 处理。
+fn watch_outside_clicks(hwnd: HWND, on: bool) {
+    OUTSIDE.with(|cell| match (cell.get(), on) {
+        (None, true) => {
+            let hook = unsafe { SetWindowsHookExW(WH_MOUSE, Some(outside_click_proc), None, GetCurrentThreadId()) };
+            match hook {
+                Ok(hook) => cell.set(Some((hook, hwnd))),
+                // 受限的应用（如沙盒进程）可能不许装钩子：联想仍靠计时器收起，日志只记一次
+                Err(error) => {
+                    static LOGGED: std::sync::Once = std::sync::Once::new();
+                    LOGGED.call_once(|| crate::log::write("联想点击监视安装失败", &error.to_string()));
+                }
+            }
+        }
+        (Some((hook, _)), false) => {
+            unsafe { let _ = UnhookWindowsHookEx(hook); }
+            cell.set(None);
+        }
+        _ => {}
+    });
+}
+
+/// 按下落在候选窗和它的右键菜单以外就通知候选窗。钩子里不直接收起：
+/// 收起要找服务进程，放回消息循环再做，点击照常交给应用（光标照常挪过去）。
+unsafe extern "system" fn outside_click_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    let down = matches!(wparam.0 as u32,
+        WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN
+        | WM_NCLBUTTONDOWN | WM_NCRBUTTONDOWN | WM_NCMBUTTONDOWN | WM_NCXBUTTONDOWN);
+    if code == HC_ACTION as i32 && down {
+        let target = unsafe { (*(lparam.0 as *const MOUSEHOOKSTRUCT)).hwnd };
+        if let Some((_, owner)) = OUTSIDE.with(Cell::get) {
+            if target != owner && MENU.with(|m| *m.borrow()) != Some(target) {
+                unsafe { let _ = PostMessageW(Some(owner), WM_OUTSIDE_CLICK, WPARAM(0), LPARAM(0)); }
+            }
+        }
+    }
+    unsafe { CallNextHookEx(None, code, wparam, lparam) }
+}
+
+/// 点到外面或切到别的程序：联想还显示着就收起（同 [`Click::Dismiss`]）。
+fn dismiss_on_leave(hwnd: HWND) {
+    if OUTSIDE.with(Cell::get).is_none() { return; }
+    watch_outside_clicks(hwnd, false);
+    unsafe { let _ = KillTimer(Some(hwnd), PREDICT_TIMER); }
+    dispatch(Click::Dismiss);
 }
 
 pub fn set_click_handler(handler: Option<Box<dyn Fn(Click)>>) {
@@ -848,8 +906,17 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
                 unsafe {
                     let _ = KillTimer(Some(hwnd), PREDICT_TIMER);
                 }
+                watch_outside_clicks(hwnd, false);
                 dispatch(Click::Dismiss);
             }
+            LRESULT(0)
+        }
+        WM_OUTSIDE_CLICK => {
+            dismiss_on_leave(hwnd);
+            LRESULT(0)
+        }
+        WM_ACTIVATEAPP if wparam.0 == 0 => {
+            dismiss_on_leave(hwnd);
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == PREDICTION_SPACE_TIMER => {
@@ -869,6 +936,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             LRESULT(0)
         }
         WM_NCDESTROY => unsafe {
+            if OUTSIDE.with(Cell::get).is_some_and(|(_, owner)| owner == hwnd) { watch_outside_clicks(hwnd, false); }
             let ptr = SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0) as *mut Data;
             if !ptr.is_null() {
                 drop(Box::from_raw(ptr));
@@ -986,6 +1054,7 @@ impl CandidateWindow {
             let _ = KillTimer(Some(self.hwnd), PREDICT_TIMER);
             let _ = ShowWindow(self.hwnd, SW_HIDE);
         }
+        watch_outside_clicks(self.hwnd, false);
     }
 
     pub fn hwnd(&self) -> HWND {
@@ -1072,6 +1141,7 @@ impl CandidateWindow {
                     let _ = UpdateWindow(self.hwnd);
                     SetTimer(Some(self.hwnd), PREDICT_TIMER, PREDICT_MS, None);
                 }
+                watch_outside_clicks(self.hwnd, true);
                 return;
             }
         }
@@ -1087,6 +1157,7 @@ impl CandidateWindow {
                 let _ = KillTimer(Some(self.hwnd), PREDICT_TIMER);
             }
         }
+        watch_outside_clicks(self.hwnd, frame.predict);
     }
 
     /// 编辑区挪了位置（应用排好版以后）：窗口跟过去。
