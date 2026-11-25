@@ -450,16 +450,16 @@ func TestCandidatesPageCustomSkinTemplatesToggleAndPreservation(t *testing.T) {
 	s.config.CandidateStyle = "custom"
 	s.saveConfig()
 	tt.Frame()
-	for _, text := range []string{"选中底色块", "窗口背景", "窗口边框", "候选文字", "拼音与序号", "选中背景", "选中文字", "暖纸", "恢复默认配色"} {
+	for _, text := range []string{"选中底色块", "窗口背景", "窗口边框", "候选文字", "拼音与序号", "选中背景", "选中文字", "霜白", "宣纸", "墨夜", "月影", "恢复默认配色"} {
 		if !tt.HasText(text) {
 			t.Fatalf("自定义皮肤面板缺少「%s」：%q", text, tt.Texts())
 		}
 	}
-	if err := tt.Click("暖纸"); err != nil {
+	if err := tt.Click("宣纸"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	if b.config.CandidateSkin.Background != "#fbf8f1" || b.config.CandidateSkin.Accent != "#b45309" {
+	if b.config.CandidateSkin.Background != "#f9f6ef" || b.config.CandidateSkin.Accent != "#a9442a" {
 		t.Fatalf("点击模板未保存对应配色：%+v", b.config.CandidateSkin)
 	}
 	if err := tt.Click("选中底色块"); err != nil {
@@ -472,11 +472,71 @@ func TestCandidatesPageCustomSkinTemplatesToggleAndPreservation(t *testing.T) {
 	s.config.CandidateStyle = "pink"
 	s.saveConfig()
 	tt.Frame()
-	if b.config.CandidateSkin.Background != "#fbf8f1" {
+	if b.config.CandidateSkin.Background != "#f9f6ef" {
 		t.Fatalf("切回内置样式不应丢失自定义配色：%+v", b.config.CandidateSkin)
 	}
 	if results := findSettings("皮肤"); len(results) < 2 {
 		t.Fatalf("搜索「皮肤」应定位候选皮肤与自定义配色：%v", results)
+	}
+}
+
+func TestCandidateSkinTemplatesMeetContrastAndBalance(t *testing.T) {
+	seen := map[string]bool{}
+	lightCount, darkCount := 0, 0
+	for _, tpl := range candidateSkinTemplates {
+		if tpl.name == "" {
+			t.Fatal("预设配色名称不能为空")
+		}
+		if seen[tpl.name] {
+			t.Fatalf("预设配色名称重复：%s", tpl.name)
+		}
+		seen[tpl.name] = true
+
+		colorsToCheck := []struct {
+			label, raw string
+		}{
+			{"Background", tpl.skin.Background},
+			{"Border", tpl.skin.Border},
+			{"Text", tpl.skin.Text},
+			{"Muted", tpl.skin.Muted},
+			{"Accent", tpl.skin.Accent},
+			{"AccentText", tpl.skin.AccentText},
+		}
+		for _, item := range colorsToCheck {
+			if _, ok := parseHexRGB(item.raw); !ok {
+				t.Fatalf("预设「%s」的 %s 颜色格式无效：%q", tpl.name, item.label, item.raw)
+			}
+		}
+
+		bg, _ := parseHexRGB(tpl.skin.Background)
+		text, _ := parseHexRGB(tpl.skin.Text)
+		muted, _ := parseHexRGB(tpl.skin.Muted)
+		accent, _ := parseHexRGB(tpl.skin.Accent)
+		accentText, _ := parseHexRGB(tpl.skin.AccentText)
+
+		if got := colorContrast(text, bg); got < 7.0 {
+			t.Errorf("预设「%s」正文对比度不足：%.2f:1（要求 >= 7.0:1）", tpl.name, got)
+		}
+		if got := colorContrast(muted, bg); got < 4.5 {
+			t.Errorf("预设「%s」拼音序号对比度不足：%.2f:1（要求 >= 4.5:1）", tpl.name, got)
+		}
+		selBg := bg
+		if tpl.skin.AccentFill {
+			selBg = accent
+		}
+		if got := colorContrast(accentText, selBg); got < 4.5 {
+			t.Errorf("预设「%s」选中文字对比度不足：%.2f:1（要求 >= 4.5:1）", tpl.name, got)
+		}
+
+		lum := colorLuminance(bg)
+		if lum > 0.7 {
+			lightCount++
+		} else if lum < 0.1 {
+			darkCount++
+		}
+	}
+	if lightCount < 4 || darkCount < 4 {
+		t.Fatalf("浅色与深色预设数量应各不少于 4 套：light=%d dark=%d", lightCount, darkCount)
 	}
 }
 

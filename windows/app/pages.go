@@ -343,10 +343,11 @@ func (s *settings) candidatesPage(c *ui.Context) {
 				s.settingBlock(c, "candidates/自定义配色", func() {
 					subContent(c, func() {
 						p := colors(c)
-						ui.Text(c, "从模板快速开始，或单独调整下方各部分颜色").FontSize(textSize(c, 12.5)).TextColor(p.muted).Wrap()
+						ui.Text(c, "选择预设配色快速开始，或单独调整下方各部分颜色").FontSize(textSize(c, 12.5)).TextColor(p.muted).Wrap()
 						ui.Row(c).FillWidth().Wrap().GapX(8).GapY(8).AlignItems(ui.Center).Children(func() {
 							for _, tpl := range candidateSkinTemplates {
-								if ui.Button(c, tpl.name).Clicked() {
+								active := sameCandidateSkin(s.config.CandidateSkin, tpl.skin)
+								if skinPresetChip(c, tpl.name, tpl.skin, active) {
 									s.config.CandidateSkin = tpl.skin
 									changed = true
 								}
@@ -486,16 +487,79 @@ type candidateTheme struct {
 	accent, accentText              ui.Color
 }
 
+// 预设配色按浅色 / 深色成组排列，采用色相微偏中性底色与低眩光强调色，
+// 保证正文、拼音序号与选中文字均满足高可读对比度。
 var candidateSkinTemplates = []struct {
 	name string
 	skin CandidateSkin
 }{
-	{"浅色蓝", CandidateSkin{Background: "#ffffff", Border: "#d6d6d6", Text: "#1f1f1f", Muted: "#616161", Accent: "#2b6ce6", AccentText: "#ffffff", AccentFill: true}},
-	{"深色蓝", CandidateSkin{Background: "#24262b", Border: "#3e424b", Text: "#eef0f4", Muted: "#9aa0ac", Accent: "#2f70e8", AccentText: "#ffffff", AccentFill: true}},
-	{"柔和绿", CandidateSkin{Background: "#ffffff", Border: "#d6d6d6", Text: "#1f1f1f", Muted: "#616161", Accent: "#0e8549", AccentText: "#ffffff", AccentFill: true}},
-	{"玫瑰粉", CandidateSkin{Background: "#ffffff", Border: "#e6d8de", Text: "#1f1f1f", Muted: "#6b5c63", Accent: "#c44569", AccentText: "#ffffff", AccentFill: true}},
-	{"暖纸", CandidateSkin{Background: "#fbf8f1", Border: "#e2d9c8", Text: "#2c261f", Muted: "#7a7062", Accent: "#b45309", AccentText: "#ffffff", AccentFill: true}},
-	{"石墨", CandidateSkin{Background: "#1e1e24", Border: "#383844", Text: "#ebebf0", Muted: "#9595a6", Accent: "#6366f1", AccentText: "#ffffff", AccentFill: true}},
+	// 浅色
+	{"霜白", CandidateSkin{Background: "#fafbfc", Border: "#dcdfe6", Text: "#181c24", Muted: "#5e6675", Accent: "#e4eeff", AccentText: "#174ea6", AccentFill: true}},
+	{"宣纸", CandidateSkin{Background: "#f9f6ef", Border: "#dfd7c7", Text: "#26211b", Muted: "#6e6456", Accent: "#a9442a", AccentText: "#fcfaf5", AccentFill: true}},
+	{"青瓷", CandidateSkin{Background: "#f6f8f6", Border: "#d5dfd8", Text: "#1c2620", Muted: "#58695f", Accent: "#ddebe2", AccentText: "#165a3c", AccentFill: true}},
+	{"暮樱", CandidateSkin{Background: "#fbf7f6", Border: "#e6d8d8", Text: "#2d2228", Muted: "#75616b", Accent: "#f4e1e4", AccentText: "#8f2d4c", AccentFill: true}},
+	// 深色
+	{"墨夜", CandidateSkin{Background: "#181a1f", Border: "#2d313b", Text: "#e6e9ef", Muted: "#8e96a6", Accent: "#26354d", AccentText: "#8ec0ff", AccentFill: true}},
+	{"月影", CandidateSkin{Background: "#1e1e2e", Border: "#383a52", Text: "#cdd6f4", Muted: "#9399b2", Accent: "#b4befe", AccentText: "#181825", AccentFill: true}},
+	{"极夜", CandidateSkin{Background: "#242933", Border: "#3b4252", Text: "#e5e9f0", Muted: "#9aa5b8", Accent: "#88c0d0", AccentText: "#1d222b", AccentFill: true}},
+	{"松烟", CandidateSkin{Background: "#1d1b18", Border: "#36322b", Text: "#eae3d5", Muted: "#9d9485", Accent: "#3a3022", AccentText: "#e8b86d", AccentFill: true}},
+}
+
+func sameCandidateSkin(a, b CandidateSkin) bool {
+	if a.AccentFill != b.AccentFill {
+		return false
+	}
+	d := defaultCandidateSkin()
+	norm := func(raw, fallback string) string {
+		return formatHexRGB(parseSkinColor(raw, fallback))
+	}
+	return norm(a.Background, d.Background) == norm(b.Background, d.Background) &&
+		norm(a.Border, d.Border) == norm(b.Border, d.Border) &&
+		norm(a.Text, d.Text) == norm(b.Text, d.Text) &&
+		norm(a.Muted, d.Muted) == norm(b.Muted, d.Muted) &&
+		norm(a.Accent, d.Accent) == norm(b.Accent, d.Accent) &&
+		norm(a.AccentText, d.AccentText) == norm(b.AccentText, d.AccentText)
+}
+
+func skinPresetChip(c *ui.Context, name string, skin CandidateSkin, active bool) bool {
+	p := colors(c)
+	d := defaultCandidateSkin()
+	bg := parseSkinColor(skin.Background, d.Background)
+	border := parseSkinColor(skin.Border, d.Border)
+	textCol := parseSkinColor(skin.Text, d.Text)
+	accent := parseSkinColor(skin.Accent, d.Accent)
+	if !skin.AccentFill {
+		accent = parseSkinColor(skin.AccentText, d.AccentText)
+	}
+	chip := ui.ButtonBase(c).MinHeight(max(32, textSize(c, 32))).Padding(5, 10).Gap(8).
+		Radius(controlRadius).AlignItems(ui.Center).Cursor(ui.CursorPointer).Label(name)
+	chipBorder := p.subBorder
+	if active {
+		chipBorder = c.Theme().Focus
+		if c.Preferences().HighContrast {
+			chipBorder = p.border
+		}
+		chip.Background(p.chosen).Border(1, chipBorder)
+	} else {
+		if chip.Hovered() {
+			chip.Background(p.cardHover)
+		} else {
+			chip.Background(p.card)
+		}
+		chip.Border(1, chipBorder)
+	}
+	chip.Children(func() {
+		ui.Row(c).Width(24).Height(16).Padding(2, 3).Gap(2).Radius(4).AlignItems(ui.Center).
+			Background(bg).Border(1, border).Children(func() {
+			ui.Row(c).Width(9).Height(8).Radius(2).Background(accent)
+			ui.Row(c).Width(6).Height(3).Radius(1).Background(textCol)
+		})
+		label := ui.Text(c, name).FontSize(textSize(c, 13)).SingleLine()
+		if active {
+			label.FontWeight(600)
+		}
+	})
+	return chip.Clicked()
 }
 
 func parseHexRGB(raw string) (ui.Color, bool) {
