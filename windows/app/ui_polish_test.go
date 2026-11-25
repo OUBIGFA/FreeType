@@ -445,3 +445,43 @@ func TestSettingsPageLayoutMatrix(test *testing.T) {
 		})
 	}
 }
+
+func TestSyncPlanSettingsAlignAndIndentScheduleOption(test *testing.T) {
+	state, _ := newTestSettings()
+	state.syncDir = test.TempDir()
+	state.loadSync()
+	state.sync.Enabled, state.sync.Automatic = true, true
+	state.page = "sync"
+
+	for _, tc := range []struct {
+		schedule string
+		child    string
+	}{
+		{"interval", "同步间隔 / 分钟"},
+		{"daily", "每天时间"},
+	} {
+		state.sync.Schedule = tc.schedule
+		view := ui.NewTester(state.view, 1000, 1800)
+		view.Frame()
+		modeRow, ok := view.Find("同步方式")
+		if !ok {
+			test.Fatalf("同步方式设置项缺失")
+		}
+		childRow, ok := view.Find(tc.child)
+		if !ok {
+			test.Fatalf("%s 设置项缺失", tc.child)
+		}
+		if childRow.X <= modeRow.X+10 {
+			test.Fatalf("%s 应作为三级子项相对「同步方式」缩进：mode.X=%.1f child.X=%.1f", tc.child, modeRow.X, childRow.X)
+		}
+		for _, sibling := range []string{"启动时同步", "每日最多次数", "失败重试次数", "每台电脑保留备份"} {
+			rowBounds, found := view.Find(sibling)
+			if !found {
+				test.Fatalf("%s 设置项缺失", sibling)
+			}
+			if math.Abs(float64(rowBounds.X-modeRow.X)) > 1 {
+				test.Fatalf("二级设置项 %s 与「同步方式」左边缘未对齐：got=%.1f want=%.1f", sibling, rowBounds.X, modeRow.X)
+			}
+		}
+	}
+}

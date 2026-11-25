@@ -94,71 +94,76 @@ func (s *settings) syncPage(c *ui.Context) {
 			}
 		}, true, func() {
 			s.settingBlock(c, "sync/同步计划", func() {
-				subContent(c, func() {
+				showPlan := s.sync.Automatic || s.showSetting("sync/同步计划")
+				ui.Column(c).FillWidth().Gap(1).Dividers(1, colors(c).subBorder).Children(func() {
 					s.syncStatusSummary(c)
-					ui.Row(c).Gap(16).Wrap().AlignItems(ui.Start).Children(func() {
-						ui.Field(c, "同步方式", func() {
-							mode := 0
-							if s.sync.Schedule == "daily" {
-								mode = 1
-							}
-							// 表单内容列默认拉伸子控件；分段按钮按标签宽度显示。
-							if ui.Segmented(c, &mode, "按间隔", "每天定时").AlignSelf(ui.Start).Label("同步方式").Changed() {
-								s.sync.Schedule = []string{"interval", "daily"}[mode]
-							}
-						}).Grow(1).Basis(200).MinWidth(160)
-						if s.sync.Schedule == "daily" {
-							ui.Field(c, "每天时间", func() { ui.TextInput(c, &s.sync.DailyTime).Label("每天同步时间").Placeholder("21:00").Width(160) }).
-								Description("按本机时间，24 小时制").Grow(1).Basis(200).MinWidth(160)
-						} else {
-							ui.Field(c, "间隔 / 分钟", func() {
-								value := float64(s.sync.IntervalMinutes)
-								if ui.NumberInput(c, &value, 1, 1440, 1).Label("同步间隔").Width(160).Changed() {
-									s.sync.IntervalMinutes = int(value)
+					if showPlan {
+						ui.Column(c).FillWidth().Children(func() {
+							subRow(c, "同步方式", "", func() {
+								mode := 0
+								if s.sync.Schedule == "daily" {
+									mode = 1
 								}
-							}).Grow(1).Basis(200).MinWidth(160)
-						}
-					})
-					ui.Row(c).Gap(16).Wrap().AlignItems(ui.Start).Children(func() {
-						ui.Field(c, "每日最多次数", func() {
+								if ui.Segmented(c, &mode, "按间隔", "每天定时").Label("同步方式").Changed() {
+									s.sync.Schedule = []string{"interval", "daily"}[mode]
+								}
+							})
+							nestedSubGroup(c, func() {
+								if s.sync.Schedule == "daily" {
+									subRow(c, "每天时间", "按本机时间，24 小时制", func() {
+										ui.TextInput(c, &s.sync.DailyTime).Label("每天同步时间").Placeholder("21:00").Width(160).MaxWidthPercent(100)
+									})
+								} else {
+									subRow(c, "同步间隔 / 分钟", "", func() {
+										value := float64(s.sync.IntervalMinutes)
+										if ui.NumberInput(c, &value, 1, 1440, 1).Label("同步间隔").Width(160).MaxWidthPercent(100).Changed() {
+											s.sync.IntervalMinutes = int(value)
+										}
+									})
+								}
+							})
+						})
+						switchLine(c, "启动时同步", "启动 FreeType 后同步一次", &s.sync.SyncOnStart, true)
+						subRow(c, "每日最多次数", "0 表示不限；手动同步不受限", func() {
 							value := float64(s.sync.DailyLimit)
-							if ui.NumberInput(c, &value, 0, 1440, 1).Label("每日最多次数").Width(160).Changed() {
+							if ui.NumberInput(c, &value, 0, 1440, 1).Label("每日最多次数").Width(160).MaxWidthPercent(100).Changed() {
 								s.sync.DailyLimit = int(value)
 							}
-						}).Description("0 表示不限；手动同步不受限").Grow(1).Basis(200).MinWidth(160)
-						ui.Field(c, "失败重试次数", func() {
+						})
+						subRow(c, "失败重试次数", "0 表示不重试", func() {
 							value := float64(s.sync.RetryLimit)
-							if ui.NumberInput(c, &value, 0, 10, 1).Label("失败重试次数").Width(160).Changed() {
+							if ui.NumberInput(c, &value, 0, 10, 1).Label("失败重试次数").Width(160).MaxWidthPercent(100).Changed() {
 								s.sync.RetryLimit = int(value)
 							}
-						}).Grow(1).Basis(180).MinWidth(160)
-						ui.Field(c, "每台电脑保留备份", func() {
+						})
+						subRow(c, "每台电脑保留备份", "超出时自动清理较早的云端备份", func() {
 							value := float64(s.sync.KeepSnapshots)
-							if ui.NumberInput(c, &value, 1, 100, 1).Label("保留备份数").Width(160).Changed() {
+							if ui.NumberInput(c, &value, 1, 100, 1).Label("保留备份数").Width(160).MaxWidthPercent(100).Changed() {
 								s.sync.KeepSnapshots = int(value)
 							}
-						}).Grow(1).Basis(180).MinWidth(160)
-					})
-					checkbox(c, &s.sync.SyncOnStart, "启动 FreeType 后同步一次")
-					ui.Row(c).Gap(8).Wrap().Children(func() {
-						if ui.Button(c, "保存同步计划").Disabled(busy).Clicked() {
-							s.syncMessageArea = "plan"
-							if s.saveSync() {
-								s.syncMessage = "同步计划已保存"
-								s.syncFailed = false
-							}
-						}
-						if ui.PrimaryButton(c, "立即同步").Disabled(busy || s.autoSync == nil).Clicked() {
-							s.retrySync()
-						}
-						if ui.Button(c, "打开恢复前备份").Clicked() && s.openFolder != nil {
-							s.openFolder(filepath.Join(s.syncDataDir(), "sync-backups"))
-						}
-					})
-					s.syncFeedback(c, "plan")
-					if !s.autoSyncStatus.Failed && s.syncMessageArea == "plan" && s.syncFailed && s.syncMessage != "" {
-						s.syncRecoveryActions(c, "plan", s.syncMessage, busy)
+						})
 					}
+					ui.Column(c).FillWidth().Padding(12, 0, 8, 0).Gap(8).Children(func() {
+						ui.Row(c).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
+							if showPlan && ui.Button(c, "保存同步计划").Disabled(busy).Clicked() {
+								s.syncMessageArea = "plan"
+								if s.saveSync() {
+									s.syncMessage = "同步计划已保存"
+									s.syncFailed = false
+								}
+							}
+							if ui.PrimaryButton(c, "立即同步").Disabled(busy || s.autoSync == nil).Clicked() {
+								s.retrySync()
+							}
+							if ui.Button(c, "打开恢复前备份").Clicked() && s.openFolder != nil {
+								s.openFolder(filepath.Join(s.syncDataDir(), "sync-backups"))
+							}
+						})
+						s.syncFeedback(c, "plan")
+						if !s.autoSyncStatus.Failed && s.syncMessageArea == "plan" && s.syncFailed && s.syncMessage != "" {
+							s.syncRecoveryActions(c, "plan", s.syncMessage, busy)
+						}
+					})
 				})
 			})
 		})
@@ -310,7 +315,7 @@ func (s *settings) syncStatusSummary(c *ui.Context) {
 		color = c.Theme().Danger
 	}
 	p := colors(c)
-	ui.Column(c).FillWidth().Gap(10).Padding(0, 0, 12, 0).BorderWidth(0, 0, 1, 0).BorderColor(p.subBorder).Children(func() {
+	ui.Column(c).FillWidth().Gap(10).Padding(10, 0, 12, 0).Children(func() {
 		ui.Text(c, message).FontSize(textSize(c, 14)).FontWeight(600).TextColor(color).LineHeight(1.4).Wrap()
 		if status.Failed {
 			s.syncRecoveryActions(c, "plan", message, s.syncBusy != "" || status.Busy)
