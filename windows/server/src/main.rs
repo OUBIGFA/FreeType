@@ -37,6 +37,8 @@ mod app {
         /// 第几次载入（换了词库会再载入；旧的晚到了不要）、结果。
         Loaded(u64, Result<wowtype_core::Engine, String>),
         Bar(BarEvent),
+        /// 后台任务线程算好、需要在引擎线程应用的结果（同步合并）。
+        Apply(freetype_server::tasks::Apply),
     }
 
     /// 在后台载入引擎。
@@ -53,6 +55,15 @@ mod app {
             }
             let _ = events.send(Event::Loaded(generation, result));
         });
+    }
+
+    /// 设置或同步换了主词库：在后台重新载入（旧的晚到了不要）。
+    fn reload_if_changed(host: &mut Host, generation: &mut u64, events: &mpsc::Sender<Event>) {
+        if let Some(lexicon) = host.take_lexicon_change() {
+            *generation += 1;
+            host.set_lexicon_in_use(freetype_server::host::lexicon_path(&resource_dir(), &lexicon).display().to_string());
+            spawn_loader(events.clone(), *generation, lexicon);
+        }
     }
 
     /// 状态栏、剪贴板这些不属于哪个输入框的请求用的连接号。
@@ -200,6 +211,7 @@ mod app {
         if !pipe::single_instance() {
             return 0;
         }
+        freetype_server::prioritize_input();
         // panic 的原因写进日志（没有控制台，不然看不到）
         std::panic::set_hook(Box::new(|info| log(&format!("内部错误：{info}"))));
         // 词库快照写不进安装目录时放到 %LOCALAPPDATA%\FreeType\cache
@@ -235,6 +247,16 @@ mod app {
         });
 
         let mut host = Host::new(Store::new(data));
+        let (apply_tx, apply_rx) = mpsc::channel::<freetype_server::tasks::Apply>();
+        host.set_apply_channel(apply_tx);
+        let forward = events.clone();
+        std::thread::spawn(move || {
+            while let Ok(apply) = apply_rx.recv() {
+                if forward.send(Event::Apply(apply)).is_err() {
+                    break;
+                }
+            }
+        });
         let mut generation = 0u64;
         let lexicon = host.config().lexicon.clone();
         host.set_lexicon_in_use(freetype_server::host::lexicon_path(&resource_dir(), &lexicon).display().to_string());
@@ -292,23 +314,27 @@ mod app {
                 }
                 Ok(Event::Pipe(Message::Connected(_))) => {}
                 Ok(Event::Pipe(Message::Disconnected(id))) => host.disconnect(id),
+                Ok(Event::Apply(apply)) => {
+                    apply(&mut host);
+                    reload_if_changed(&mut host, &mut generation, &events);
+                }
                 Ok(Event::Pipe(Message::Request(id, request, reply))) => {
-                    let shutdown = request == Request::Shutdown;
-                    let response = host.handle(id, request);
-                    let should_exit = shutdown && response.ok;
-                    let _ = reply.send(response);
-                    if let Some(lexicon) = host.take_lexicon_change() {
-                        generation += 1;
-                        host.set_lexicon_in_use(
-                            freetype_server::host::lexicon_path(&resource_dir(), &lexicon).display().to_string(),
-                        );
-                        spawn_loader(events.clone(), generation, lexicon);
+                    if request != Request::Shutdown {
+                        // 同步的重计算转到后台任务线程，其余请求照常在这里处理。
+                        host.dispatch(id, request, reply);
+                        reload_if_changed(&mut host, &mut generation, &events);
+                        continue;
                     }
+                    let response = host.handle(id, request);
+                    let should_exit = response.ok;
+                    let _ = reply.send(response);
                     if should_exit {
                         host.save_if_dirty();
                         log("收到退出请求");
                         // 让管道线程把应答写出去
                         std::thread::sleep(Duration::from_millis(100));
+                        // 先丢弃还没应用的后台结果，后台线程不再等主循环，宿主析构时能顺利收尾。
+                        drop(inbox);
                         return 0;
                     }
                 }

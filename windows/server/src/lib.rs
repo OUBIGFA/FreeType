@@ -11,6 +11,7 @@ pub mod store;
 mod dictionary_catalog;
 mod lookup_mode;
 mod sync_merge;
+pub mod tasks;
 pub mod tools;
 
 #[cfg(windows)]
@@ -65,6 +66,55 @@ pub fn resource_dir() -> PathBuf {
     let exe = std::env::current_exe().unwrap_or_default();
     let bin = exe.parent().map(PathBuf::from).unwrap_or_default();
     bin.parent().map(|root| root.join("data")).unwrap_or_else(|| bin.join("data"))
+}
+
+/// 输入路径优先：服务进程高于普通应用一级，并退出 Windows 的节能降速。
+///
+/// 默认由系统判断 QoS 时，没有前台窗口的服务进程常被放到能效核或降频运行；
+/// 实测同一份词库逐键中位数 14–23 ms、最慢 117 ms，退出后为 8–9 ms、最慢 24 ms。
+/// 后台工作线程用 [`background_thread`] 降回普通应用以下，不和按键争处理器。
+#[cfg(windows)]
+pub fn prioritize_input() {
+    use windows::Win32::System::Threading::{
+        GetCurrentProcess, SetPriorityClass, SetProcessInformation, ProcessPowerThrottling, ABOVE_NORMAL_PRIORITY_CLASS,
+        PROCESS_POWER_THROTTLING_CURRENT_VERSION, PROCESS_POWER_THROTTLING_EXECUTION_SPEED, PROCESS_POWER_THROTTLING_STATE,
+    };
+    // ControlMask 含 EXECUTION_SPEED、StateMask 不含：明确要求高 QoS，不交给系统猜测。
+    let state = PROCESS_POWER_THROTTLING_STATE {
+        Version: PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+        ControlMask: PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
+        StateMask: 0,
+    };
+    unsafe {
+        if let Err(error) = SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS) {
+            log(&format!("提高服务进程优先级失败：{error}"));
+        }
+        if let Err(error) = SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling,
+            (&state as *const PROCESS_POWER_THROTTLING_STATE).cast(), std::mem::size_of_val(&state) as u32) {
+            log(&format!("关闭服务进程节能降速失败：{error}"));
+        }
+    }
+}
+
+/// 后台线程（写盘、同步计算）：优先级回到普通应用水平，并允许系统节能调度。
+/// 只影响调用它的线程；输入路径的线程保持 [`prioritize_input`] 的设定。
+pub fn background_thread() {
+    #[cfg(windows)]
+    unsafe {
+        use windows::Win32::System::Threading::{
+            GetCurrentThread, SetThreadInformation, SetThreadPriority, ThreadPowerThrottling, THREAD_POWER_THROTTLING_CURRENT_VERSION,
+            THREAD_POWER_THROTTLING_EXECUTION_SPEED, THREAD_POWER_THROTTLING_STATE, THREAD_PRIORITY_LOWEST,
+        };
+        let state = THREAD_POWER_THROTTLING_STATE {
+            Version: THREAD_POWER_THROTTLING_CURRENT_VERSION,
+            ControlMask: THREAD_POWER_THROTTLING_EXECUTION_SPEED,
+            StateMask: THREAD_POWER_THROTTLING_EXECUTION_SPEED,
+        };
+        // 进程是高于普通一级，LOWEST（-2）正好落回普通应用的基础优先级。失败只影响调度，不影响结果。
+        let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);
+        let _ = SetThreadInformation(GetCurrentThread(), ThreadPowerThrottling,
+            (&state as *const THREAD_POWER_THROTTLING_STATE).cast(), std::mem::size_of_val(&state) as u32);
+    }
 }
 
 /// 追加一行日志到 `%LOCALAPPDATA%\FreeType\logs\server.log`（超过 1 MB 从头写）。

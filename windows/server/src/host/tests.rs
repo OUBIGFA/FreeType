@@ -44,6 +44,64 @@ fn status_reports_whole_seconds_since_actual_input_only() {
 }
 
 #[test]
+fn sync_work_runs_beside_typing_and_merges_apply_only_if_local_data_is_unchanged() {
+    use std::sync::mpsc::channel;
+    use std::time::Duration;
+    let mut a = host("sync-beside-a");
+    let mut b = host("sync-beside-b");
+    let (af, bf) = (a.data_dir().join("a.json"), b.data_dir().join("b.json"));
+    let path = |path: &std::path::Path| path.display().to_string();
+    assert!(a.handle(1, Request::SetCommonPhrases { phrases: vec!["来自另一台".into()] }).ok);
+    assert!(a.handle(1, Request::ExportSyncSettings { path: path(&af) }).ok);
+    let (apply_tx, apply_rx) = channel();
+    b.set_apply_channel(apply_tx);
+
+    // 占住后台线程，相当于开机时慢到数秒的同步计算：按键照常出候选，同步应答在后面排队。
+    let (release, blocked) = channel::<()>();
+    b.tasks.submit(Box::new(move || { let _ = blocked.recv(); Step::Done }), None);
+    let (reply, export) = channel();
+    b.dispatch(1, Request::ExportSyncSettings { path: path(&bf) }, reply);
+    assert_eq!(typing(&mut b, "nihao").candidates.first().map(String::as_str), Some("你好"));
+    assert!(export.try_recv().is_err(), "同步导出不应在引擎线程里完成");
+    release.send(()).unwrap();
+    assert!(export.recv_timeout(Duration::from_secs(10)).unwrap().ok);
+    assert!(b.handle(1, Request::Reset { commit: false }).ok);
+
+    // 合并在后台比较，回到引擎线程应用后才应答。
+    let (reply, merged) = channel();
+    b.dispatch(1, Request::MergeSyncSettings { path: path(&af), expected_path: path(&bf) }, reply);
+    let apply = apply_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert!(merged.try_recv().is_err());
+    apply(&mut b);
+    let response = merged.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert!(response.ok, "{:?}", response.error);
+    assert_eq!(b.handle(1, Request::ListCommonPhrases).common_phrases.unwrap(), ["来自另一台"]);
+
+    // 后台比较期间本机又改了：放弃这次合并，保留刚做的修改，由同步重新比较。
+    assert!(a.handle(1, Request::SetCommonPhrases { phrases: vec!["另一台又改了".into()] }).ok);
+    assert!(a.handle(1, Request::ExportSyncSettings { path: path(&af) }).ok);
+    let (reply, export) = channel();
+    b.dispatch(1, Request::ExportSyncSettings { path: path(&bf) }, reply);
+    assert!(export.recv_timeout(Duration::from_secs(10)).unwrap().ok);
+    let (reply, merged) = channel();
+    b.dispatch(1, Request::MergeSyncSettings { path: path(&af), expected_path: path(&bf) }, reply);
+    let apply = apply_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert!(b.handle(1, Request::SetCommonPhrases { phrases: vec!["本机刚改的".into()] }).ok);
+    apply(&mut b);
+    let response = merged.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert!(!response.ok);
+    assert_eq!(b.handle(1, Request::ListCommonPhrases).common_phrases.unwrap(), ["本机刚改的"]);
+
+    // 手动重置同步记录排在后台登记之后，回到引擎线程执行，不会互相等待。
+    let (reply, reset) = channel();
+    b.dispatch(1, Request::ResetSyncRecords, reply);
+    apply_rx.recv_timeout(Duration::from_secs(10)).unwrap()(&mut b);
+    assert!(reset.recv_timeout(Duration::from_secs(10)).unwrap().ok);
+    cleanup(&a);
+    cleanup(&b);
+}
+
+#[test]
 fn lagging_surrounding_text_cannot_change_chinese_punctuation_after_commit() {
     let mut host = host("lagging-punctuation");
     host.handle(1, Request::Focus { active: true, before: Some("1:1".into()) });

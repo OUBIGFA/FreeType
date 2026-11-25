@@ -58,6 +58,7 @@ impl Drop for Saver {
 }
 
 fn run(shared: &Shared) {
+    crate::background_thread();
     loop {
         let job = {
             let state = shared.state.lock().unwrap();
