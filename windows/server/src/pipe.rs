@@ -189,6 +189,19 @@ impl LineReader {
     }
 }
 
+/// 请求从排队到应答超过这个时长就写日志。输入法按键只等 1.5 秒，
+/// 日志能看出是哪类请求占住了引擎线程，或者哪次按键在排队。
+const SLOW_REQUEST: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// 只记操作名和用时，不记按键、路径等请求内容。
+fn log_slow(line: &[u8], elapsed: std::time::Duration) {
+    if elapsed < SLOW_REQUEST { return; }
+    #[derive(serde::Deserialize)]
+    struct Op { op: String }
+    let op = serde_json::from_slice::<Op>(line).map_or_else(|_| "未知".into(), |request| request.op);
+    crate::log(&format!("请求 {op} 用时 {} ms", elapsed.as_millis()));
+}
+
 fn serve(pipe: Pipe, id: ClientId, engine: Sender<Message>, owner: &str) {
     let _ = engine.send(Message::Connected(id));
     let mut reader = LineReader { buf: Vec::new() };
@@ -200,22 +213,29 @@ fn serve(pipe: Pipe, id: ClientId, engine: Sender<Message>, owner: &str) {
                 break;
             }
         };
-        let response = match decode::<Request>(&line) {
+        let mut response = match decode::<Request>(&line) {
             Ok(request) if !can_manage && !input_request(&request) => {
                 Response::error("受限应用只能发送输入请求，不能管理或导出用户数据")
             }
             Ok(request) => {
                 let (tx, rx) = mpsc::channel();
+                let started = std::time::Instant::now();
                 if engine.send(Message::Request(id, request, tx)).is_err() {
                     break;
                 }
-                match rx.recv() {
+                let response = match rx.recv() {
                     Ok(response) => response,
                     Err(_) => break,
-                }
+                };
+                log_slow(&line, started.elapsed());
+                response
             }
             Err(e) => Response::error(format!("请求格式不对：{e}")),
         };
+        // 输入节奏只给可管理的客户端；低完整性宿主不能借状态轮询推断其他应用里的按键时间。
+        if !can_manage {
+            if let Some(status) = response.status.as_mut() { status.input_idle_seconds = None; }
+        }
         if write_all(pipe.0, &encode(&response)).is_err() {
             break;
         }

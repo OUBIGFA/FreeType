@@ -266,6 +266,8 @@ type Status struct {
 	Lexicon      string `json:"lexicon"`
 	NeuralModel  string `json:"neural_model"`
 	Error        string `json:"error,omitempty"`
+	// InputIdleSeconds 是距上次实际输入的秒数；没打过字或受限客户端为 nil。
+	InputIdleSeconds *int64 `json:"input_idle_seconds,omitempty"`
 }
 
 // ImportReport 是导入、导出的结果。

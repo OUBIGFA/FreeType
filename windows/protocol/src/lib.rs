@@ -1132,6 +1132,10 @@ pub struct Status {
     /// 载入失败的原因。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// 距上次实际按键或选词的整秒数；启动后还没打过字时为空。
+    /// 托盘的自动同步据此避开打字时段。只发给可管理的客户端，受限应用拿不到输入节奏。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_idle_seconds: Option<u64>,
 }
 
 /// 导入结果。

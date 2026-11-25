@@ -49,6 +49,7 @@ type syncBackendFixture struct {
 	modified int64
 	imports  int
 	fail     bool
+	idle     *int64 // 服务报告的停止打字秒数；nil 表示启动后还没打过字。
 }
 
 // 单一记录的外部服务契约夹具；记录级合并算法由 Rust 的真实双设备测试覆盖。
@@ -73,6 +74,8 @@ func testRecordContent(data []byte) ([]byte, int64) {
 func (b *syncBackendFixture) Call(r Request) (Response, error) {
 	path, _ := r["path"].(string)
 	switch r["op"] {
+	case "status":
+		return Response{OK: true, Status: &Status{InputIdleSeconds: b.idle}}, nil
 	case "export_sync_settings":
 		return Response{OK: true, ModifiedUnixMS: b.modified, SyncFormat: 1}, os.WriteFile(path, testRecordSnapshot(b.data, b.modified), 0600)
 	case "preview_sync_merge":
@@ -241,6 +244,46 @@ func TestAutoSyncRetriesHonorsDailyLimitAndPersistsAcrossRestart(t *testing.T) {
 	restarted.run(now.AddDate(0, 0, 1), false)
 	if attempts != 3 || restarted.state.Count != 1 {
 		t.Fatal("次日未恢复配额")
+	}
+}
+
+// 开机同步与刚开始打字撞在一起时，引擎线程被快照占住，按键超过 1.5 秒交给应用。
+func TestAutoSyncWaitsUntilTypingStopsWithoutUsingDailyQuota(t *testing.T) {
+	dir := t.TempDir()
+	c, _ := loadSyncSettings(dir)
+	c.Enabled, c.Automatic, c.DeviceID = true, true, deviceA
+	if err := saveSyncSettings(dir, c); err != nil {
+		t.Fatal(err)
+	}
+	idle := int64(5)
+	b := &syncBackendFixture{data: []byte(`{}`), modified: 100, idle: &idle}
+	a, err := newAutoSync(dir, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempts := 0
+	a.openStore = func(syncSettings) (remoteStore, error) { attempts++; return nil, errors.New("网络不可用") }
+	now := time.Date(2026, 11, 25, 8, 41, 12, 0, time.Local)
+	a.state.Next = now
+	a.run(now, false)
+	if attempts != 0 || a.state.Count != 0 || !a.state.Next.Equal(now.Add(15*time.Second)) {
+		t.Fatalf("正在打字时不应开始自动同步：attempts=%d %+v", attempts, a.state)
+	}
+	a.run(now, true)
+	if attempts != 1 {
+		t.Fatal("手动同步不应等待打字结束")
+	}
+	idle = 20
+	a.state.Next = now.Add(15 * time.Second)
+	a.run(a.state.Next, false)
+	if attempts != 2 || a.state.Count != 1 {
+		t.Fatalf("停止打字后应开始自动同步：attempts=%d %+v", attempts, a.state)
+	}
+	b.idle = nil
+	a.state.Next = now.Add(time.Hour)
+	a.run(a.state.Next, false)
+	if attempts != 3 {
+		t.Fatal("服务没有输入记录时不应推迟")
 	}
 }
 

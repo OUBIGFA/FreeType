@@ -277,6 +277,8 @@ fn low_integrity_clients_can_type_but_cannot_manage_or_export_user_data() {
         assert!(restricted.call(&Request::Hello { session: true, app: "sandbox.exe".into() }).ok);
         for letter in "nihao".chars() { assert!(restricted.key(letter).handled); }
         assert_eq!(restricted.key(' ').commit.as_deref(), Some("你好"));
+        assert_eq!(restricted.call(&Request::Status).status.unwrap().input_idle_seconds, None,
+            "低完整性客户端不能读取输入节奏");
         let icon = restricted.call(&Request::GetBrandIcon { known_revision: None });
         assert!(icon.ok, "低完整性宿主仍应能读取用于显示的图像");
         assert_eq!(icon.brand_icon.unwrap().appearance, "default");
@@ -288,6 +290,8 @@ fn low_integrity_clients_can_type_but_cannot_manage_or_export_user_data() {
         }
     }
     assert!(!target.exists());
+    assert!(normal.call(&Request::Status).status.unwrap().input_idle_seconds.is_some_and(|idle| idle < 10),
+        "可管理的客户端看得到刚才的输入，自动同步据此等待");
     assert!(normal.call(&Request::ExportSettings { path: target.display().to_string(), parts: None }).ok);
     assert!(target.is_file(), "正常设置客户端仍可导出备份");
 }

@@ -252,6 +252,25 @@ func (a *autoSync) start() {
 
 func (a *autoSync) close() { a.closeOnce.Do(func() { close(a.stop) }) }
 
+// syncIdleWait 是自动同步开始前用户需要停止打字的时长。生成、比较和合并快照都在服务进程的
+// 引擎线程里做，平时要几百毫秒，开机时磁盘和处理器繁忙会拖到数秒；这期间的按键超过输入法
+// 1.5 秒的等待上限就会直接交给应用，表现为开机后打字迟迟不出候选窗。
+const syncIdleWait = 20 * time.Second
+
+// typingDelay 返回还要等多久才算停止打字。服务没有报告（还没打过字、旧版服务）时为 0；
+// 查询失败也为 0，由随后的同步请求报告服务不可用。
+func (a *autoSync) typingDelay() time.Duration {
+	response, err := a.backend.Call(op("status"))
+	if err != nil || response.Status == nil || response.Status.InputIdleSeconds == nil {
+		return 0
+	}
+	idle := time.Duration(*response.Status.InputIdleSeconds) * time.Second
+	if idle >= syncIdleWait {
+		return 0
+	}
+	return syncIdleWait - idle
+}
+
 // run 在后台调用；一次轮次含失败重试，每次网络尝试都计入每日上限。
 func (a *autoSync) run(now time.Time, manual bool) {
 	if !a.gate.TryLock() {
@@ -263,6 +282,22 @@ func (a *autoSync) run(now time.Time, manual bool) {
 	if !c.Enabled || (!manual && (!c.Automatic || a.state.Next.IsZero() || now.Before(a.state.Next))) {
 		a.mu.Unlock()
 		return
+	}
+	if !manual {
+		// 查询服务状态时不持有 mu，避免设置页读取同步状态时等管道。
+		a.mu.Unlock()
+		wait := a.typingDelay()
+		a.mu.Lock()
+		if a.config != c {
+			a.mu.Unlock()
+			return
+		}
+		if wait > 0 {
+			// 推迟不计入每日次数和重试；不写状态文件，重启后按原计划重新判断。
+			a.state.Next = now.Add(wait)
+			a.mu.Unlock()
+			return
+		}
 	}
 	if a.state.Day != now.Format("2006-01-02") {
 		a.state.Day = now.Format("2006-01-02")

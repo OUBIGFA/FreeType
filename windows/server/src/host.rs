@@ -122,6 +122,8 @@ pub struct Host {
     stats: crate::stats::Stats,
     // 包含尚未存盘的学习变化；同步导出、轮询和远端恢复不更新此时间。
     sync_modified_ms: u64,
+    /// 最近一次实际按键或选词的时间。
+    last_input: Option<std::time::Instant>,
 }
 
 impl Drop for Host {
@@ -286,6 +288,7 @@ impl Host {
             saver: crate::saver::Saver::default(),
             stats,
             sync_modified_ms: 0,
+            last_input: None,
         };
         host.load_phrases();
         host
@@ -724,6 +727,7 @@ impl Host {
             neural_model: self.engine.as_ref().and_then(|engine| engine.model_path()).map_or_else(String::new, |path|
                 if path == self.store.dir().join("wetype/nlrgpt2_nnlm.bin") { "external".into() } else { "bundled".into() }),
             error: self.engine_error.clone(),
+            input_idle_seconds: self.last_input.map(|at| at.elapsed().as_secs()),
         }
     }
 
@@ -1547,6 +1551,8 @@ impl Host {
                     })();
                     if let Err(error) = recorded { return Response::error(format!("操作已保存，但同步变更记录失败：{error}")); }
                 }
+                // 自动同步等用户停手后再占用引擎线程，见 Status::input_idle_seconds。
+                if actual { self.last_input = Some(std::time::Instant::now()); }
                 if self.config.typing_stats && actual && self.clients.get(&id).is_some_and(|client| !client.state.session.learning_disabled()) {
                     if let Some(frame) = response.frame.as_ref().filter(|frame| frame.handled) {
                         self.stats.record(id, scan, frame.commit.as_deref(), frame.selected_rank, self.config.stats_retention);

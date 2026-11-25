@@ -32,6 +32,18 @@ fn configure(host: &mut Host, change: impl FnOnce(&mut Config)) {
 }
 
 #[test]
+fn status_reports_whole_seconds_since_actual_input_only() {
+    let mut host = host("input-idle");
+    let idle = |host: &mut Host| host.handle(1, Request::Status).status.unwrap().input_idle_seconds;
+    assert_eq!(idle(&mut host), None, "启动后没打字时不能谎报刚有输入");
+    host.handle(1, Request::Key { key: Key { keysym: 'n' as u32, modifiers: 0, test: true }, before: None });
+    assert_eq!(idle(&mut host), None, "按键预判不是实际输入");
+    typing(&mut host, "ni");
+    assert_eq!(idle(&mut host), Some(0));
+    cleanup(&host);
+}
+
+#[test]
 fn lagging_surrounding_text_cannot_change_chinese_punctuation_after_commit() {
     let mut host = host("lagging-punctuation");
     host.handle(1, Request::Focus { active: true, before: Some("1:1".into()) });
