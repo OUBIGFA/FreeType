@@ -31,6 +31,7 @@ struct Store {
     composing: Cell<bool>,
     /// The app window that CUAS reports for its emulated document.
     window: Cell<HWND>,
+    fail_window: Cell<bool>,
 }
 
 impl Store {
@@ -146,7 +147,10 @@ impl ITextStoreACP_Impl for Store_Impl {
         Ok(())
     }
     fn GetScreenExt(&self, _: u32) -> Result<RECT> { unused() }
-    fn GetWnd(&self, _: u32) -> Result<HWND> { Ok(self.window.get()) }
+    fn GetWnd(&self, _: u32) -> Result<HWND> {
+        if self.fail_window.get() { return Err(E_FAIL.into()); }
+        Ok(self.window.get())
+    }
 }
 
 impl ITfContextOwnerCompositionSink_Impl for Store_Impl {
@@ -222,6 +226,84 @@ fn in_editor(test: impl FnOnce(&Editor, Rc<RefCell<State>>, ITfKeyEventSink)) {
     state.borrow_mut().sink = None;
     ui::set_click_handler(None);
     if let Err(error) = result { std::panic::resume_unwind(error); }
+}
+
+#[test]
+fn candidate_window_belongs_to_the_current_text_view() {
+    use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindow, GW_OWNER, WS_POPUP};
+    in_editor(|editor, state, _| unsafe {
+        // Real HWNDs and TSF views exercise the ownership contract required by
+        // Windows shell input fields, without touching the user's desktop.
+        let first = CreateWindowExW(WINDOW_EX_STYLE::default(), windows::core::w!("STATIC"),
+            None, WS_POPUP, 40, 40, 500, 100, None, None, None, None).unwrap();
+        let second = CreateWindowExW(WINDOW_EX_STYLE::default(), windows::core::w!("STATIC"),
+            None, WS_POPUP, 40, 180, 500, 100, None, None, None, None).unwrap();
+        let frame = Frame { candidates: vec!["测试".into()], cursor: Some(0), font_size: 18, ..Frame::default() };
+        state.borrow_mut().caret = Some(RECT { left: 50, top: 50, right: 52, bottom: 70 });
+        editor.store.window.set(first);
+        show_window(&state, &frame);
+        let candidate = state.borrow().window.as_ref().unwrap().hwnd();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            assert_eq!(GetWindow(candidate, GW_OWNER).unwrap_or_default(), first,
+                "候选窗必须关联到 TSF 当前输入窗口，才能显示在开始菜单等界面上方");
+            show_window(&state, &frame);
+            assert_eq!(state.borrow().window.as_ref().unwrap().hwnd(), candidate,
+                "同一输入窗口连续刷新不能重建候选窗");
+            editor.store.window.set(second);
+            show_window(&state, &frame);
+            assert_eq!(GetWindow(candidate, GW_OWNER).unwrap(), second);
+            // Null and failed GetWnd both fall back to this thread's focus,
+            // never to an unrelated foreground application.
+            let _ = SetFocus(Some(first));
+            assert_eq!(GetFocus(), first);
+            for fails in [false, true] {
+                editor.store.window.set(HWND::default());
+                editor.store.fail_window.set(fails);
+                show_window(&state, &frame);
+                assert_eq!(GetWindow(candidate, GW_OWNER).unwrap(), first);
+                assert_eq!(GetFocus(), first, "候选窗显示不能抢走输入焦点");
+            }
+            show_window(&state, &Frame::default());
+            assert!(!state.borrow().window.as_ref().unwrap().visible());
+            assert!(GetWindow(candidate, GW_OWNER).is_err(), "隐藏后解除宿主关联");
+        }));
+        // Detach before destroying test owners; Windows destroys owned popups too.
+        editor.store.window.set(HWND::default());
+        show_window(&state, &Frame::default());
+        DestroyWindow(first).unwrap();
+        DestroyWindow(second).unwrap();
+        if let Err(error) = outcome { std::panic::resume_unwind(error); }
+    });
+}
+
+#[test]
+fn candidate_window_recovers_after_its_input_host_is_destroyed() {
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindow, IsWindow, GW_OWNER, WS_POPUP};
+    in_editor(|editor, state, _| unsafe {
+        let host = CreateWindowExW(WINDOW_EX_STYLE::default(), windows::core::w!("STATIC"),
+            None, WS_POPUP, 40, 40, 500, 100, None, None, None, None).unwrap();
+        editor.store.window.set(host);
+        state.borrow_mut().caret = Some(RECT { left: 50, top: 50, right: 52, bottom: 70 });
+        let frame = Frame { candidates: vec!["测试".into()], cursor: Some(0), font_size: 18, ..Frame::default() };
+        show_window(&state, &frame);
+        let candidate = state.borrow().window.as_ref().unwrap().hwnd();
+        DestroyWindow(host).unwrap();
+        assert!(!IsWindow(Some(candidate)).as_bool(), "Windows 会连带销毁所属弹窗");
+        let next = CreateWindowExW(WINDOW_EX_STYLE::default(), windows::core::w!("STATIC"),
+            None, WS_POPUP, 40, 40, 500, 100, None, None, None, None).unwrap();
+        editor.store.window.set(next);
+        show_window(&state, &frame);
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let s = state.borrow();
+            let window = s.window.as_ref().unwrap();
+            assert!(window.visible(), "输入窗口关闭后，在另一个窗口继续输入仍须显示候选");
+            assert_eq!(GetWindow(window.hwnd(), GW_OWNER).unwrap(), next);
+        }));
+        show_window(&state, &Frame::default());
+        DestroyWindow(next).unwrap();
+        if let Err(error) = outcome { std::panic::resume_unwind(error); }
+    });
 }
 
 fn open_prediction(editor: &Editor, state: &Rc<RefCell<State>>, double: bool) -> u64 {

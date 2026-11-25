@@ -34,7 +34,7 @@ use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::System::Variant::{VariantClear, VARIANT, VT_I4, VT_UNKNOWN};
 use windows::Win32::UI::Input::Ime::{IMR_DOCUMENTFEED, RECONVERTSTRING};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, GetKeyState, GetKeyboardState, SendInput, ToUnicode, INPUT, INPUT_0, INPUT_KEYBOARD,
+    GetAsyncKeyState, GetFocus, GetKeyState, GetKeyboardState, SendInput, ToUnicode, INPUT, INPUT_0, INPUT_KEYBOARD,
     KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, VK_LEFT,
 };
 use windows::Win32::UI::TextServices::{
@@ -805,14 +805,27 @@ fn note_preview(state: &Rc<RefCell<State>>, frame: &Frame) {
 
 /// 候选窗按应答更新；应用给不出位置时用上一次的或系统记的插入符。
 fn show_window(state: &Rc<RefCell<State>>, frame: &Frame) {
-    let s = state.borrow();
     let wants = frame.hint.is_some() || !frame.candidates.is_empty() || frame.title.is_some();
+    // GetWnd belongs to the host and can reenter TSF: release our state borrow
+    // before calling it. Microsoft IME requirements specify GetFocus as fallback.
+    // https://learn.microsoft.com/windows/apps/develop/input/input-method-editor-requirements#owned-window
+    let context = state.borrow().context.clone();
+    let owner = wants.then(|| unsafe {
+        context.as_ref().and_then(|context| context.GetActiveView().and_then(|view| view.GetWnd()).ok())
+            .filter(|window| !window.is_invalid()).unwrap_or_else(|| GetFocus())
+    });
+    let mut s = state.borrow_mut();
     let caret = if wants {
         s.caret.or(s.last_caret).or_else(fallback_caret)
     } else {
         s.caret
     };
-    if let Some(window) = &s.window {
+    if let Some(window) = &mut s.window {
+        if let Some(owner) = owner {
+            if let Err(error) = window.set_owner(owner) {
+                crate::log::write("关联候选窗失败", &error.to_string());
+            }
+        }
         window.update(frame, caret);
     }
     let unseen = wants && frame.predict && (caret.is_none() || s.window.is_none());

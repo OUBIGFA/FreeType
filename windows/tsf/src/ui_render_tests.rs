@@ -182,6 +182,7 @@ fn rendered(view: View, scale: f32) -> (Layout, Vec<u8>) {
         let bitmap = CreateDIBSection(Some(dc), &info, DIB_RGB_COLORS, &mut bits, None, 0).unwrap();
         let original = SelectObject(dc, bitmap.into());
         let data = Data {
+            alive: Rc::new(Cell::new(true)),
             view,
             layout,
             scale,
@@ -597,7 +598,7 @@ fn prediction_dismisses_on_clicks_outside_the_candidate_window() {
     let _desktop = PrivateDesktop::new();
     let instance = HINSTANCE(unsafe { GetModuleHandleW(None).unwrap() }.0);
     let window = CandidateWindow::new(instance).unwrap();
-    let other = popup(instance, CLASS_NAME).unwrap();
+    let other = popup(instance, CLASS_NAME, None).unwrap();
     let clicks = Rc::new(RefCell::new(Vec::new()));
     let captured = clicks.clone();
     set_click_handler(Some(Box::new(move |click| captured.borrow_mut().push(click))));

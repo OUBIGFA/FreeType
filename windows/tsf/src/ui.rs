@@ -9,10 +9,11 @@
 //! 颜色跟随系统的浅色 / 深色模式。字体、字号来自设置。
 
 use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 use freetype_protocol::{parse_hex_rgb, CandidateAction, CandidateSkin, Frame, Panel};
-use windows::core::{w, HSTRING, PCWSTR, Result};
-use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::core::{w, Error, HSTRING, PCWSTR, Result};
+use windows::Win32::Foundation::{GetLastError, SetLastError, COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WIN32_ERROR, WPARAM};
 use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, EndPaint,
@@ -31,7 +32,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos, GetWindowLongPtrW, GetWindowRect, IsWindowVisible,
     KillTimer, LoadCursorW, PostMessageW, RegisterClassExW, SetCursor, SetTimer, SetWindowLongPtrW, SetWindowPos,
-    ShowWindow, CS_DROPSHADOW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, HWND_TOPMOST, IDC_ARROW, IDC_HAND,
+    ShowWindow, CS_DROPSHADOW, CS_HREDRAW, CS_VREDRAW, GWLP_HWNDPARENT, GWLP_USERDATA, HWND_TOPMOST, IDC_ARROW, IDC_HAND,
     MA_NOACTIVATE, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE, WM_APP, WM_CAPTURECHANGED, WM_LBUTTONDOWN,
     WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCDESTROY, WM_PAINT, WM_RBUTTONUP, WM_SETCURSOR, WM_TIMER,
     WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
@@ -414,6 +415,8 @@ struct Layout {
 }
 
 struct Data {
+    // Windows destroys owned popups with their host; never reuse that stale HWND.
+    alive: Rc<Cell<bool>>,
     view: View,
     layout: Layout,
     scale: f32,
@@ -939,6 +942,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             if OUTSIDE.with(Cell::get).is_some_and(|(_, owner)| owner == hwnd) { watch_outside_clicks(hwnd, false); }
             let ptr = SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0) as *mut Data;
             if !ptr.is_null() {
+                (*ptr).alive.set(false);
                 drop(Box::from_raw(ptr));
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
@@ -979,7 +983,7 @@ fn round_corners(hwnd: HWND) {
     }
 }
 
-fn popup(instance: HINSTANCE, class: PCWSTR) -> Option<HWND> {
+fn popup(instance: HINSTANCE, class: PCWSTR, owner: Option<HWND>) -> Option<HWND> {
     register_classes(instance);
     unsafe {
         let hwnd = CreateWindowExW(
@@ -991,7 +995,7 @@ fn popup(instance: HINSTANCE, class: PCWSTR) -> Option<HWND> {
             0,
             1,
             1,
-            None,
+            owner,
             None,
             Some(instance),
             None,
@@ -1000,6 +1004,20 @@ fn popup(instance: HINSTANCE, class: PCWSTR) -> Option<HWND> {
         round_corners(hwnd);
         Some(hwnd)
     }
+}
+
+fn set_popup_owner(hwnd: HWND, owner: HWND) -> Result<()> {
+    unsafe {
+        if GetWindowLongPtrW(hwnd, GWLP_HWNDPARENT) as isize != owner.0 as isize {
+            // Zero can also mean success when the previous owner was null.
+            SetLastError(WIN32_ERROR(0));
+            if SetWindowLongPtrW(hwnd, GWLP_HWNDPARENT, owner.0 as _) == 0 {
+                let error = GetLastError();
+                if error.0 != 0 { return Err(Error::from_hresult(error.to_hresult())); }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// 屏幕上能放窗口的区域（光标所在显示器的工作区）。
@@ -1020,12 +1038,16 @@ fn work_area(x: i32, y: i32) -> RECT {
 
 pub struct CandidateWindow {
     hwnd: HWND,
+    instance: HINSTANCE,
+    alive: Rc<Cell<bool>>,
 }
 
 impl CandidateWindow {
     pub fn new(instance: HINSTANCE) -> Option<Self> {
-        let hwnd = popup(instance, CLASS_NAME)?;
+        let hwnd = popup(instance, CLASS_NAME, None)?;
+        let alive = Rc::new(Cell::new(true));
         let data = Box::new(Data {
+            alive: alive.clone(),
             view: View::default(),
             layout: Layout::default(),
             scale: 1.0,
@@ -1039,11 +1061,21 @@ impl CandidateWindow {
         unsafe {
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(data) as _);
         }
-        MENU.with(|m| *m.borrow_mut() = popup(instance, MENU_CLASS));
-        Some(Self { hwnd })
+        MENU.with(|m| *m.borrow_mut() = popup(instance, MENU_CLASS, Some(hwnd)));
+        Some(Self { hwnd, instance, alive })
+    }
+
+    /// Windows shell input requires an owned popup. Reuse it across keystrokes;
+    /// if the host destroyed it, recover before displaying the next candidate page.
+    pub fn set_owner(&mut self, owner: HWND) -> Result<()> {
+        if !self.alive.get() {
+            *self = Self::new(self.instance).ok_or_else(|| Error::from_thread())?;
+        }
+        set_popup_owner(self.hwnd, owner)
     }
 
     pub fn hide(&self) {
+        if !self.alive.get() { return; }
         menu::close();
         if let Some(data) = data_of(self.hwnd) {
             data.wheel_delta = 0;
@@ -1055,14 +1087,18 @@ impl CandidateWindow {
             let _ = ShowWindow(self.hwnd, SW_HIDE);
         }
         watch_outside_clicks(self.hwnd, false);
+        // Keep our hidden timer/message window alive when the input host closes.
+        if let Err(error) = set_popup_owner(self.hwnd, HWND::default()) {
+            crate::log::write("取消候选窗关联失败", &error.to_string());
+        }
     }
 
     pub fn hwnd(&self) -> HWND {
-        self.hwnd
+        if self.alive.get() { self.hwnd } else { HWND::default() }
     }
 
     pub fn visible(&self) -> bool {
-        unsafe { IsWindowVisible(self.hwnd).as_bool() }
+        self.alive.get() && unsafe { IsWindowVisible(self.hwnd).as_bool() }
     }
 
     pub fn painted_revision(&self) -> u64 {
@@ -1072,6 +1108,7 @@ impl CandidateWindow {
 
     /// 回到应用的消息循环以后叫一次 [`set_caret_handler`] 的处理函数；它说还要等，就定时再叫。
     pub fn request_caret_tick(&self) {
+        if !self.alive.get() { return; }
         unsafe {
             let _ = PostMessageW(Some(self.hwnd), WM_CARET_TICK, WPARAM(0), LPARAM(0));
         }
@@ -1079,6 +1116,7 @@ impl CandidateWindow {
 
     /// 空格编辑区由文本服务拥有，窗口只负责投递一次超时通知。
     pub fn set_prediction_space_timeout(&self, delay_ms: Option<u32>) {
+        if !self.alive.get() { return; }
         unsafe {
             match delay_ms {
                 Some(ms) => { SetTimer(Some(self.hwnd), PREDICTION_SPACE_TIMER, ms, None); }
@@ -1089,6 +1127,7 @@ impl CandidateWindow {
 
     /// 按应答更新；`caret` 是编辑区（或光标）在屏幕上的位置。
     pub fn update(&self, frame: &Frame, caret: Option<RECT>) {
+        if !self.alive.get() { return; }
         let view = View {
             title: frame.title.clone(),
             preedit: if frame.hide_candidate_preedit { String::new() } else { frame.preedit.clone() },
@@ -1269,6 +1308,7 @@ fn hint_origin(position: &str, caret: RECT, w: i32, h: i32, gap: i32) -> (i32, i
 
 impl Drop for CandidateWindow {
     fn drop(&mut self) {
+        if !self.alive.get() { return; }
         menu::destroy();
         unsafe {
             let _ = DestroyWindow(self.hwnd);
@@ -1363,10 +1403,6 @@ mod menu {
     pub fn destroy() {
         if let Some(hwnd) = MENU.with(|m| m.borrow_mut().take()) {
             unsafe {
-                let ptr = SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0) as *mut MenuData;
-                if !ptr.is_null() {
-                    drop(Box::from_raw(ptr));
-                }
                 let _ = DestroyWindow(hwnd);
             }
         }
@@ -1416,6 +1452,15 @@ mod menu {
 
     pub unsafe extern "system" fn proc_(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         match msg {
+            WM_NCDESTROY => unsafe {
+                // The host can destroy the owned menu without calling destroy().
+                MENU.with(|menu| {
+                    if *menu.borrow() == Some(hwnd) { *menu.borrow_mut() = None; }
+                });
+                let ptr = SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0) as *mut MenuData;
+                if !ptr.is_null() { drop(Box::from_raw(ptr)); }
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            },
             WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
             WM_PAINT => {
                 if let Some(d) = data(hwnd) {
