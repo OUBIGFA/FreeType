@@ -1945,6 +1945,50 @@ fn site_name_then_period_completes_tld() {
 }
 
 #[test]
+fn calculator_decimals_do_not_start_address_completion() {
+    let mut host = host("calculator-decimals");
+    for shuangpin in [false, true] {
+        configure(&mut host, |c| {
+            c.shuangpin = shuangpin;
+            c.autospace = false;
+        });
+        let prefix = if shuangpin { 'V' } else { 'v' };
+        for numpad in [true, false] {
+            for (expression, expected) in [
+                ("1.5+2", "3.5"),
+                ("0.1+0.2", "0.3"),
+                (".5*2", "1"),
+                ("-1.5+2", "0.5"),
+                ("(1.5-0.5)/4", "0.25"),
+                ("1+2.5", "3.5"),
+            ] {
+                let input = format!("{prefix}{expression}");
+                let mut typed = String::new();
+                for c in input.chars() {
+                    let sym = match (numpad, c) {
+                        (true, '0'..='9') => keysym::KP_0 + c as u32 - '0' as u32,
+                        (true, '.') => keysym::KP_DECIMAL,
+                        (true, '+') => keysym::KP_ADD,
+                        (true, '-') => keysym::KP_SUBTRACT,
+                        (true, '*') => keysym::KP_MULTIPLY,
+                        (true, '/') => keysym::KP_DIVIDE,
+                        _ => c as u32,
+                    };
+                    typed.push(c);
+                    let frame = press(&mut host, sym);
+                    assert!(frame.handled, "{input}, numpad={numpad}, at {typed}");
+                    assert!(frame.commit.is_none(), "{input} committed early at {typed}: {:?}", frame.commit);
+                    assert_eq!(frame.preedit, typed);
+                }
+                let frame = press(&mut host, '=' as u32);
+                assert_eq!(frame.commit.as_deref(), Some(expected), "{input}, numpad={numpad}");
+            }
+        }
+    }
+    cleanup(&host);
+}
+
+#[test]
 fn numpad_dot_is_plain_or_starts_completion() {
     let mut host = host("numpad");
     assert_eq!(press(&mut host, keysym::KP_DECIMAL).commit.as_deref(), Some("."));
@@ -1952,6 +1996,14 @@ fn numpad_dot_is_plain_or_starts_completion() {
     let frame = press(&mut host, keysym::KP_DECIMAL);
     assert_eq!(frame.preedit, "qq.");
     assert_eq!(frame.candidates[1], "qq.com");
+    press(&mut host, keysym::ESCAPE);
+
+    // 关闭计算器时，v 仍按普通字母补全网址。
+    configure(&mut host, |c| c.calculator = false);
+    typing(&mut host, "v");
+    let frame = press(&mut host, keysym::KP_DECIMAL);
+    assert_eq!(frame.preedit, "v.");
+    assert_eq!(frame.candidates[1], "v.com");
     cleanup(&host);
 }
 

@@ -1432,7 +1432,8 @@ impl<'e> Session<'e> {
 
     /// V 模式（计算器）：没选过词、v 开头、后面只有数字和运算符。
     /// 双拼时 v 是声母键（v1 是「选第一个候选」），改用大写 V（#160）。
-    fn calc_active(&self) -> bool {
+    /// 外壳用同一判定避免邮箱、网址补全抢走算式的小数点。
+    pub fn calc_active(&self) -> bool {
         if !self.config.calculator || !self.selections.is_empty() {
             return false;
         }

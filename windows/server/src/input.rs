@@ -689,6 +689,10 @@ impl ClientState {
 
     /// 要不要进邮箱、网址补全，或小键盘的点直接上屏。
     fn maybe_raw(&mut self, key: &Key, env: &Env) -> Option<Out> {
+        // V 模式的小数点交给核心；否则首个数后的小键盘点会清掉算式并进入网址补全。
+        if matches!(key.keysym, 0x2e | keysym::KP_DECIMAL) && self.session.calc_active() {
+            return None;
+        }
         let composing = self.session.composing();
         let plain_input = composing
             && self.session.selections().is_empty()
