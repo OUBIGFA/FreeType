@@ -117,6 +117,9 @@ struct State {
     /// 成对标点上屏后还没挪的光标（等用户松开 Shift）。
     caret_move: Option<keys::CaretMove>,
     sensitive: bool,
+    /// Only an observed password/PIN scope is cached, and only for its context.
+    /// A temporary EMPTYCONTEXT/KEYBOARD_DISABLED flag is never sticky.
+    sensitive_context: Option<ITfContext>,
     undo: Option<CommitWatch>,
     predict_double_space: bool,
     space: Option<PredictionSpace>,
@@ -200,6 +203,7 @@ impl TextService {
                 shift: ShiftTap::default(),
                 caret_move: None,
                 sensitive: false,
+                sensitive_context: None,
                 undo: None,
                 predict_double_space: false,
                 space: None,
@@ -482,7 +486,9 @@ fn disabled(context: Option<&ITfContext>) -> bool {
 fn sensitive_scope(context: &ITfContext, ec: u32) -> bool {
     unsafe {
         let Some(selection) = selection_range(context, ec) else { return false; };
-        let Ok(property) = context.GetProperty(&GUID_PROP_INPUTSCOPE) else { return false; };
+        // InputScope belongs to the host's ITextStoreACP/ITfContextOwner;
+        // Microsoft specifies GetAppProperty, not the service-owned GetProperty.
+        let Ok(property) = context.GetAppProperty(&GUID_PROP_INPUTSCOPE) else { return false; };
         let Ok(mut value) = property.GetValue(ec, &selection) else { return false; };
         let inner = &*value.Anonymous.Anonymous;
         let scopes = if inner.vt == VT_UNKNOWN {
@@ -530,9 +536,18 @@ fn check_sensitive(state: &Rc<RefCell<State>>, context: Option<&ITfContext>) -> 
             out.set(Some(sensitive_scope(&input, ec)));
             Ok(())
         });
-        if let Some(active) = flag.get() { set_sensitive(state, active); }
+        if let Some(active) = flag.get() {
+            state.borrow_mut().sensitive_context = active.then(|| context.clone());
+        }
     }
-    state.borrow().sensitive
+    // Like SampleIME/Weasel/msime, disabled compartments describe this key's
+    // current context. Failure to obtain an optional read lock must not keep
+    // an earlier non-editing surface disabled forever (RichEdit/CUAS).
+    // A known password/PIN remains protected if its own read lock is unavailable.
+    let active = state.borrow().sensitive_context.as_ref().is_some_and(|owner|
+        context.is_some_and(|context| same_object(owner, context)));
+    set_sensitive(state, active);
+    active
 }
 
 fn replace_prediction_space(state: &Rc<RefCell<State>>, context: &ITfContext, ec: u32, text: &[u16]) -> Result<ITfRange> {
@@ -1467,6 +1482,7 @@ fn on_focus(state: &Rc<RefCell<State>>, focus: Option<&ITfDocumentMgr>) {
         if state2.borrow().generation != generation { return Ok(()); }
         if !state2.borrow().context.as_ref().is_some_and(|current| same_object(current, &context2)) { return Ok(()); }
         let sensitive = sensitive_scope(&context2, ec);
+        state2.borrow_mut().sensitive_context = sensitive.then(|| context2.clone());
         set_sensitive(&state2, sensitive);
         if sensitive { return Ok(()); }
         // A queued focus read can arrive after the first commit in this field.
@@ -1532,6 +1548,7 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
         }
         s.composition = None;
         s.context = None;
+        s.sensitive_context = None;
         s.key_preview = None;
         s.ctrl_space_toggled = None;
         s.busy = false;
@@ -2009,3 +2026,7 @@ mod focus_tests;
 #[cfg(test)]
 #[path = "service_prediction_tests.rs"]
 mod prediction_tests;
+
+#[cfg(test)]
+#[path = "service_richedit_tests.rs"]
+mod richedit_tests;

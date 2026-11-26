@@ -16,6 +16,26 @@ use windows::Win32::Foundation::LRESULT;
 
 fn unused<T>() -> Result<T> { Err(E_NOTIMPL.into()) }
 
+#[implement(ITfInputScope)]
+struct Scope(InputScope);
+
+impl ITfInputScope_Impl for Scope_Impl {
+    fn GetInputScopes(&self, scopes: *mut *mut InputScope, count: *mut u32) -> Result<()> {
+        unsafe {
+            let value = windows::Win32::System::Com::CoTaskMemAlloc(std::mem::size_of::<InputScope>()).cast::<InputScope>();
+            assert!(!value.is_null());
+            *value = self.0;
+            *scopes = value;
+            *count = 1;
+        }
+        Ok(())
+    }
+    fn GetPhrase(&self, _: *mut *mut windows::core::BSTR, _: *mut u32) -> Result<()> { unused() }
+    fn GetRegularExpression(&self) -> Result<windows::core::BSTR> { unused() }
+    fn GetSRGS(&self) -> Result<windows::core::BSTR> { unused() }
+    fn GetXML(&self) -> Result<windows::core::BSTR> { unused() }
+}
+
 #[derive(Default)]
 #[implement(ITextStoreACP, ITfContextOwnerCompositionSink)]
 struct Store {
@@ -25,6 +45,8 @@ struct Store {
     /// Chromium and CUAS both advertise this; it does not describe text visibility.
     transitory: Cell<bool>,
     deny_read: Cell<bool>,
+    scope: Cell<Option<InputScope>>,
+    scope_requested: Cell<bool>,
     /// CUAS forwards committed text to the app, then empties its document.
     commit_only: Cell<bool>,
     app_text: RefCell<Vec<u16>>,
@@ -134,11 +156,29 @@ impl ITextStoreACP_Impl for Store_Impl {
         Ok(())
     }
     fn InsertEmbeddedAtSelection(&self, _: u32, _: Ref<IDataObject>, _: *mut i32, _: *mut i32, _: *mut TS_TEXTCHANGE) -> Result<()> { unused() }
-    fn RequestSupportedAttrs(&self, _: u32, _: u32, _: *const GUID) -> Result<()> { unused() }
-    fn RequestAttrsAtPosition(&self, _: i32, _: u32, _: *const GUID, _: u32) -> Result<()> { unused() }
+    fn RequestSupportedAttrs(&self, _: u32, count: u32, ids: *const GUID) -> Result<()> {
+        self.scope_requested.set(count > 0 && unsafe { std::slice::from_raw_parts(ids, count as usize) }.contains(&GUID_PROP_INPUTSCOPE));
+        Ok(())
+    }
+    fn RequestAttrsAtPosition(&self, _: i32, count: u32, ids: *const GUID, flags: u32) -> Result<()> {
+        self.RequestSupportedAttrs(flags, count, ids)
+    }
     fn RequestAttrsTransitioningAtPosition(&self, _: i32, _: u32, _: *const GUID, _: u32) -> Result<()> { unused() }
     fn FindNextAttrTransition(&self, _: i32, _: i32, _: u32, _: *const GUID, _: u32, _: *mut i32, _: *mut BOOL, _: *mut i32) -> Result<()> { unused() }
-    fn RetrieveRequestedAttrs(&self, _: u32, _: *mut TS_ATTRVAL, _: *mut u32) -> Result<()> { unused() }
+    fn RetrieveRequestedAttrs(&self, count: u32, attrs: *mut TS_ATTRVAL, fetched: *mut u32) -> Result<()> {
+        unsafe { *fetched = 0; }
+        if count > 0 && self.scope_requested.replace(false) {
+            if let Some(scope) = self.scope.get() {
+                let scope: ITfInputScope = Scope(scope).into();
+                unsafe {
+                    *attrs = TS_ATTRVAL { idAttr: GUID_PROP_INPUTSCOPE, dwOverlapId: 0,
+                        varValue: VARIANT::from(scope.cast::<IUnknown>()?) };
+                    *fetched = 1;
+                }
+            }
+        }
+        Ok(())
+    }
     fn GetEndACP(&self) -> Result<i32> { Ok(self.text.borrow().len() as i32) }
     fn GetActiveView(&self) -> Result<u32> { Ok(0) }
     fn GetACPFromPoint(&self, _: u32, _: *const POINT, _: u32) -> Result<i32> { unused() }
@@ -318,7 +358,7 @@ fn open_prediction(editor: &Editor, state: &Rc<RefCell<State>>, double: bool) ->
     1
 }
 
-fn use_test_host(state: &Rc<RefCell<State>>) {
+pub(super) fn use_test_host(state: &Rc<RefCell<State>>) {
     let data = std::env::temp_dir().join(format!("freetype-digit-{}-{}", std::process::id(), unsafe { GetCurrentThreadId() }));
     let mut host = freetype_server::host::Host::new(freetype_server::store::Store::new(data));
     let lexicon = wowtype_core::MemoryLexicon::from_tsv_str("ce shi\t测试\t1000\n").unwrap();
@@ -893,6 +933,50 @@ fn prediction_double_space_owns_text_even_without_read_only_locks() {
         choose_space(editor, &state, 1100, "好运来", None);
         assert_eq!(String::from_utf16_lossy(&editor.store.app_text.borrow()), "今天好运来");
     });
+}
+
+#[test]
+fn enabled_transitory_editor_does_not_inherit_disabled_focus() {
+    for flag in [GUID_COMPARTMENT_EMPTYCONTEXT, GUID_COMPARTMENT_KEYBOARD_DISABLED] {
+    in_editor(|editor, state, sink| unsafe {
+        use_test_host(&state);
+        editor.store.transitory.set(true);
+        editor.store.commit_only.set(true);
+        // Model an enabled edit context following a disabled/non-editing
+        // surface, including the same temporary-context identity.
+        let compartments: ITfCompartmentMgr = editor.context.cast().unwrap();
+        let empty = compartments.GetCompartment(&flag).unwrap();
+        empty.SetValue(editor.client, &VARIANT::from(1i32)).unwrap();
+        assert!(!sink.OnTestKeyDown(&editor.context, WPARAM(0x43), LPARAM(0)).unwrap().as_bool());
+        empty.SetValue(editor.client, &VARIANT::from(0i32)).unwrap();
+        editor.store.deny_read.set(true);
+        for vk in [0x43, 0x45, 0x53, 0x48, 0x49, 0x20] {
+            assert!(sink.OnTestKeyDown(&editor.context, WPARAM(vk), LPARAM(0)).unwrap().as_bool(),
+                "enabled RichEdit/IMM32 text must resume Chinese input even without a read-only lock");
+            assert!(sink.OnKeyDown(&editor.context, WPARAM(vk), LPARAM(0)).unwrap().as_bool());
+        }
+        assert_eq!(String::from_utf16_lossy(&editor.store.app_text.borrow()), "测试");
+    });
+    }
+}
+
+#[test]
+fn password_scope_survives_read_lock_failure_but_not_a_different_editor() {
+    for scope in [IS_PASSWORD, IS_NUMERIC_PASSWORD, IS_NUMERIC_PIN, IS_ALPHANUMERIC_PIN, IS_ALPHANUMERIC_PIN_SET] {
+    in_editor(|editor, state, sink| unsafe {
+        use_test_host(&state);
+        editor.store.scope.set(Some(scope));
+        assert!(!sink.OnTestKeyDown(&editor.context, WPARAM(0x43), LPARAM(0)).unwrap().as_bool());
+        assert!(state.borrow().sensitive_context.is_some(), "password scope must be read through the real TSF property");
+        editor.store.deny_read.set(true);
+        assert!(!sink.OnTestKeyDown(&editor.context, WPARAM(0x43), LPARAM(0)).unwrap().as_bool(),
+            "a password remains protected when its read lock is denied");
+        let other = Editor::new();
+        other.store.deny_read.set(true);
+        assert!(sink.OnTestKeyDown(&other.context, WPARAM(0x43), LPARAM(0)).unwrap().as_bool(),
+            "a different enabled editor cannot inherit another field's password scope");
+    });
+    }
 }
 
 #[test]
