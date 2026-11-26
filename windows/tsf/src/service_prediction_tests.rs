@@ -41,6 +41,8 @@ impl ITfInputScope_Impl for Scope_Impl {
 struct Store {
     text: RefCell<Vec<u16>>,
     selection: Cell<TS_SELECTION_ACP>,
+    /// How often a text service moved the host's selection.
+    selection_sets: Cell<u32>,
     sink: RefCell<Option<ITextStoreACPSink>>,
     /// Chromium and CUAS both advertise this; it does not describe text visibility.
     transitory: Cell<bool>,
@@ -117,6 +119,7 @@ impl ITextStoreACP_Impl for Store_Impl {
     fn SetSelection(&self, count: u32, selection: *const TS_SELECTION_ACP) -> Result<()> {
         assert_eq!(count, 1);
         self.selection.set(unsafe { *selection });
+        self.selection_sets.set(self.selection_sets.get() + 1);
         Ok(())
     }
     fn GetText(&self, start: i32, end: i32, text: PWSTR, capacity: u32, read: *mut u32,
@@ -958,6 +961,54 @@ fn enabled_transitory_editor_does_not_inherit_disabled_focus() {
         assert_eq!(String::from_utf16_lossy(&editor.store.app_text.borrow()), "测试");
     });
     }
+}
+
+#[test]
+fn transitory_hosts_place_their_own_caret_after_a_commit() {
+    // Codex/Chromium message editing: after a paired quote, the web caret sits
+    // between the halves while the TSF selection can still be at the end.
+    // Selecting the commit end would move the caret outside the closing half.
+    for transitory in [true, false] {
+        in_editor(|editor, state, sink| unsafe {
+            use_test_host(&state);
+            editor.store.transitory.set(transitory);
+            for vk in [0x43, 0x45, 0x53, 0x48, 0x49] {
+                assert!(sink.OnTestKeyDown(&editor.context, WPARAM(vk), LPARAM(0)).unwrap().as_bool());
+                assert!(sink.OnKeyDown(&editor.context, WPARAM(vk), LPARAM(0)).unwrap().as_bool());
+            }
+            editor.store.selection_sets.set(0);
+            assert!(sink.OnTestKeyDown(&editor.context, WPARAM(0x20), LPARAM(0)).unwrap().as_bool());
+            assert!(sink.OnKeyDown(&editor.context, WPARAM(0x20), LPARAM(0)).unwrap().as_bool());
+            assert!(String::from_utf16_lossy(&editor.store.text.borrow()).contains("测试"));
+            assert_eq!(editor.store.selection_sets.get() == 0, transitory,
+                "only transitory hosts keep their own caret after a plain commit");
+        });
+    }
+}
+
+#[test]
+fn layout_notice_reentering_during_state_or_window_update_does_not_panic() {
+    // Notepad's RichEdit answers candidate-window SetWindowPos with a synchronous
+    // OnLayoutChange. A RefCell panic there aborts the host process.
+    in_editor(|editor, state, sink| unsafe {
+        use_test_host(&state);
+        for vk in [0x43, 0x45] {
+            assert!(sink.OnTestKeyDown(&editor.context, WPARAM(vk), LPARAM(0)).unwrap().as_bool());
+            assert!(sink.OnKeyDown(&editor.context, WPARAM(vk), LPARAM(0)).unwrap().as_bool());
+        }
+        assert!(state.borrow().composition.is_some());
+        let layout: ITfTextLayoutSink = sink.cast().unwrap();
+        {
+            let _held = state.borrow_mut();
+            layout.OnLayoutChange(&editor.context, TF_LC_CHANGE, None).unwrap();
+        }
+        let reentered = with_window(&state, |_| {
+            layout.OnLayoutChange(&editor.context, TF_LC_CHANGE, None).unwrap();
+            state.borrow_mut().caret = Some(RECT { left: 10, top: 10, right: 12, bottom: 30 });
+        });
+        assert!(reentered.is_some(), "the candidate window must be returned after the call");
+        assert!(state.borrow().window.is_some());
+    });
 }
 
 #[test]

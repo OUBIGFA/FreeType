@@ -368,6 +368,10 @@ enum Surrounding {
     Imm32,
 }
 
+fn transitory(context: &ITfContext) -> bool {
+    unsafe { context.GetStatus() }.is_ok_and(|status| status.dwStaticFlags & TF_SS_TRANSITORY != 0)
+}
+
 fn surrounding(context: &ITfContext) -> Surrounding {
     unsafe {
         let Ok(status) = context.GetStatus() else { return Surrounding::Imm32; };
@@ -513,13 +517,15 @@ fn set_sensitive(state: &Rc<RefCell<State>>, active: bool) {
         note_frame(state, &frame);
     }
     if active {
-        let mut state = state.borrow_mut();
-        state.key_preview = None;
-        state.undo = None;
-        state.space = None;
-        state.prediction_escape = PredictionEscape::Free;
-        state.pairs.clear();
-        if let Some(window) = &state.window { window.hide(); }
+        {
+            let mut state = state.borrow_mut();
+            state.key_preview = None;
+            state.undo = None;
+            state.space = None;
+            state.prediction_escape = PredictionEscape::Free;
+            state.pairs.clear();
+        }
+        with_window(state, |window| window.hide());
     }
 }
 
@@ -688,7 +694,13 @@ fn apply_document(state: &Rc<RefCell<State>>, context: &ITfContext, frame: &Fram
                     range.Collapse(ec, TF_ANCHOR_END)?;
                     range
                 };
-                set_selection(context, ec, &range)?;
+                // Chromium 系与 CUAS 的临时文档由宿主自己把光标放在上屏文字末尾。它们的
+                // TSF 选区可能落后于网页里的真实光标（如 Codex 编辑已发送消息时，成对标点
+                // 后模拟的 ← 没同步到 TSF）；再按旧位置设选区，会把光标拉到右半边标点外。
+                // 联想上屏仍要靠这次选区定位下一次空格，照旧设置。
+                if frame.replace_space || frame.predict || !transitory(context) {
+                    set_selection(context, ec, &range)?;
+                }
                 if frame.predict {
                     // Chromium may replay the renderer's committed suffix after
                     // the edit lock ends. Follow its final insertion to the right;
@@ -792,7 +804,8 @@ fn clear_prediction(state: &Rc<RefCell<State>>) -> bool {
     }
     s.predict_double_space = false;
     s.prediction_caret = None;
-    if let Some(window) = &s.window { window.hide(); }
+    drop(s);
+    with_window(state, |window| window.hide());
     true
 }
 
@@ -818,6 +831,32 @@ fn note_preview(state: &Rc<RefCell<State>>, frame: &Frame) {
     }
 }
 
+/// 候选窗的 Win32 调用（摆位置、显示、隐藏、改所属窗口）会同步发消息给宿主窗口，
+/// 宿主（如记事本的 RichEdit）可能当场回调 TSF。调用期间不持有 State 借用：先取出
+/// 窗口，用完放回；期间重入的回调看到「没有候选窗」，不会重复借用。
+fn with_window<R>(state: &Rc<RefCell<State>>, f: impl FnOnce(&mut CandidateWindow) -> R) -> Option<R> {
+    let (mut window, generation) = {
+        let Ok(mut s) = state.try_borrow_mut() else {
+            crate::log::write("候选窗调用重入", "已跳过");
+            return None;
+        };
+        (s.window.take()?, s.generation)
+    };
+    let result = f(&mut window);
+    let stale = {
+        let mut s = state.borrow_mut();
+        if s.generation == generation && s.window.is_none() {
+            s.window = Some(window);
+            None
+        } else {
+            Some(window)
+        }
+    };
+    // 期间停用或重建了候选窗：旧窗口在借用之外销毁。
+    drop(stale);
+    Some(result)
+}
+
 /// 候选窗按应答更新；应用给不出位置时用上一次的或系统记的插入符。
 fn show_window(state: &Rc<RefCell<State>>, frame: &Frame) {
     let wants = frame.hint.is_some() || !frame.candidates.is_empty() || frame.title.is_some();
@@ -829,22 +868,19 @@ fn show_window(state: &Rc<RefCell<State>>, frame: &Frame) {
         context.as_ref().and_then(|context| context.GetActiveView().and_then(|view| view.GetWnd()).ok())
             .filter(|window| !window.is_invalid()).unwrap_or_else(|| GetFocus())
     });
-    let mut s = state.borrow_mut();
-    let caret = if wants {
-        s.caret.or(s.last_caret).or_else(fallback_caret)
-    } else {
-        s.caret
+    let caret = {
+        let s = state.borrow();
+        if wants { s.caret.or(s.last_caret).or_else(fallback_caret) } else { s.caret }
     };
-    if let Some(window) = &mut s.window {
+    let shown = with_window(state, |window| {
         if let Some(owner) = owner {
             if let Err(error) = window.set_owner(owner) {
                 crate::log::write("关联候选窗失败", &error.to_string());
             }
         }
         window.update(frame, caret);
-    }
-    let unseen = wants && frame.predict && (caret.is_none() || s.window.is_none());
-    drop(s);
+    });
+    let unseen = wants && frame.predict && (caret.is_none() || shown.is_none());
     if unseen {
         // 不知道光标在哪、联想词摆不出来：不留看不见的联想
         dismiss_prediction(state);
@@ -1090,17 +1126,20 @@ fn begin_prediction_space(state: &Rc<RefCell<State>>, context: &ITfContext, revi
             let wait = double_space_wait();
             // GetTextExt 由应用实现，调用它时不持有可重入文本服务的状态借用。
             let rect = text_rect(&doc, ec, &caret);
-            let mut s = state2.borrow_mut();
-            s.space = Some(PredictionSpace {
-                context: doc.clone(), composition, revision, pressed_ms: ms,
-                deadline_ms: now_ms() + u64::from(wait),
-            });
-            s.undo = None;
-            s.caret = rect.or(s.caret);
-            if let Some(window) = &s.window {
+            let at = {
+                let mut s = state2.borrow_mut();
+                s.space = Some(PredictionSpace {
+                    context: doc.clone(), composition, revision, pressed_ms: ms,
+                    deadline_ms: now_ms() + u64::from(wait),
+                });
+                s.undo = None;
+                s.caret = rect.or(s.caret);
+                s.caret
+            };
+            with_window(&state2, |window| {
                 window.set_prediction_space_timeout(Some(wait));
-                if let Some(caret) = s.caret { window.reposition(caret); }
-            }
+                if let Some(at) = at { window.reposition(at); }
+            });
             done2.set(true);
             Ok(())
         }})();
@@ -1452,10 +1491,8 @@ fn on_focus(state: &Rc<RefCell<State>>, focus: Option<&ITfDocumentMgr>) {
         s.caret_move = None;
         s.undo = None;
         s.last_caret = None;
-        if let Some(window) = &s.window {
-            window.hide();
-        }
     }
+    with_window(state, |window| window.hide());
     let Some(context) = context else {
         state.borrow_mut().context = None;
         if let Some(frame) = call(state, &Request::Focus { active: false, before: None }) {
@@ -1726,9 +1763,7 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
             self.state.borrow_mut().key_preview = None;
             self.state.borrow_mut().prediction_escape = PredictionEscape::Free;
             self.state.borrow_mut().ctrl_space_toggled = None;
-            if let Some(window) = &self.state.borrow().window {
-                window.hide();
-            }
+            with_window(&self.state, |window| window.hide());
         }
         Ok(())
     }
@@ -1928,13 +1963,8 @@ impl ITfCompositionSink_Impl for TextService_Impl {
             // 输入法主动结束的旧编辑区，不能清掉已开始的下一次输入。
             return Ok(());
         }
-        {
-            let mut s = self.state.borrow_mut();
-            s.composition = None;
-            if let Some(window) = &s.window {
-                window.hide();
-            }
-        }
+        self.state.borrow_mut().composition = None;
+        with_window(&self.state, |window| window.hide());
         if let Some(frame) = call(&self.state, &Request::Reset { commit: false }) {
             note_frame(&self.state, &frame);
         }
@@ -1948,28 +1978,31 @@ impl ITfTextLayoutSink_Impl for TextService_Impl {
         let Some(context) = pic.as_ref().cloned() else {
             return Ok(());
         };
-        let (composition, client_id) = {
-            let s = self.state.borrow();
-            (s.composition.clone().or_else(|| s.space.as_ref().map(|space| space.composition.clone())), s.client_id)
+        // RichEdit 等宿主会在我们改状态或摆候选窗时同步发来排版通知。这时跳过，
+        // 编辑区下一次排版或下一个键会再摆一次；在宿主进程里 panic 会直接让应用崩溃。
+        let Ok((composition, client_id, generation)) = self.state.try_borrow().map(|s| (
+            s.composition.clone().or_else(|| s.space.as_ref().map(|space| space.composition.clone())),
+            s.client_id, s.generation,
+        )) else {
+            return Ok(());
         };
         let Some(composition) = composition else {
             return Ok(());
         };
         let state = self.state.clone();
         let context2 = context.clone();
-        let generation = state.borrow().generation;
         edit_with(&context, client_id, TF_ES_ASYNCDONTCARE | TF_ES_READ, move |ec| {
-            if state.borrow().generation != generation { return Ok(()); }
+            if state.try_borrow().map_or(true, |s| s.generation != generation) { return Ok(()); }
             let rect = unsafe { composition.GetRange() }
                 .ok()
                 .and_then(|range| text_rect(&context2, ec, &range));
             if let Some(rect) = rect {
-                let mut s = state.borrow_mut();
-                s.caret = Some(rect);
-                s.last_caret = Some(rect);
-                if let Some(window) = &s.window {
-                    window.reposition(rect);
+                {
+                    let Ok(mut s) = state.try_borrow_mut() else { return Ok(()); };
+                    s.caret = Some(rect);
+                    s.last_caret = Some(rect);
                 }
+                with_window(&state, |window| window.reposition(rect));
             }
             Ok(())
         });
