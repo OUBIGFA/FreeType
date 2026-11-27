@@ -124,6 +124,7 @@ pub struct Host {
     dirty: bool,
     saver: crate::saver::Saver,
     stats: crate::stats::Stats,
+    diagnostics: crate::candidate_diagnostics::Diagnostics,
     // 包含尚未存盘的学习变化；同步导出、轮询和远端恢复不更新此时间。
     sync_modified_ms: u64,
     /// 最近一次实际按键或选词的时间。
@@ -310,6 +311,7 @@ fn is_hotkey(key: &Key, name: &str) -> bool {
 
 impl Host {
     pub fn new(store: Store) -> Self {
+        let diagnostic_dir = if store.dir() == crate::data_dir() { crate::local_dir() } else { store.dir().join("local") };
         let config = store.load_config();
         let recent_emoji = store.load_recent_emoji();
         let mut stats = crate::stats::Stats::new(store.dir().to_path_buf());
@@ -340,6 +342,7 @@ impl Host {
             dirty: false,
             saver: crate::saver::Saver::default(),
             stats,
+            diagnostics: crate::candidate_diagnostics::Diagnostics::new(diagnostic_dir.join("candidate-diagnostics.jsonl")),
             sync_modified_ms: 0,
             last_input: None,
             tasks: Default::default(),
@@ -576,6 +579,7 @@ impl Host {
     pub fn disconnect(&mut self, id: ClientId) {
         if let Some(mut client) = self.clients.remove(&id) {
             client.state.clear();
+            if self.config.candidate_diagnostics { self.diagnostics.record(client.state.session.take_trace(), &client.state.app, id); }
             if client.state.session.take_learning_change() { self.dirty = true; self.mark_sync_change(); }
         }
         if self.focused == Some(id) {
@@ -1531,6 +1535,17 @@ impl Host {
 
     /// 主循环入口：同步的重计算交给后台任务线程，按键不在它后面排队。
     pub fn dispatch(&mut self, id: ClientId, request: Request, reply: std::sync::mpsc::Sender<Response>) {
+        if let Some(action) = crate::candidate_diagnostics::action(&request) {
+            if matches!(request, Request::ClearCandidateDiagnostics) {
+                // 清空的边界也清掉尚未完成的内存记录，不能在稍后选词时把旧正文写回来。
+                for client in self.clients.values_mut() {
+                    client.state.session.set_trace(false);
+                    client.pending = None;
+                }
+            }
+            self.diagnostics.request(action, reply);
+            return;
+        }
         let job = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.sync_job(&request)))
             .unwrap_or_else(|_| Some(Err(Response::error("服务进程内部出错"))));
         match job {
@@ -1646,6 +1661,12 @@ impl Host {
 
     /// 处理一条请求；里面出了 panic 时记日志、丢掉这个连接的输入状态，不让服务进程退出。
     pub fn handle(&mut self, id: ClientId, request: Request) -> Response {
+        let trace_was_enabled = self.config.candidate_diagnostics;
+        let trace_mode = self.effective(self.mode_of(&self.app_of(id))) == Mode::Chinese;
+        if let Some(client) = self.clients.get_mut(&id) {
+            client.state.session.set_trace(self.config.candidate_diagnostics && trace_mode
+                && client.state.tool.is_none() && client.state.raw.is_none() && client.state.lookup.is_none());
+        }
         let may_edit = matches!(&request,
             Request::SetConfig { .. } | Request::SetQuickPhrases { .. } | Request::ImportQuickPhrases { .. }
             | Request::SetCommonPhrases { .. } | Request::ImportCommonPhrases { .. }
@@ -1674,6 +1695,15 @@ impl Host {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.handle_inner(id, request)));
         match result {
             Ok(mut response) => {
+                if !preview {
+                    if trace_was_enabled && !self.config.candidate_diagnostics {
+                        for client in self.clients.values_mut() { client.state.session.set_trace(false); }
+                    } else if self.config.candidate_diagnostics {
+                        if let Some(client) = self.clients.get_mut(&id) {
+                            self.diagnostics.record(client.state.session.take_trace(), &client.state.app, id);
+                        }
+                    }
+                }
                 if !preview {
                     if let (Some(frame), Some(client)) = (&mut response.frame, self.clients.get_mut(&id)) {
                         if frame.candidates.is_empty() { client.revision = 0; }
@@ -1767,7 +1797,11 @@ impl Host {
     }
 
     fn handle_inner(&mut self, id: ClientId, request: Request) -> Response {
+        if let Some(action) = crate::candidate_diagnostics::action(&request) {
+            return self.diagnostics.request_inline(action);
+        }
         match request {
+            Request::GetCandidateDiagnostics | Request::ClearCandidateDiagnostics | Request::ExportCandidateDiagnostics { .. } => unreachable!("handled above"),
             Request::Hello { session, app } => {
                 if session && !self.clients.contains_key(&id) {
                     self.connect(id, app.to_ascii_lowercase());
@@ -1781,7 +1815,8 @@ impl Host {
             Request::PhysicalKey { key, before, shown_revision, .. } => {
                 let selects = matches!(key.keysym,
                     keysym::SPACE_DOUBLE | 0x20 | 0x27 | 0x3b | 0x5b | 0x5d | 0x30..=0x39 | keysym::KP_0..=keysym::KP_9
-                );
+                ) || (self.clients.get(&id).is_some_and(|client| client.state.session.calc_active())
+                    && matches!(key.keysym, 0x41..=0x5a | 0x61..=0x7a | keysym::RETURN | keysym::KP_ENTER | 0x24 | 0xa5 | 0xffe5));
                 if selects && shown_revision.is_some_and(|revision| self.clients.get(&id).is_some_and(|client| {
                     client.revision != revision && (client.state.busy() || revision != 0)
                 })) {

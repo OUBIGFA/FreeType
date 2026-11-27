@@ -430,8 +430,12 @@ impl ClientState {
                 }).collect();
             }
         }
+        let calculator = self.session.calc_active() && self.session.input().len() > 1;
         let expanded = core.panel == session::Panel::Expanded;
-        if expanded {
+        if calculator {
+            out.frame.labels = (0..candidates.len()).map(|i| char::from(b'a' + i as u8).to_string()).collect();
+            out.frame.title = Some("字母选词；回车或 = 提交结果；$ 提交金额".into());
+        } else if expanded {
             let row = core.cand_cursor.map(|c| c / session::GRID_COLS);
             out.frame.labels = (0..candidates.len())
                 .map(|i| {

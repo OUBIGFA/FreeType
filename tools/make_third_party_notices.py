@@ -312,6 +312,10 @@ def collect(output):
     licenses = ROOT / "third_party/licenses"
     components.append(copy_component(output, "engine:wowtype-core", authorization["wowtype"]["revision"], licenses,
                                      ["Apache-2.0-LICENSE.txt", "WowType-README.txt", "WowType-Cargo.toml.txt"]))
+    components.append(copy_component(output, "engine:wowtype-candidate-diagnostics",
+                                     "af506728714377b6c416045dc5baf06fadeb8014", licenses,
+                                     ["Apache-2.0-LICENSE.txt", "WowType-DIAGNOSTICS-README.txt"],
+                                     ROOT / "core/src/session_trace.rs"))
     keyboard = authorization["wowtypeKeyboard"]
     components.append(copy_component(output, "ui:wowtype-keyboard", keyboard["revision"], licenses,
                                      ["Apache-2.0-LICENSE.txt", "WowType-STATS-README.txt", "WowType-KEYBOARD-NOTICE.txt"],

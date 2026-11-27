@@ -567,6 +567,12 @@ impl Decoded {
 /// 把双拼输入翻成全拼。有重码时给出几种（最多 [`MAX_VARIANTS`]）；
 /// 有一对键对不上任何音节时返回空。用户打的隔音符跳过。
 pub fn decode(scheme: Scheme, input: &str) -> Vec<Decoded> {
+    decode_fuzzy(scheme, input, 0)
+}
+
+/// 对不上合法音节的键对，只在相应模糊音组打开时保留原声韵供词库匹配。
+/// 与全拼共用查询规则，不把 din 先改成 ding 后再执行第二次模糊匹配。
+pub fn decode_fuzzy(scheme: Scheme, input: &str, groups: u32) -> Vec<Decoded> {
     // (键, 这个键之后在原始输入里的字节位置，含紧跟着的隔音符)
     let bytes = input.as_bytes();
     let mut keys: Vec<(u8, usize)> = Vec::new();
@@ -597,13 +603,24 @@ pub fn decode(scheme: Scheme, input: &str) -> Vec<Decoded> {
     for p in 0..pairs {
         let (a, _) = keys[2 * p];
         let (b, end) = keys[2 * p + 1];
-        let options = decode_all(scheme, a, b);
+        let mut options = decode_all(scheme, a, b).to_vec();
+        if options.is_empty() && groups != 0 {
+            if let Some(initial) = trailing_initial(scheme, a) {
+                for &(final_, key) in scheme.layout().finals {
+                    if key == b {
+                        if let Some(alias) = crate::syllable::fuzzy_spelling(&format!("{initial}{final_}"), groups) {
+                            if !options.contains(&alias.text) { options.push(alias.text); }
+                        }
+                    }
+                }
+            }
+        }
         if options.is_empty() {
             return Vec::new();
         }
         let mut next = Vec::new();
         for prefix in &variants {
-            for syllable in options {
+            for syllable in &options {
                 if next.len() >= MAX_VARIANTS {
                     break;
                 }

@@ -1989,6 +1989,28 @@ fn calculator_decimals_do_not_start_address_completion() {
 }
 
 #[test]
+fn calculator_labels_and_preview_match_letter_selection() {
+    let mut host = host("calculator-letters");
+    for shuangpin in [false, true] {
+        configure(&mut host, |c| { c.shuangpin = shuangpin; c.autospace = false; });
+        let prefix = if shuangpin { "V" } else { "v" };
+        let frame = typing(&mut host, &format!("{prefix}1+2"));
+        assert_eq!(frame.labels[..3], ["a", "b", "c"]);
+        let key = Key { keysym: 'b' as u32, test: true, ..Key::default() };
+        let preview = host.handle(1, Request::Key { key: key.clone(), before: None }).frame.unwrap();
+        assert_eq!(preview.commit.as_deref(), Some("1+2=3"));
+        let actual = host.handle(1, Request::Key { key: Key { test: false, ..key }, before: None }).frame.unwrap();
+        assert_eq!(actual.commit, preview.commit);
+        let frame = typing(&mut host, &format!("{prefix}123.456"));
+        assert!(!frame.labels.is_empty());
+        assert_eq!(press(&mut host, '$' as u32).commit.as_deref(), Some("壹佰贰拾叁元肆角陆分"));
+    }
+    typing(&mut host, "nihao");
+    assert!(press(&mut host, keysym::LEFT).labels.is_empty(), "ordinary candidates retain numeric labels");
+    cleanup(&host);
+}
+
+#[test]
 fn numpad_dot_is_plain_or_starts_completion() {
     let mut host = host("numpad");
     assert_eq!(press(&mut host, keysym::KP_DECIMAL).commit.as_deref(), Some("."));

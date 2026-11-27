@@ -7,6 +7,7 @@ pub mod input;
 pub mod raw;
 mod saver;
 mod stats;
+mod candidate_diagnostics;
 pub mod store;
 mod dictionary_catalog;
 mod lookup_mode;

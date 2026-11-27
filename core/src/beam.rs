@@ -517,11 +517,17 @@ fn collect_dfs(
             pinyin_of(keys)
         };
         for (lexical, entry) in entries {
+            // 非标准模糊输入不能写入学习词库；选词后记住命中的规范读音。
+            let reading = if keys.iter().any(|q| matches!(q, SyllableQuery::Full { id, .. }
+                if usize::from(*id) >= crate::syllable::SYLLABLES.len())) {
+                entry.keys.iter().map(|key| SyllableQuery::Full { id: key.id, erhua: key.erhua }.display())
+                    .collect::<Vec<_>>().join(" ")
+            } else { pinyin.clone() };
             out.push(Span {
                 lexical,
                 word: BeamWord {
                     text: entry.word,
-                    pinyin: pinyin.clone(),
+                    pinyin: reading,
                     freq: entry.freq,
                     known: true,
                     syllable_count: keys.len(),

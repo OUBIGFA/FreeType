@@ -901,7 +901,8 @@ impl Engine {
         let display = raw.trim();
         let leading = raw.len() - raw.trim_start().len();
         let scheme = self.config.shuangpin_scheme;
-        let variants = crate::shuangpin::decode(scheme, display);
+        let variants = crate::shuangpin::decode_fuzzy(scheme, display,
+            if self.config.fuzzy { self.config.fuzzy_groups } else { 0 });
         let Some(first) = variants.first() else {
             // 翻不了（不是双拼）：只给原始串
             let mut result = Vec::new();
@@ -1017,16 +1018,7 @@ impl Engine {
             return Ok(Vec::new());
         }
         let typo = self.config.typo_correction && !self.config.shuangpin;
-        let full = SyllableGraph::build_with_typos(
-            &parsed,
-            GraphOptions {
-                mode: GraphMode::Full,
-                allow_erhua: true,
-                typo,
-                completion: false,
-            },
-            self.config.typo_kinds,
-        );
+        let full = self.full_input_graph(&parsed, typo, false);
         let graph = if full.has_exact_path() || !self.config.jianpin_fallback {
             full
         } else {
@@ -1039,7 +1031,7 @@ impl Engine {
                     completion: true,
                 },
             )
-            .has_path_without_typo();
+            .has_path_without_erhua_or_typo();
             abbrev_graph(&parsed, completion_explains).unwrap_or(full)
         };
         let fuzzy_view;
@@ -1111,7 +1103,7 @@ impl Engine {
         let graph = if full.has_exact_path() || !self.config.jianpin_fallback {
             full
         } else {
-            let completion_explains = full.has_path_without_typo();
+            let completion_explains = full.has_path_without_erhua_or_typo();
             abbrev_graph(&parsed, completion_explains).unwrap_or(full)
         };
         let fuzzy_view;
@@ -1360,7 +1352,9 @@ impl Engine {
     }
 
     fn full_input_graph(&self, input: &crate::syllable::ParsedInput, typo: bool, completion: bool) -> SyllableGraph {
-        SyllableGraph::build_with_typos(input, GraphOptions { mode: GraphMode::Full, allow_erhua: true, typo, completion }, self.config.typo_kinds)
+        let mut graph = SyllableGraph::build_with_typos(input, GraphOptions { mode: GraphMode::Full, allow_erhua: true, typo, completion }, self.config.typo_kinds);
+        if self.config.fuzzy { graph.add_fuzzy_spellings(self.config.fuzzy_groups); }
+        graph
     }
 
     /// 跑一次查询；fuzzy=true 时精确读音和模糊音读音的词一起搜。
@@ -1374,24 +1368,29 @@ impl Engine {
         }
         let typo = self.config.typo_correction && !self.config.shuangpin;
         let full = self.full_input_graph(&parsed, typo, completion);
+        let mut full_found = if full.has_complete_path() { self.query_once(&full, at_ms, fuzzy)? } else { Vec::new() };
         // 不靠补全、纠错就能完整解析：直接用全拼。
         // 但能切成音节不等于词库里有词：hm、hng 这类叹词音节词库不收，以前只给出原样的 hm，
         // 打 hm（后面、好吗）一个中文候选都没有。一个认识的词都凑不出来就接着试简拼。
         if full.has_exact_path() {
-            let mut found = self.query_once(&full, at_ms, fuzzy)?;
-            self.keep_exact_syllable(&full, &mut found, at_ms, fuzzy)?;
+            self.keep_exact_syllable(&full, &mut full_found, at_ms, fuzzy)?;
             if !fuzzy && self.config.fuzzy_fallback && !self.config.shuangpin {
-                self.fuzzy_fallback(&full, &mut found);
+                self.fuzzy_fallback(&full, &mut full_found);
             }
-            let any_known = found.iter().any(|c| !c.words.is_empty() && c.words.iter().all(|w| w.known));
+            let any_known = full_found.iter().any(|c| c.features.typo_count == 0.0 && c.features.prefix_completion == 0.0
+                && !c.words.is_empty() && c.words.iter().all(|w| w.known));
             if !self.config.jianpin_fallback || any_known {
-                return Ok(found);
+                return Ok(full_found);
             }
         }
         // 否则简拼（zg、jzm）、全拼混简拼（kyi、yongzwen）与全拼补全/纠错都试，按分数合并
         let mut merged: Vec<Candidate> = Vec::new();
         if self.config.jianpin_fallback {
-            if let Some(jianpin) = abbrev_graph(&parsed, full.has_path_without_typo()) {
+            // 图上能用“未知儿化 + 补全”走通，不等于词库能解释输入。仅当完整候选确有
+            // 不靠纠错的已知词时省掉混简拼查询，否则 shurf 会永远失去 shu+r+f 这条路。
+            let completion_explains = full.has_path_without_erhua_or_typo() && full_found.iter().any(|c| c.features.typo_count == 0.0
+                && !c.words.is_empty() && c.words.iter().all(|w| w.known));
+            if let Some(jianpin) = abbrev_graph(&parsed, completion_explains) {
                 let mut found = self.query_once(&jianpin, at_ms, fuzzy)?;
                 if jianpin.mode() == GraphMode::Mixed {
                     // 混简拼里拿声母、单个字母兜底凑出来的（h e l l o -> "hello"）没有意义
@@ -1400,9 +1399,7 @@ impl Engine {
                 merged.extend(found);
             }
         }
-        if full.has_complete_path() {
-            merged.extend(self.query_once(&full, at_ms, fuzzy)?);
-        }
+        merged.append(&mut full_found);
         let mut result = dedupe_by_text(merged);
         result.sort_by(|a, b| {
             b.score

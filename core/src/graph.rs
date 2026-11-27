@@ -188,6 +188,21 @@ impl SyllableGraph {
         self.input.is_empty()
     }
 
+    /// 模糊输入中的非标准音节（suang、din）也必须进入同一张图；不能当错键或先替换成
+    /// 合法音节再模糊一次。每个查询仍携带原声韵，让词库视图按开关匹配并收取原有惩罚。
+    pub(crate) fn add_fuzzy_spellings(&mut self, groups: u32) {
+        if groups == 0 { return; }
+        for start in 0..self.input.len() {
+            for end in start + 2..=(start + MAX_SYLLABLE_LEN).min(self.input.len()) {
+                if self.input.forced_between(start, end) { continue; }
+                let text = std::str::from_utf8(&self.input.letters[start..end]).expect("ASCII input");
+                if let Some(syllable) = crate::syllable::fuzzy_spelling(text, groups) {
+                    add_edge(&mut self.edges, full_edge(start, end, syllable, false));
+                }
+            }
+        }
+    }
+
     pub fn mode(&self) -> GraphMode {
         self.mode
     }
@@ -210,12 +225,19 @@ impl SyllableGraph {
         self.has_path(|e| !e.typo)
     }
 
+    /// 补全若必须把中间 r 当儿化，仍应比较 r 作为后一个字声母的混合简拼。
+    pub(crate) fn has_path_without_erhua_or_typo(&self) -> bool {
+        self.has_path(|e| !e.typo && !matches!(e.kind, EdgeKind::Full { erhua: true, .. }))
+    }
+
     /// 这条补全边是不是把一个已经打全的音节接长成了别的音节（yin -> ying、xian -> xiang）。
     ///
     /// 没打全的尾巴（zhon、nih 的 h）补全是帮用户少打几个键；打全了的音节再接长，
     /// 出来的是另一个读音，见 `beam::collect_dfs`。
     pub fn completes_whole_syllable(&self, edge: &Edge) -> bool {
-        edge.completion > 0 && syllable_of(&self.input.letters[edge.start..edge.end]).is_some()
+        edge.completion > 0 && (syllable_of(&self.input.letters[edge.start..edge.end]).is_some()
+            || self.edges[edge.start].iter().any(|exact| exact.end == edge.end && !exact.typo
+                && exact.completion == 0 && matches!(exact.kind, EdgeKind::Full { erhua: false, .. })))
     }
 
     /// 不靠纠错边、补全边能否走完。

@@ -55,20 +55,52 @@ pub fn format(value: f64) -> String {
 /// 只打一个数时是大写金额、中文数字和数字本身。
 pub fn candidates(expr: &str) -> Vec<String> {
     if is_plain_number(expr) {
-        let mut out: Vec<String> = [rmb_upper(expr), chinese_number(expr)].into_iter().flatten().collect();
+        let mut out: Vec<String> = [money_text(expr), chinese_number(expr)].into_iter().flatten().collect();
         out.push(expr.to_string());
+        // 保留原有金额、中文读数、原数的次序，新格式接在后面；选择次数不影响顺序。
+        if let Some((integer, _)) = split_number(expr).filter(|(_, f)| f.is_empty()) {
+            out.push(integer_words(integer, &UPPER_DIGITS, &UPPER_UNITS));
+            if let Some(roman) = roman_number(integer) { out.push(roman); }
+            let digits = integer.to_string();
+            if digits.len() >= 4 {
+                let grouped: String = digits.chars().enumerate().flat_map(|(i, c)| {
+                    let separator = (i > 0 && (digits.len() - i) % 3 == 0).then_some(',');
+                    separator.into_iter().chain(std::iter::once(c))
+                }).collect();
+                out.push(grouped);
+            }
+        }
         return out;
     }
     match evaluate(expr) {
         Some(value) => {
             let result = format(value);
             let mut out = vec![result.clone(), format!("{expr}={result}")];
-            out.extend(rmb_upper(&result));
+            out.extend(money_text(&result));
             out
         }
         None if !expr.is_empty() => vec![expr.to_string()],
         None => Vec::new(),
     }
+}
+
+/// 金额快捷提交按分四舍五入；十进制字符串进位避免 1.005 一类浮点舍入误差。
+pub fn money_text(expr: &str) -> Option<String> {
+    let number = if is_plain_number(expr) { expr.to_owned() } else { format(evaluate(expr)?) };
+    let (integer, fraction) = split_number(&number)?;
+    let digit = |i| fraction.as_bytes().get(i).map_or(0, |b| u64::from(*b - b'0'));
+    let cents = integer.checked_mul(100)?.checked_add(digit(0) * 10 + digit(1) + u64::from(digit(2) >= 5))?;
+    rmb_upper(&format!("{}.{:02}", cents / 100, cents % 100))
+}
+
+fn roman_number(mut value: u64) -> Option<String> {
+    if !(1..=3999).contains(&value) { return None; }
+    let mut out = String::new();
+    for (number, symbol) in [(1000,"M"),(900,"CM"),(500,"D"),(400,"CD"),(100,"C"),(90,"XC"),
+        (50,"L"),(40,"XL"),(10,"X"),(9,"IX"),(5,"V"),(4,"IV"),(1,"I")] {
+        while value >= number { out.push_str(symbol); value -= number; }
+    }
+    Some(out)
 }
 
 /// 只有数字、最多一个小数点（12345、0.5、3.14）。
@@ -273,7 +305,9 @@ impl Parser {
     // power := atom ('^' unary)?   右结合：2^3^2 = 2^9
     fn power(&mut self) -> Option<f64> {
         let base = self.atom()?;
-        if self.eat('^') {
+        let stars = self.chars.get(self.pos..self.pos + 2).is_some_and(|pair| pair == ['*', '*']);
+        if stars { self.pos += 2; }
+        if stars || self.eat('^') {
             let exp = self.unary()?;
             return Some(base.powf(exp));
         }
@@ -385,9 +419,9 @@ mod tests {
             candidates("12345.67"),
             vec!["壹万贰仟叁佰肆拾伍元陆角柒分", "一万二千三百四十五点六七", "12345.67"]
         );
-        assert_eq!(candidates("3.14159"), vec!["三点一四一五九", "3.14159"]);
+        assert_eq!(candidates("3.14159"), vec!["叁元壹角肆分", "三点一四一五九", "3.14159"]);
         assert_eq!(candidates("12*3.5"), vec!["42", "12*3.5=42", "肆拾贰元整"]);
-        assert_eq!(candidates("10/3"), vec!["3.333333333", "10/3=3.333333333"]);
+        assert_eq!(candidates("10/3"), vec!["3.333333333", "10/3=3.333333333", "叁元叁角叁分"]);
         assert_eq!(candidates("1+2*3"), vec!["7", "1+2*3=7", "柒元整"]);
         assert_eq!(candidates("1+"), vec!["1+"]);
         assert!(candidates("").is_empty());

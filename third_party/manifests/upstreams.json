@@ -107,6 +107,20 @@
       "revision": "d8e9ebaabac5f7f63ba01c70fec39a6111e3b13d",
       "use": "参考来源词库管理、独立英文候选、拆字查字、逐项同步与 Vim Esc 的公开用户行为；Rust/Go 独立实现，不复制程序代码；输入数据另从原始来源取得",
       "license": "GPL-3.0; behavior reference only"
+    },
+    {
+      "name": "WowType candidate diagnostic events",
+      "repository": "https://github.com/Gloridust/WowType",
+      "revision": "af506728714377b6c416045dc5baf06fadeb8014",
+      "use": "改写会话诊断事件与评测转换约定；Windows 后台写入、设置及导出独立适配，未复制同步写文件实现；core/src/session_trace.rs 标明修改",
+      "license": "MIT OR Apache-2.0；按 Apache-2.0 分发",
+      "trackedEvidence": [
+        {
+          "path": "third_party/licenses/WowType-DIAGNOSTICS-README.txt",
+          "bytes": 55701,
+          "sha256": "eced355257e655b83142c679139d15f2cf0328a5c7342bec467163203b073948"
+        }
+      ]
     }
   ]
 }

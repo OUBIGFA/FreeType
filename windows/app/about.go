@@ -93,6 +93,7 @@ func (s *settings) aboutPage(c *ui.Context) {
 			})
 		}
 	})
+	s.candidateDiagnosticsSection(c)
 	section(c, "来源与许可", func() {
 		s.settingRow(c, "about/开源信息", func() {
 			if ui.Button(c, "查看开源说明").Clicked() {

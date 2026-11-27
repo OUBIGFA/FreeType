@@ -6,6 +6,8 @@
 
 ## 1. 如何核对本包
 
+候选诊断的会话事件和评测转换约定改写自 WowType contributors 的修订 `af506728714377b6c416045dc5baf06fadeb8014`，按 Apache-2.0 分发。FreeType 在 `core/src/session_trace.rs` 标明修改，增加有界内存记录，并由 Windows 服务后台写入、导出和清空；未采用上游输入线程同步写文件的方式。固定授权证据保存在仓库 `third_party/licenses/WowType-DIAGNOSTICS-README.txt`，修改后的源码进入同版本本地来源包。
+
 - `third-party/manifest.json` 列出本次构建的组件、版本、随包许可文件、独立来源包内的源码路径、逐文件 SHA-256 和已知未解决项。
 - Rust 范围为 x64 服务及 x64/x86 输入法 DLL 的普通依赖图；不把仅用于构建或测试的依赖宣称为随包运行时。
 - Go 范围为 Windows 应用实际导入的外部模块，以及 Go 标准库和标准库内附的依赖声明。

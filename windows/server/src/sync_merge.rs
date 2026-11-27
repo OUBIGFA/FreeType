@@ -27,7 +27,7 @@ struct Journal {
 }
 
 fn key(parts: &[&str]) -> String { serde_json::to_string(parts).expect("字符串数组可序列化") }
-fn local_config(name: &str) -> bool { matches!(name, "lexicon" | "default_mode" | "mode_scope" | "app_presets" | "app_preset_rules" | "vim_mode_apps") }
+fn local_config(name: &str) -> bool { matches!(name, "candidate_diagnostics" | "lexicon" | "default_mode" | "mode_scope" | "app_presets" | "app_preset_rules" | "vim_mode_apps") }
 fn error(error: impl std::fmt::Display) -> String { error.to_string() }
 
 fn config_defaults() -> Result<Value, String> {

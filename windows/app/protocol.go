@@ -86,21 +86,22 @@ type Config struct {
 	HotkeyEnglish        string      `json:"hotkey_english"`
 	HotkeyRadical        string      `json:"hotkey_radical"`
 
-	QuickPhrases       bool `json:"quick_phrases"`
-	EmojiSuggest       bool `json:"emoji_suggest"`
-	DateTime           bool `json:"date_time"`
-	Calculator         bool `json:"calculator"`
-	Toolbar            bool `json:"toolbar"`
-	ClipboardHistory   bool `json:"clipboard_history"`
-	EmailCompletion    bool `json:"email_completion"`
-	LongWordCompletion bool `json:"long_word_completion"`
-	PredictNext        bool `json:"predict_next"`
-	PredictDigits      bool `json:"predict_digits"`
-	PredictSpace       bool `json:"predict_space"`
-	PredictDoubleSpace bool `json:"predict_double_space"`
-	PredictArrows      bool `json:"predict_arrows"`
-	TypingStats        bool `json:"typing_stats"`
-	StatsRetention     int  `json:"stats_retention"`
+	QuickPhrases         bool `json:"quick_phrases"`
+	EmojiSuggest         bool `json:"emoji_suggest"`
+	DateTime             bool `json:"date_time"`
+	Calculator           bool `json:"calculator"`
+	Toolbar              bool `json:"toolbar"`
+	ClipboardHistory     bool `json:"clipboard_history"`
+	EmailCompletion      bool `json:"email_completion"`
+	LongWordCompletion   bool `json:"long_word_completion"`
+	PredictNext          bool `json:"predict_next"`
+	PredictDigits        bool `json:"predict_digits"`
+	PredictSpace         bool `json:"predict_space"`
+	PredictDoubleSpace   bool `json:"predict_double_space"`
+	PredictArrows        bool `json:"predict_arrows"`
+	TypingStats          bool `json:"typing_stats"`
+	CandidateDiagnostics bool `json:"candidate_diagnostics"`
+	StatsRetention       int  `json:"stats_retention"`
 
 	HotkeyEmoji       string `json:"hotkey_emoji"`
 	HotkeyPunct       string `json:"hotkey_punct"`
@@ -298,23 +299,30 @@ type typingDay struct {
 
 // Response 是一条应答。
 type Response struct {
-	OK               bool                 `json:"ok"`
-	ModifiedUnixMS   int64                `json:"modified_unix_ms,omitempty"`
-	Error            string               `json:"error,omitempty"`
-	Status           *Status              `json:"status,omitempty"`
-	Config           *Config              `json:"config,omitempty"`
-	QuickPhrases     []QuickPhrase        `json:"quick_phrases,omitempty"`
-	CommonPhrases    []string             `json:"common_phrases,omitempty"`
-	Dictionaries     []Dictionary         `json:"dictionaries,omitempty"`
-	DictionaryPage   *DictionaryPage      `json:"dictionary_page,omitempty"`
-	SyncMerge        *SyncMergePreview    `json:"sync_merge,omitempty"`
-	SyncFormat       int                  `json:"sync_format,omitempty"`
-	UserWords        []UserWord           `json:"user_words,omitempty"`
-	Report           *ImportReport        `json:"report,omitempty"`
-	Frame            *Frame               `json:"frame,omitempty"`
-	Apps             []AppWindow          `json:"apps,omitempty"`
-	TypingStats      map[string]typingDay `json:"typing_stats,omitempty"`
-	ShuangpinExample string               `json:"shuangpin_example,omitempty"`
+	CandidateDiagnostics *CandidateDiagnostics `json:"candidate_diagnostics,omitempty"`
+	OK                   bool                  `json:"ok"`
+	ModifiedUnixMS       int64                 `json:"modified_unix_ms,omitempty"`
+	Error                string                `json:"error,omitempty"`
+	Status               *Status               `json:"status,omitempty"`
+	Config               *Config               `json:"config,omitempty"`
+	QuickPhrases         []QuickPhrase         `json:"quick_phrases,omitempty"`
+	CommonPhrases        []string              `json:"common_phrases,omitempty"`
+	Dictionaries         []Dictionary          `json:"dictionaries,omitempty"`
+	DictionaryPage       *DictionaryPage       `json:"dictionary_page,omitempty"`
+	SyncMerge            *SyncMergePreview     `json:"sync_merge,omitempty"`
+	SyncFormat           int                   `json:"sync_format,omitempty"`
+	UserWords            []UserWord            `json:"user_words,omitempty"`
+	Report               *ImportReport         `json:"report,omitempty"`
+	Frame                *Frame                `json:"frame,omitempty"`
+	Apps                 []AppWindow           `json:"apps,omitempty"`
+	TypingStats          map[string]typingDay  `json:"typing_stats,omitempty"`
+	ShuangpinExample     string                `json:"shuangpin_example,omitempty"`
+}
+
+type CandidateDiagnostics struct {
+	Bytes   uint64 `json:"bytes"`
+	Dropped uint64 `json:"dropped"`
+	Error   string `json:"error"`
 }
 
 // Request 是一条请求：op 加上各自的字段。

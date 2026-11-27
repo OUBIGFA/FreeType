@@ -30,6 +30,7 @@ type settings struct {
 	refreshRevision uint64
 	// 保存失败时恢复已确认的图标，避免预览与实际托盘显示不同的外观。
 	savedBrandIcon, savedCustomBrandIcon string
+	savedCandidateDiagnostics            bool
 	// 选文件、存文件、打开文件夹（测试里换掉）。
 	openFile                                          func(title string) string
 	openTable                                         func(title string) string
@@ -80,13 +81,16 @@ type settings struct {
 	confirmPhraseBatch, confirmWordBatch                                     bool
 	common                                                                   []string
 	// 全列表保存完成并刷新前不接受下一次修改，避免用旧列表覆盖刚写入的条目。
-	phrasesBusy, commonBusy      bool
-	words                        []UserWord
-	stats                        map[string]typingDay
-	statsBusy, confirmStatsClear bool
-	statsError                   string
-	statsTab, statsScope         int
-	statsUpdatedAt               time.Time
+	phrasesBusy, commonBusy                                      bool
+	words                                                        []UserWord
+	stats                                                        map[string]typingDay
+	statsBusy, confirmStatsClear                                 bool
+	statsError                                                   string
+	diagnosticsBusy, confirmDiagnostics, confirmDiagnosticsClear bool
+	diagnosticsStatus                                            *CandidateDiagnostics
+	diagnosticsError                                             string
+	statsTab, statsScope                                         int
+	statsUpdatedAt                                               time.Time
 
 	// 最近一次从服务端发现的可选窗口。
 	apps                                     []AppWindow
@@ -206,6 +210,7 @@ func (s *settings) refresh() {
 			}
 			if cerr == nil && config.Config != nil && revision == s.configRevision {
 				s.config = *config.Config
+				s.savedCandidateDiagnostics = s.config.CandidateDiagnostics
 				s.shuangpinExample = config.ShuangpinExample
 				s.loaded = true
 				s.updateBrandIcon()
@@ -263,12 +268,14 @@ func (s *settings) saveConfig() {
 					confirmed = *resp.Config
 				}
 				s.savedBrandIcon, s.savedCustomBrandIcon = confirmed.BrandIcon, confirmed.CustomBrandIcon
+				s.savedCandidateDiagnostics = confirmed.CandidateDiagnostics
 			}
 			if revision != s.configRevision {
 				return
 			}
 			if err != nil {
 				s.config.BrandIcon, s.config.CustomBrandIcon = s.savedBrandIcon, s.savedCustomBrandIcon
+				s.config.CandidateDiagnostics = s.savedCandidateDiagnostics
 				s.updateBrandIcon()
 				s.notice = "保存失败：" + err.Error()
 				return
@@ -328,6 +335,7 @@ func (s *settings) run(req Request) {
 			}
 			if config.Config != nil && revision == s.configRevision {
 				s.config = *config.Config
+				s.savedCandidateDiagnostics = s.config.CandidateDiagnostics
 				s.shuangpinExample = config.ShuangpinExample
 				s.updateBrandIcon()
 			}

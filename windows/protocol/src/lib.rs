@@ -429,6 +429,8 @@ pub struct Config {
     pub predict_arrows: bool,
     /// 只在本机统计每日聚合数字，默认关闭。
     pub typing_stats: bool,
+    /// 本机候选诊断，默认关闭；含正文，不随备份或同步启用。
+    pub candidate_diagnostics: bool,
     /// 0 表示永久；其余是保留天数。
     pub stats_retention: u32,
 
@@ -536,6 +538,7 @@ impl Default for Config {
             predict_double_space: true,
             predict_arrows: true,
             typing_stats: false,
+            candidate_diagnostics: false,
             stats_retention: 365,
             hotkey_emoji: "off".into(),
             hotkey_punct: "off".into(),
@@ -844,6 +847,9 @@ pub enum Request {
     CandidateAction { revision: u64, action: CandidateAction },
     ListTypingStats,
     ClearTypingStats,
+    GetCandidateDiagnostics,
+    ClearCandidateDiagnostics,
+    ExportCandidateDiagnostics { path: String, #[serde(default)] evaluation: bool },
     /// Windows 宿主识别敏感输入框时，不保留编辑区、上下文和联想。
     SensitiveFocus { active: bool },
     /// TSF 已核对紧接的退格确实删除了刚上屏的字符。
@@ -1167,6 +1173,8 @@ pub struct BrandIcon {
 pub struct Response {
     pub ok: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidate_diagnostics: Option<CandidateDiagnostics>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub modified_unix_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -1200,6 +1208,14 @@ pub struct Response {
     pub apps: Option<Vec<AppWindow>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub typing_stats: Option<std::collections::BTreeMap<String, TypingDay>>,
+}
+
+/// 后台记录状态；不含输入内容，只在用户打开诊断入口时请求。
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CandidateDiagnostics {
+    pub bytes: u64,
+    pub dropped: u64,
+    pub error: String,
 }
 
 impl Response {

@@ -9,6 +9,7 @@
 | --- | --- | --- | --- |
 | WowType | `5656e136e9f5fc32837c87bc1a2242ec159a32d7` | 保留历史；Rust 引擎、C ABI 和行为测试 | README 明确 MIT 或 Apache-2.0 任选；本次选择 Apache-2.0，原文和依据见 [authorization.json](manifests/authorization.json) |
 | WowType 输入统计 | `bb2a04fd573f1e5f2444ee68f8f71b7ea429b3c5` | 直接移植指标计算、概览、六行键盘、趋势、类型和候选分类页面；适配 mygo 与现有 Windows 数据 | Apache-2.0；README 和修改声明随包保留；原始源码节选进入独立来源包 |
+| WowType 候选诊断 | `af506728714377b6c416045dc5baf06fadeb8014` | 改写会话事件、选词记录和评测转换约定；后台持久化及 Windows 设置独立适配 | Apache-2.0；固定 README 证据见 `licenses/WowType-DIAGNOSTICS-README.txt`，修改见 `core/src/session_trace.rs` |
 | mygo | `v0.10.0`（`ebde9399baf2734b3361856a53f4036859973d1d`） | Windows 托盘、设置窗口和安装器 | MIT |
 | msime-windows | `26796f3ed646e2ce75ba39bca6f1352caca9fd67` | 参照词库、快捷短语批量文件格式，单按 Shift、成对标点后挪光标的处理思路，以及 v0.14.0 公开文档中数据同步的远端布局与合并规则（独立实现）；本地对照副本在 `.local/references/msime-windows`（不入库） | GPL-3.0；未复制代码或数据 |
 | rime-frost（白霜） | `555a736932de245d7f59f640a98bd58f368792b3` | 默认中文主库、细胞词库、字表与英文词表；由雾凇发展而来，不另叠加雾凇整库 | GPL-3.0，许可证随数据分发 |

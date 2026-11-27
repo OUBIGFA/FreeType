@@ -22,6 +22,9 @@
 use crate::datetime::LocalTime;
 use crate::Engine;
 
+#[path = "session_trace.rs"]
+mod trace;
+
 /// 平台无关的键码：XKB keysym 的子集（fcitx5 直接用，macOS 外壳把 kVK_* 翻成这个）。
 pub mod keysym {
     pub const BACKSPACE: u32 = 0xff08;
@@ -411,6 +414,7 @@ const EMOJI_SLOT: usize = 2;
 /// 引擎是后台载入的，载入好之前 `engine` 是 None（照样能打字，只是没有候选）。
 #[derive(Clone)]
 pub struct Session<'e> {
+    trace: trace::Trace,
     /// 全部原始输入（包括已经选过词的部分）。
     input: String,
     selections: Vec<Selection>,
@@ -451,6 +455,7 @@ pub struct Session<'e> {
 impl Default for Session<'_> {
     fn default() -> Self {
         Self {
+            trace: trace::Trace::default(),
             input: String::new(),
             selections: Vec::new(),
             selection_learning: Vec::new(),
@@ -607,7 +612,11 @@ impl<'e> Session<'e> {
 
     /// 外壳标记敏感输入时不向引擎记录选词、联想或原样上屏。
     pub fn set_no_learn(&mut self, value: bool) {
-        if value && !self.no_learn { self.clear(); }
+        if value && !self.no_learn {
+            self.no_learn = true;
+            self.trace_sensitive();
+            self.clear();
+        }
         self.no_learn = value;
     }
 
@@ -617,6 +626,7 @@ impl<'e> Session<'e> {
 
     /// 只有外壳确认刚上屏的文字已被紧接的退格修改时才调用。
     pub fn undo_commit_learning(&mut self) -> bool {
+        self.trace_commit_backspace();
         let marks = std::mem::take(&mut self.committed_learning);
         for (start, end) in marks.into_iter().rev() { self.undo_range(start, end); }
         self.take_learning_change()
@@ -632,16 +642,20 @@ impl<'e> Session<'e> {
 
     fn pop_selection(&mut self) -> Option<Selection> {
         if let Some(Some((start, end))) = self.selection_learning.pop() { self.undo_range(start, end); }
-        self.selections.pop()
+        let selection = self.selections.pop();
+        if selection.is_some() { self.trace_undo_selection(); }
+        selection
     }
 
     /// 处理一次按键。
     pub fn key(&mut self, key: &Key) -> Frame {
+        let traced = self.trace_key_before(key);
         if !key.release && (key.keysym != keysym::BACKSPACE || self.composing()) {
             self.committed_learning.clear();
         }
         self.last_choice = None;
         let handled = self.handle_key(key);
+        self.trace_key_after(key, traced);
         self.frame(handled)
     }
 
@@ -683,6 +697,26 @@ impl<'e> Session<'e> {
         let sym = key.keysym;
         // 先把候选算好：候选重算时候选框回到开头，别在读页和光标以后才重算
         let n = self.candidates().len();
+        if self.calc_active() && self.input.len() > 1 {
+            let expr = &self.input[1..];
+            if matches!(sym, 0x24 | 0xa5 | 0xffe5) {
+                if let Some(money) = crate::calc::money_text(expr) { self.finish(money); }
+                // 算式不完整或不能转金额时保留输入，不能落入普通标点上屏。
+                return Some(true);
+            }
+            if let Some(value) = crate::calc::evaluate(expr) {
+                if matches!(sym, keysym::RETURN | keysym::KP_ENTER) {
+                    self.finish(crate::calc::format(value));
+                    return Some(true);
+                }
+                if let Some(letter) = char::from_u32(sym).filter(char::is_ascii_alphabetic) {
+                    let index = usize::from(letter.to_ascii_lowercase() as u8 - b'a');
+                    let (start, len) = self.page_range(n);
+                    if index < len { self.choose_now(start + index); }
+                    return Some(true);
+                }
+            }
+        }
         if self.expanded {
             if n == 0 {
                 self.expanded = false;
@@ -799,7 +833,7 @@ impl<'e> Session<'e> {
         } else {
             (keysym::UP, keysym::DOWN, keysym::LEFT, keysym::RIGHT)
         };
-        if horizontal && sym == keysym::DOWN && n > 1 {
+        if horizontal && sym == keysym::DOWN && n > 1 && !self.calc_active() {
             // 横排时下键展开候选面板（照微信输入法），光标停在当前选中的词上
             self.expanded = true;
             self.grid_cursor = self.cursor;
@@ -1084,6 +1118,7 @@ impl<'e> Session<'e> {
         if chosen.kind != CandidateKind::Word || chars.len() < 2 {
             return false;
         }
+        self.trace_character_selection(index, &chosen, last);
         let pick = if last { chars[chars.len() - 1] } else { chars[0] };
         // 开着繁体时也取词库写法里的同一个字（字数对不上就不知道是哪个，留空）
         let plain: Vec<char> = self.plain_of(&chosen.text).chars().collect();
@@ -1158,6 +1193,7 @@ impl<'e> Session<'e> {
     /// 清空编辑区。commit_pending：把已选的词和还没选的原始输入上屏（切换输入法时），
     /// 和回车一样也记一次选词。
     pub fn reset(&mut self, commit_pending: bool) -> Frame {
+        self.trace_via("reset");
         self.last_choice = None;
         if commit_pending && self.composing() {
             self.commit_input_now();
@@ -1241,6 +1277,7 @@ impl<'e> Session<'e> {
     }
 
     fn clear(&mut self) {
+        self.trace_abandon();
         self.committed_learning.clear();
         let picks = std::mem::take(&mut self.selection_learning);
         for (start, end) in picks.into_iter().rev().flatten() { self.undo_range(start, end); }
@@ -1530,6 +1567,7 @@ impl<'e> Session<'e> {
     ///
     /// 序号不对时什么也不做（handled = false）。过渡：外壳的鼠标点候选、展开面板点一行用。
     pub fn choose(&mut self, index: usize) -> Frame {
+        self.trace_via("click");
         self.last_choice = None;
         let handled = self.choose_now(index);
         self.frame(handled)
@@ -1537,6 +1575,7 @@ impl<'e> Session<'e> {
 
     /// 选候选框里显示的第 index 个（一页，或展开面板的一屏），见 [`Session::choose`]。
     pub fn select(&mut self, index: usize) -> Frame {
+        self.trace_via("click");
         self.last_choice = None;
         let shown = self.frame(false);
         self.pending = shown.commit;
@@ -1549,6 +1588,7 @@ impl<'e> Session<'e> {
         let Some(chosen) = self.candidates().get(index).cloned() else {
             return false;
         };
+        self.trace_step(Some(index), Some(&chosen));
         let remaining = self.remaining().len();
         match chosen.kind {
             CandidateKind::Emoji => {
@@ -1586,12 +1626,14 @@ impl<'e> Session<'e> {
 
     /// 上屏已选的词 + 还没选的原始输入，原始输入也记一次选词（和回车、`reset(true)` 一样）。
     pub fn commit_input(&mut self) -> Frame {
+        self.trace_via("raw");
         self.last_choice = None;
         self.commit_input_now();
         self.frame(true)
     }
 
     fn commit_input_now(&mut self) {
+        self.trace_step(None, None);
         let tail = self.remaining().to_owned();
         self.commit_with(&tail, "");
     }
@@ -1677,6 +1719,7 @@ impl<'e> Session<'e> {
 
     /// 上屏 text（空的不上屏，frame 取走），清空编辑区。
     fn finish(&mut self, text: String) {
+        self.trace_commit(&text);
         let marks = std::mem::take(&mut self.selection_learning);
         self.clear();
         self.committed_learning = marks.into_iter().flatten().collect();

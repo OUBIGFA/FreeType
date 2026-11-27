@@ -13,7 +13,7 @@
 
 use std::fmt;
 
-/// 音节 ID，对应 SYLLABLES 的下标。
+/// 词库音节 ID 对应 SYLLABLES 的下标；更大的 ID 只用于内存里的模糊输入查询。
 pub type SyllableId = u16;
 
 /// 可出现在音节开头的声母（按长度降序，保证 zh/ch/sh 优先于 z/c/s）。
@@ -218,10 +218,10 @@ fn fuzzy_table() -> &'static [(u32, u32)] {
             }
             (part, 0)
         }
-        let mut table: Vec<(u32, u32)> = SYLLABLES
-            .iter()
+        let mut table: Vec<(u32, u32)> = SYLLABLES.iter().copied()
+            .chain(fuzzy_spellings().iter().map(String::as_str))
             .enumerate()
-            .map(|(i, text)| match split(text) {
+            .map(|(i, text)| match split_parts(text) {
                 Some((initial, final_)) => {
                     // yong 是零声母的 iong（和 jiong、xiong 同韵），不是 y + ong
                     let final_ = if (initial, final_) == ("y", "ong") {
@@ -253,6 +253,33 @@ fn fuzzy_table() -> &'static [(u32, u32)] {
         }
         table
     })
+}
+
+/// 非标准的声韵组合只作查询键，不加入合法音节表，不改变已有词库的 ID 或文件格式。
+/// 保留原组合（如 rin），才能按原声韵限制只换一步，避免先改成 lin 后又模糊成 ning。
+fn fuzzy_spellings() -> &'static [String] {
+    static SPELLINGS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    SPELLINGS.get_or_init(|| {
+        let mut values: Vec<_> = INITIALS.iter().copied().chain(std::iter::once(""))
+            .flat_map(|initial| FINALS.iter().map(move |final_| format!("{initial}{final_}")))
+            .filter(|text| text.len() <= MAX_SYLLABLE_LEN && id_of(text).is_none())
+            .collect();
+        values.sort();
+        values.dedup();
+        values
+    })
+}
+
+/// 只有打开的模糊音组能把该写法对应到合法音节时，才让它参与查询。
+pub(crate) fn fuzzy_spelling(text: &str, groups: u32) -> Option<Syllable> {
+    if groups == 0 || id_of(text).is_some() { return None; }
+    let index = fuzzy_spellings().binary_search_by(|s| s.as_str().cmp(text)).ok()?;
+    let id = (SYLLABLES.len() + index) as SyllableId;
+    if !(0..SYLLABLES.len()).any(|valid| fuzzy_groups_between(id, valid as SyllableId)
+        .is_some_and(|needed| needed != 0 && needed & !groups == 0)) { return None; }
+    let text = fuzzy_spellings()[index].as_str();
+    let (initial, final_) = split_parts(text)?;
+    Some(Syllable { id, text, initial, final_ })
 }
 
 /// 音节在「全部模糊音分组都打开」时的归并键。
@@ -324,6 +351,12 @@ pub fn split(text: &str) -> Option<(&'static str, &'static str)> {
     if !is_valid(text) {
         return None;
     }
+    split_parts(text)
+}
+
+// 模糊输入也需要拆声韵，但不得因此让 split/id_of 接受不合法的词库读音。
+fn split_parts(text: &str) -> Option<(&'static str, &'static str)> {
+    let text = canonical(text);
     if WHOLE_SYLLABLES.contains(&text) {
         let final_ = FINALS[bsearch(FINALS, text)?];
         return Some(("", final_));
@@ -393,7 +426,10 @@ impl SyllableQuery {
     pub fn display(self) -> String {
         match self {
             Self::Full { id, erhua } => {
-                let text = Syllable::from_id(id).map(|s| s.text).unwrap_or("?");
+                let text = Syllable::from_id(id).map(|s| s.text)
+                    .or_else(|| (id as usize).checked_sub(SYLLABLES.len())
+                        .and_then(|index| fuzzy_spellings().get(index)).map(String::as_str))
+                    .unwrap_or("?");
                 if erhua {
                     format!("{text}r")
                 } else {

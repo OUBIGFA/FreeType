@@ -220,6 +220,7 @@ fn snapshot_of(
     }
     let mut config = config.clone();
     config.lexicon.clear();
+    config.candidate_diagnostics = false;
     let mut status_bar_position = None;
     if has(BackupPart::Settings) {
         status_bar_position = optional_text(&store.dir().join("statusbar.txt"))?
@@ -475,6 +476,8 @@ impl PreparedBackup {
     /// 设置页的选项和主词库的位置是两类数据，各看各的。
     pub fn restored_config(&self, store: &Store, current: &Config) -> Config {
         let mut config = if self.has(BackupPart::Settings) { self.data.config.clone() } else { current.clone() };
+        // 导入任何备份都不能替用户开启内容记录；当前已主动开启的状态只留本机。
+        config.candidate_diagnostics = current.candidate_diagnostics;
         config.lexicon = if !self.has(BackupPart::Dictionaries) {
             current.lexicon.clone()
         } else if self.data.main_lexicon.is_some() {
