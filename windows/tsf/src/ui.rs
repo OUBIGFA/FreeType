@@ -59,6 +59,7 @@ const PREDICT_TIMER: usize = 4;
 const PREDICT_MS: u32 = 6000;
 /// 单次空格暂留在输入法编辑区，双击窗口结束后提交为普通空格。
 const PREDICTION_SPACE_TIMER: usize = 5;
+const FOCUS_NOTICE_TIMER: usize = 6;
 /// 按住多久算长按。
 const LONG_PRESS_MS: u32 = 500;
 /// 联想显示时，本线程里点到候选窗以外（见 [`watch_outside_clicks`]）。
@@ -78,6 +79,7 @@ pub enum Click {
     Dismiss,
     /// 双击间隔结束，请文本服务提交仍保留着的单次空格。
     PredictionSpaceTimeout,
+    FocusNotice,
     /// 离开 TSF 状态通知后恢复键盘打开，避免在锁定的 compartment 内写回。
     RestoreKeyboardOpen,
 }
@@ -927,6 +929,11 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             dispatch(Click::PredictionSpaceTimeout);
             LRESULT(0)
         }
+        WM_TIMER if wparam.0 == FOCUS_NOTICE_TIMER => {
+            unsafe { let _ = KillTimer(Some(hwnd), FOCUS_NOTICE_TIMER); }
+            dispatch(Click::FocusNotice);
+            LRESULT(0)
+        }
         WM_TIMER if wparam.0 == HINT_TIMER => {
             unsafe {
                 let _ = KillTimer(Some(hwnd), HINT_TIMER);
@@ -1107,11 +1114,8 @@ impl CandidateWindow {
     }
 
     /// 回到应用的消息循环以后叫一次 [`set_caret_handler`] 的处理函数；它说还要等，就定时再叫。
-    pub fn request_caret_tick(&self) {
-        if !self.alive.get() { return; }
-        unsafe {
-            let _ = PostMessageW(Some(self.hwnd), WM_CARET_TICK, WPARAM(0), LPARAM(0));
-        }
+    pub fn request_caret_tick(&self) -> bool {
+        self.alive.get() && unsafe { PostMessageW(Some(self.hwnd), WM_CARET_TICK, WPARAM(0), LPARAM(0)).is_ok() }
     }
 
     /// 空格编辑区由文本服务拥有，窗口只负责投递一次超时通知。
@@ -1123,6 +1127,10 @@ impl CandidateWindow {
                 None => { let _ = KillTimer(Some(self.hwnd), PREDICTION_SPACE_TIMER); }
             }
         }
+    }
+
+    pub fn schedule_focus_notice(&self) {
+        if self.alive.get() { unsafe { SetTimer(Some(self.hwnd), FOCUS_NOTICE_TIMER, 120, None); } }
     }
 
     /// 按应答更新；`caret` 是编辑区（或光标）在屏幕上的位置。

@@ -159,6 +159,7 @@ pub fn shift_side(vk: u16, scan: u32) -> Side {
 /// FreeType 自己发给应用的键（成对标点后的 ←）带这个记号（`dwExtraInfo`）。按键回调认出来
 /// 就直接放行：不当成用户按的键发给服务进程，也不影响单按 Shift 的判定。
 pub const OWN_INPUT_TAG: usize = 0x4654_5950;
+pub const CARET_END_TAG: usize = OWN_INPUT_TAG + 1;
 
 /// 成对标点上屏以后，等着把光标挪到两半中间的这一次。
 ///
@@ -167,7 +168,7 @@ pub const OWN_INPUT_TAG: usize = 0x4654_5950;
 /// - （、《、“ 是按着 Shift 打的，Shift 按着时应用把 ← 当成 Shift+←（选中右半边），
 ///   Ctrl+← 是跳一个词、Win+← 是把窗口贴到左边。所以等用户松开这些键再发。
 ///
-/// 等的时候焦点换了、用户又按了别的键、或者等得太久，这一次就作废，光标留在原处。
+/// 换输入框、导航或等待超时会取消本次移动；普通输入等待宿主收到左移键再写文档。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CaretMove {
     steps: usize,

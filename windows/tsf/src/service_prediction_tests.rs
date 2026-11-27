@@ -56,6 +56,8 @@ struct Store {
     /// The app window that CUAS reports for its emulated document.
     window: Cell<HWND>,
     fail_window: Cell<bool>,
+    extent: Cell<Option<RECT>>,
+    clipped: Cell<bool>,
 }
 
 impl Store {
@@ -186,7 +188,7 @@ impl ITextStoreACP_Impl for Store_Impl {
     fn GetActiveView(&self) -> Result<u32> { Ok(0) }
     fn GetACPFromPoint(&self, _: u32, _: *const POINT, _: u32) -> Result<i32> { unused() }
     fn GetTextExt(&self, _: u32, _: i32, _: i32, at: *mut RECT, clipped: *mut BOOL) -> Result<()> {
-        unsafe { *at = RECT { left: 100, top: 100, right: 102, bottom: 120 }; *clipped = false.into(); }
+        unsafe { *at = self.extent.get().unwrap_or(RECT { left: 100, top: 100, right: 102, bottom: 120 }); *clipped = self.clipped.get().into(); }
         Ok(())
     }
     fn GetScreenExt(&self, _: u32) -> Result<RECT> { unused() }
@@ -247,6 +249,7 @@ fn in_editor(test: impl FnOnce(&Editor, Rc<RefCell<State>>, ITfKeyEventSink)) {
     unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok().unwrap(); }
     let _apartment = Apartment;
     let editor = unsafe { Editor::new() };
+    let _keyboard = TestKeyboard::with_state([0; 256]);
     let instance = HINSTANCE(unsafe { GetModuleHandleW(None).unwrap() }.0);
     let service = TextService::new(instance).into_object();
     let state = service.state.clone();
@@ -376,14 +379,18 @@ pub(super) fn use_test_host(state: &Rc<RefCell<State>>) {
 struct TestKeyboard([u8; 256]);
 
 impl TestKeyboard {
-    fn ctrl_space() -> Self {
+    fn with_state(pressed: [u8; 256]) -> Self {
         let mut previous = [0; 256];
         unsafe { GetKeyboardState(&mut previous).unwrap(); }
+        unsafe { windows::Win32::UI::Input::KeyboardAndMouse::SetKeyboardState(&pressed).unwrap(); }
+        Self(previous)
+    }
+
+    fn ctrl_space() -> Self {
         let mut pressed = [0; 256];
         pressed[0x11] = 0x80;
         pressed[0x20] = 0x80;
-        unsafe { windows::Win32::UI::Input::KeyboardAndMouse::SetKeyboardState(&pressed).unwrap(); }
-        Self(previous)
+        Self::with_state(pressed)
     }
 }
 
@@ -984,6 +991,130 @@ fn transitory_hosts_place_their_own_caret_after_a_commit() {
                 "only transitory hosts keep their own caret after a plain commit");
         });
     }
+}
+
+#[test]
+fn paired_quote_survives_same_field_refocus_and_the_next_letter_preview() {
+    in_editor(|editor, state, sink| unsafe {
+        use_test_host(&state);
+        editor.store.transitory.set(true);
+        editor.store.app_insert("前文后文");
+        editor.store.move_caret(2);
+        apply(&state, Some(&editor.context), Frame { handled: true, commit: Some("“”".into()),
+            caret_back: 1, pair_enabled: true, ..Frame::default() }, true);
+        editor.store.move_caret(4);
+        on_focus(&state, Some(&editor.document));
+        assert!(state.borrow().caret_move.is_some(), "the same field did not lose focus");
+        assert!(sink.OnTestKeyDown(&editor.context, WPARAM(0x43), LPARAM(0)).unwrap().as_bool());
+        let pending = state.borrow_mut().caret_move.take().expect("a preview must not cancel the posted arrow");
+        assert_eq!(pending.step(now_ms(), true, false), keys::CaretStep::Send(1));
+        editor.store.move_caret(editor.store.selection.get().acpStart - 1);
+        assert!(sink.OnKeyDown(&editor.context, WPARAM(0x43), LPARAM(0)).unwrap().as_bool());
+        for vk in [0x45, 0x53, 0x48, 0x49, 0x20] {
+            assert!(sink.OnTestKeyDown(&editor.context, WPARAM(vk), LPARAM(0)).unwrap().as_bool());
+            assert!(sink.OnKeyDown(&editor.context, WPARAM(vk), LPARAM(0)).unwrap().as_bool());
+        }
+        assert_eq!(String::from_utf16_lossy(&editor.store.text.borrow()), "前文“测试”后文");
+    });
+}
+
+#[test]
+fn fast_typing_cannot_write_preedit_or_commit_ahead_of_the_pair_arrow() {
+    in_editor(|editor, state, sink| unsafe {
+        use_test_host(&state);
+        editor.store.transitory.set(true);
+        editor.store.app_insert("前文后文");
+        editor.store.move_caret(2);
+        apply(&state, Some(&editor.context), Frame { commit: Some("“”".into()),
+            caret_back: 1, pair_enabled: true, ..Frame::default() }, true);
+        editor.store.move_caret(4);
+        for vk in [0x43, 0x45, 0x53, 0x48, 0x49, 0x20] {
+            assert!(sink.OnTestKeyDown(&editor.context, WPARAM(vk), LPARAM(0)).unwrap().as_bool());
+            assert!(sink.OnKeyDown(&editor.context, WPARAM(vk), LPARAM(0)).unwrap().as_bool());
+            assert_eq!(String::from_utf16_lossy(&editor.store.text.borrow()), "前文“”后文", "the renderer has not received Left yet");
+            if vk == 0x43 { assert!(state.borrow().window.as_ref().unwrap().visible(), "candidates must not wait for Left"); }
+        }
+        editor.store.move_caret(3);
+        assert!(pair::arrived(&state), "a renderer that omits KeyUp can acknowledge through its actual caret");
+        state.borrow_mut().pair_delivery.sent = true;
+        let previous = windows::Win32::UI::WindowsAndMessaging::SetMessageExtraInfo(LPARAM(keys::CARET_END_TAG as isize));
+        let released = sink.OnTestKeyUp(&editor.context, WPARAM(0x25), LPARAM(0));
+        windows::Win32::UI::WindowsAndMessaging::SetMessageExtraInfo(previous);
+        assert!(!released.unwrap().as_bool());
+        assert_eq!(String::from_utf16_lossy(&editor.store.text.borrow()), "前文“测试”后文");
+    });
+}
+
+#[test]
+fn pending_pair_movement_never_follows_navigation_or_a_lost_thread() {
+    in_editor(|editor, state, sink| unsafe {
+        for leave in [false, true] {
+            apply(&state, Some(&editor.context), Frame { handled: true, commit: Some("（）".into()),
+                caret_back: 1, pair_enabled: true, ..Frame::default() }, true);
+            assert!(state.borrow().caret_move.is_some());
+            if leave { sink.OnSetFocus(false).unwrap(); }
+            else { note_key_down(&state, WPARAM(0x23), LPARAM(0)); }
+            assert!(state.borrow().caret_move.is_none(), "no arrow may land at a different caret");
+        }
+    });
+}
+
+#[test]
+fn refocusing_uses_the_current_insertion_point_and_never_the_old_hint_position() {
+    in_editor(|editor, state, _| unsafe {
+        use_test_host(&state);
+        let mut config = state.borrow_mut().client.call(&Request::GetConfig).unwrap().config.unwrap();
+        config.hint_on_focus = true;
+        config.hint_position = "top-left".into();
+        assert!(state.borrow_mut().client.call(&Request::SetConfig { config }).unwrap().ok);
+        on_focus(&state, None);
+        on_focus(&state, Some(&editor.document));
+        let actual = RECT { left: 415, top: 320, right: 416, bottom: 343 };
+        editor.store.extent.set(Some(actual));
+        focus_notice::present(&state, Some(&editor.context));
+        assert_eq!(state.borrow().caret, Some(actual), "the caret moved after focus arrived");
+        let hwnd = state.borrow().window.as_ref().unwrap().hwnd();
+        let mut rect = RECT::default();
+        windows::Win32::UI::WindowsAndMessaging::GetWindowRect(hwnd, &mut rect).unwrap();
+        assert!(rect.right <= actual.left && rect.bottom <= actual.top, "configured top-left: {rect:?}");
+        on_focus(&state, None);
+        on_focus(&state, Some(&editor.document));
+        editor.store.clipped.set(true);
+        editor.store.extent.set(Some(RECT::default()));
+        focus_notice::present(&state, Some(&editor.context));
+        assert!(!state.borrow().window.as_ref().unwrap().visible(), "no visible caret: do not guess a position");
+    });
+}
+
+#[test]
+fn focus_hint_is_not_shown_immediately_and_recognizes_thread_focus_return() {
+    in_editor(|editor, state, sink| unsafe {
+        use_test_host(&state);
+        let mut config = state.borrow_mut().client.call(&Request::GetConfig).unwrap().config.unwrap();
+        config.hint_on_focus = true;
+        assert!(state.borrow_mut().client.call(&Request::SetConfig { config }).unwrap().ok);
+        on_focus(&state, Some(&editor.document));
+        assert!(!state.borrow().window.as_ref().unwrap().visible(), "wait for the switch to settle");
+        let thread: ITfThreadFocusSink = sink.cast().expect("some window switches report thread focus only");
+        let source: ITfSource = editor.manager.cast().unwrap();
+        let cookie = source.AdviseSink(&ITfThreadFocusSink::IID, &thread).unwrap();
+        thread.OnKillThreadFocus().unwrap();
+        thread.OnSetThreadFocus().unwrap();
+        assert!(!state.borrow().window.as_ref().unwrap().visible());
+        focus_notice::present(&state, Some(&editor.context));
+        assert!(state.borrow().window.as_ref().unwrap().visible(), "a thread-only return must show the enabled hint");
+        with_window(&state, |window| window.hide());
+        on_focus(&state, Some(&editor.document));
+        focus_notice::present(&state, Some(&editor.context));
+        assert!(!state.borrow().window.as_ref().unwrap().visible(), "the same field must not announce on every edit");
+        thread.OnKillThreadFocus().unwrap();
+        thread.OnSetThreadFocus().unwrap();
+        assert!(sink.OnTestKeyDown(&editor.context, WPARAM(0x43), LPARAM(0)).unwrap().as_bool());
+        assert!(sink.OnKeyDown(&editor.context, WPARAM(0x43), LPARAM(0)).unwrap().as_bool());
+        focus_notice::present(&state, Some(&editor.context));
+        assert!(state.borrow().composition.is_some() && state.borrow().window.as_ref().unwrap().visible());
+        source.UnadviseSink(cookie).unwrap();
+    });
 }
 
 #[test]
