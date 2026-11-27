@@ -82,10 +82,7 @@ func (s *settings) backupSection(c *ui.Context) {
 			}
 		})
 	})
-	if ui.AlertDialog(c, &s.confirmFactoryReset, "恢复出厂设置",
-		"将所有输入法设置和同步设置恢复为默认值；清除本机保存的同步账号、密码和计划\n保留词库、快捷短语、常用语、学习记录和输入统计；云端备份不变", "取消", "确认恢复") == 1 {
-		s.resetSettings()
-	}
+	s.factoryResetDialog(c)
 	s.exportDialog(c)
 	s.unlockDialog(c)
 	switch ui.AlertDialog(c, &s.confirmRestore, "导入全部设置", s.restoreSummary+"\n用备份替换对应数据；未备份的数据保持不变；请先导出当前数据", "取消", "导入并替换") {
@@ -96,6 +93,51 @@ func (s *settings) backupSection(c *ui.Context) {
 		s.restorePath, s.restoreSummary = "", ""
 		s.importSettingsBackup(path)
 	}
+}
+
+// factoryResetDialog 分开列出会恢复默认和保持不变的内容，用户确认后才恢复。
+func (s *settings) factoryResetDialog(c *ui.Context) {
+	ui.Modal(c, &s.confirmFactoryReset, func() {
+		ui.Column(c).Gap(16).Width(440).MaxWidthPercent(100).Children(func() {
+			ui.Column(c).Gap(6).Children(func() {
+				ui.Text(c, "恢复出厂设置").FontSize(textSize(c, 17)).FontWeight(600)
+				ui.Text(c, "恢复后无法撤销；如需留存当前设置，请先导出全部设置").Wrap().TextColor(colors(c).muted)
+			})
+			factoryResetScope(c, "恢复为默认", []string{
+				"输入、候选窗、按键和外观等全部选项",
+				"自定义主词库切回内置词库；原文件保留",
+				"同步设置；清除本机保存的同步账号、密码和计划",
+			})
+			factoryResetScope(c, "保持不变", []string{
+				"词库、快捷短语、常用语、学习记录和输入统计",
+				"云端备份",
+			})
+			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
+				if ui.Button(c, "取消").Clicked() {
+					s.confirmFactoryReset = false
+				}
+				if ui.PrimaryButton(c, "确认恢复").Clicked() {
+					s.confirmFactoryReset = false
+					s.resetSettings()
+				}
+			})
+		})
+	})
+}
+
+// factoryResetScope 是确认框里的一组条目：小标题加圆点列表，放在浅色底块里。
+func factoryResetScope(c *ui.Context, title string, items []string) {
+	p := colors(c)
+	ui.Column(c).Key("reset-"+title).Gap(8).Padding(12, 14).Radius(controlRadius+2).
+		Background(p.subtle).Border(1, p.subBorder).Children(func() {
+		ui.Text(c, title).FontSize(textSize(c, 13)).FontWeight(600)
+		for _, item := range items {
+			ui.Row(c).Key(item).Gap(8).AlignItems(ui.Start).Children(func() {
+				ui.Row(c).Width(4).Height(4).Radius(2).Background(p.muted).Margin(textSize(c, 8), 0, 0, 0)
+				ui.Text(c, item).FontSize(textSize(c, 13)).TextColor(p.muted).Wrap().Shrink(1)
+			})
+		}
+	})
 }
 
 // exportDialog 让用户勾选要导出的数据（并可选设置加密密码），再选保存位置。
