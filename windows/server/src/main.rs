@@ -24,7 +24,7 @@ mod app {
 
     use freetype_protocol::{pipe_name, Command, Request};
     use freetype_server::desktop::{self, BarEvent};
-    use freetype_server::host::{load_engine, Host};
+    use freetype_server::host::{load_engine, Host, LoadedEngine};
     use freetype_server::pipe::{self, Message};
     use freetype_server::store::Store;
     use freetype_server::{data_dir, instance_suffix, local_dir, log, resource_dir, setup};
@@ -35,7 +35,7 @@ mod app {
     enum Event {
         Pipe(Message),
         /// 第几次载入（换了词库会再载入；旧的晚到了不要）、结果。
-        Loaded(u64, Result<wowtype_core::Engine, String>),
+        Loaded(u64, Result<LoadedEngine, String>),
         Bar(BarEvent),
         /// 后台任务线程算好、需要在引擎线程应用的结果（同步合并）。
         Apply(freetype_server::tasks::Apply),
@@ -46,11 +46,11 @@ mod app {
         let resources = resource_dir();
         let store_dir = data_dir();
         std::thread::spawn(move || {
+            freetype_server::background_thread();
             let started = std::time::Instant::now();
             let result = load_engine(&resources, &store_dir, &lexicon);
-            let path = freetype_server::host::lexicon_path(&resources, &lexicon);
             match &result {
-                Ok(_) => log(&format!("词库载入完成（{}），用时 {} ms", path.display(), started.elapsed().as_millis())),
+                Ok(loaded) => log(&format!("词库载入完成（{}），用时 {} ms", loaded.path.display(), started.elapsed().as_millis())),
                 Err(e) => log(e),
             }
             let _ = events.send(Event::Loaded(generation, result));
@@ -61,7 +61,6 @@ mod app {
     fn reload_if_changed(host: &mut Host, generation: &mut u64, events: &mpsc::Sender<Event>) {
         if let Some(lexicon) = host.take_lexicon_change() {
             *generation += 1;
-            host.set_lexicon_in_use(freetype_server::host::lexicon_path(&resource_dir(), &lexicon).display().to_string());
             spawn_loader(events.clone(), *generation, lexicon);
         }
     }
@@ -259,7 +258,6 @@ mod app {
         });
         let mut generation = 0u64;
         let lexicon = host.config().lexicon.clone();
-        host.set_lexicon_in_use(freetype_server::host::lexicon_path(&resource_dir(), &lexicon).display().to_string());
         spawn_loader(events.clone(), generation, lexicon);
         // 状态栏和剪贴板（测试用的实例不要桌面上的东西）
         let clipboard_on = Arc::new(AtomicBool::new(host.config().clipboard_history));
@@ -309,7 +307,7 @@ mod app {
                 }
                 Ok(Event::Loaded(gen, result)) => {
                     if gen == generation {
-                        host.install_engine(result);
+                        host.finish_loading(result);
                     }
                 }
                 Ok(Event::Pipe(Message::Connected(_))) => {}

@@ -2218,13 +2218,20 @@ fn lexicon_change_is_handed_to_the_loader() {
     configure(&mut host, |c| c.lexicon = path.clone());
     assert_eq!(host.take_lexicon_change().as_deref(), Some(path.as_str()));
     assert_eq!(host.take_lexicon_change(), None, "只交一次");
-    // 文件在就用它，不在用安装目录里的默认词库
-    let resources = std::path::Path::new(r"C:\FreeType\data");
-    assert_eq!(super::lexicon_path(resources, &path), file);
-    assert_eq!(super::lexicon_path(resources, r"C:\没有这个\lexicon.tsv"), resources.join("lexicon.tsv"));
-    assert_eq!(super::lexicon_path(resources, ""), resources.join("lexicon.tsv"));
-    let engine = super::load_engine(resources, &host.data_dir(), &path).unwrap();
-    assert!(engine.input("ceshi").iter().any(|c| c.text == "测试"));
+    let resources = host.data_dir().join("resources");
+    std::fs::create_dir_all(&resources).unwrap();
+    let default = resources.join("lexicon.tsv");
+    std::fs::write(&default, "ni hao\t你好\t100\n").unwrap();
+    let loaded = super::load_engine(&resources, &host.data_dir(), &path).unwrap();
+    assert_eq!(loaded.path, file);
+    assert!(loaded.engine.input("ceshi").iter().any(|candidate| candidate.text == "测试"));
+    for configured in [resources.join("missing.tsv").display().to_string(), String::new()] {
+        let loaded = super::load_engine(&resources, &host.data_dir(), &configured).unwrap();
+        assert_eq!(loaded.path, default);
+        assert!(!loaded.invalid_custom_format);
+        assert_eq!(loaded.warning.is_none(), configured.is_empty());
+        assert!(loaded.engine.input("nihao").iter().any(|candidate| candidate.text == "你好"));
+    }
     let _ = std::fs::remove_file(file);
     cleanup(&host);
 }
@@ -2266,7 +2273,7 @@ fn import_bare_words_and_add_user_word_use_lexicon_readings() {
     let mut host = host("readings");
     let lexicon = host.data_dir().with_extension("readings.tsv");
     std::fs::write(&lexicon, "shi\t示\t10\nli\t例\t10\nci\t词\t10\nyun\t韵\t10\njiu\t酒\t10\n").unwrap();
-    host.set_lexicon_in_use(lexicon.display().to_string());
+    host.lexicon_in_use = lexicon.display().to_string();
     let file = host.data_dir().with_extension("bare.txt");
     std::fs::write(&file, "示例词\n'yun'jiu 韵酒\n").unwrap();
     let response = host.handle(

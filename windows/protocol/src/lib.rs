@@ -346,8 +346,7 @@ pub struct Config {
     pub pin_badge: String,
     /// 也出 CJK 扩展 B 区以后的生僻单字（常见字体显示不了，默认不出）。
     pub rare_chars: bool,
-    /// 主词库文件（`拼音<Tab>词<Tab>词频`）的路径；空串用安装包里的雾凇词库。
-    /// 文件不在时也用默认词库。
+    /// 自定义主词库（`拼音<Tab>词<Tab>词频`）的路径；为空或无法载入时使用安装包的默认词库。
     pub lexicon: String,
 
     // —— 按键 ——
@@ -1132,6 +1131,10 @@ pub struct Status {
     /// 载入失败的原因。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lexicon_warning: Option<String>,
+    #[serde(default)]
+    pub lexicon_loading: bool,
     /// 距上次实际按键或选词的整秒数；启动后还没打过字时为空。
     /// 托盘的自动同步据此避开打字时段。只发给可管理的客户端，受限应用拿不到输入节奏。
     #[serde(default, skip_serializing_if = "Option::is_none")]

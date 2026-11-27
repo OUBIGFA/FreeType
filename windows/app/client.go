@@ -134,7 +134,7 @@ func ensureServer(b Backend, resources string, timeout time.Duration) error {
 	for {
 		if err == nil && response.Status != nil {
 			if response.Status.Error != "" {
-				return fmt.Errorf("词库载入失败：%s", response.Status.Error)
+				return errors.New(response.Status.Error)
 			}
 			if response.Status.Ready {
 				return nil

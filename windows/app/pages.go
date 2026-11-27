@@ -166,7 +166,7 @@ func (s *settings) statusCard(c *ui.Context) {
 			case s.statusErr != "":
 				ui.Text(c, "无法连接输入法服务："+s.statusErr).TextColor(t.Danger).Wrap()
 			case s.status.Error != "":
-				ui.Text(c, "词库载入失败："+s.status.Error).TextColor(t.Danger).Wrap()
+				ui.Text(c, s.status.Error).TextColor(t.Danger).Wrap()
 			case !s.status.Ready:
 				ui.Text(c, "输入法服务正在载入词库").TextColor(p.muted)
 			default:
@@ -174,6 +174,9 @@ func (s *settings) statusCard(c *ui.Context) {
 					ui.Icon(c, statusCheck).FontSize(textSize(c, 15)).TextColor(t.Success)
 					ui.Text(c, "正在运行 · 版本 "+s.version).FontSize(textSize(c, 13)).TextColor(p.muted).Wrap()
 				})
+				if s.status.LexiconWarning != "" {
+					ui.Text(c, s.status.LexiconWarning).Wrap()
+				}
 			}
 		})
 	})
@@ -1029,7 +1032,10 @@ func (s *settings) dictsPage(c *ui.Context) {
 			}
 		})
 	})
-	hint(c, "默认词库包含白霜、万象补充和项目热词；自定义主词库使用 TSV，每行依次填写拼音、词语和词频，用制表符分隔；选择后在后台载入，文件不存在时使用默认词库；其他格式请使用下方的导入词库")
+	if s.status.LexiconWarning != "" {
+		hint(c, s.status.LexiconWarning)
+	}
+	hint(c, "默认词库包含白霜、万象补充和项目热词；自定义主词库每行填写拼音、词语和词频，用制表符分隔；文件无法载入时使用默认词库；其他格式请使用下方的导入词库")
 	section(c, "导入词库", func() {
 		s.settingRow(c, "dicts/导入词库", func() {
 			if ui.PrimaryButton(c, "导入词库").Label("导入词库文件").Clicked() {

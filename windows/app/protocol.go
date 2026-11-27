@@ -266,6 +266,9 @@ type Status struct {
 	Lexicon      string `json:"lexicon"`
 	NeuralModel  string `json:"neural_model"`
 	Error        string `json:"error,omitempty"`
+
+	LexiconWarning string `json:"lexicon_warning,omitempty"`
+	LexiconLoading bool   `json:"lexicon_loading,omitempty"`
 	// InputIdleSeconds 是距上次实际输入的秒数；没打过字或受限客户端为 nil。
 	InputIdleSeconds *int64 `json:"input_idle_seconds,omitempty"`
 }

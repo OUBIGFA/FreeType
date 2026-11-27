@@ -380,14 +380,30 @@ func (s *settings) importDictionary() {
 // chooseLexicon 换主词库文件（空串恢复默认）；服务进程在后台重新载入。
 func (s *settings) chooseLexicon(path string) {
 	s.config.Lexicon = path
-	s.saveConfig()
 	s.notice = "正在载入新的词库，几秒后生效"
+	s.saveConfig()
+	saved := s.configSaveTail
 	s.background(func() func() {
-		status, err := s.backend.Call(op("status"))
-		return func() {
-			if err == nil && status.Status != nil {
-				s.status = *status.Status
+		<-saved
+		deadline := time.Now().Add(time.Minute)
+		for {
+			reply, err := s.backend.Call(op("status"))
+			if err != nil || reply.Status == nil {
+				return nil
 			}
+			status := *reply.Status
+			if !status.LexiconLoading || !time.Now().Before(deadline) {
+				return func() {
+					if s.config.Lexicon != path {
+						return
+					}
+					s.status = status
+					if status.LexiconWarning != "" {
+						s.refresh()
+					}
+				}
+			}
+			time.Sleep(100 * time.Millisecond)
 		}
 	})
 }

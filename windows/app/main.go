@@ -116,7 +116,10 @@ func (a *app) openSettings() {
 		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
 			Parent:  a.win,
 			Title:   title,
-			Filters: []mygo.FileFilter{{Name: "词库文件", Extensions: []string{"tsv", "txt"}}},
+			Filters: []mygo.FileFilter{
+				{Name: "TSV 词库", Extensions: []string{"tsv"}},
+				{Name: "制表符分隔的文本词库", Extensions: []string{"txt"}},
+			},
 		})
 		if err != nil || len(paths) == 0 {
 			return ""

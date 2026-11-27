@@ -19,6 +19,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use freetype_protocol::{
     keysym, modifier, AppWindow, BackupPart, BrandIcon, CandidateAction, Command, Config, DefaultMode, Frame, ImportReport, Key, Mode, Request, Response,
@@ -90,6 +91,8 @@ pub struct Host {
     /// 会话借用它；见模块说明里的规则。
     engine: Option<Box<Engine>>,
     engine_error: Option<String>,
+    lexicon_warning: Option<String>,
+    lexicon_loading: bool,
     store: Store,
     config: Config,
     brand_icon_revision: u64,
@@ -152,17 +155,30 @@ fn configure_engine(engine: &mut Engine, config: &Config) {
     engine.set_rare_ext_chars(config.rare_chars);
 }
 
-/// 主词库文件：设置里指定的（文件在的话），否则安装目录 `data` 里的。
-pub fn lexicon_path(resources: &Path, configured: &str) -> PathBuf {
-    let configured = Path::new(configured);
-    if !configured.as_os_str().is_empty() && configured.is_file() {
-        return configured.to_path_buf();
+pub struct LoadedEngine {
+    pub engine: Engine,
+    pub path: PathBuf,
+    warning: Option<String>,
+    invalid_custom_format: bool,
+}
+
+fn default_lexicon(resources: &Path) -> Result<(Arc<dyn wowtype_core::Lexicon>, PathBuf), String> {
+    let index = resources.join("lexicon.ftd");
+    if index.try_exists().map_err(|error| format!("无法检查默认词库索引（{}）：{error}", index.display()))? {
+        let record = crate::local_dir().join("cache").join("lexicon.verified");
+        let mapped = wowtype_core::lexicon::MappedLexicon::open_deployed(&index, &record)
+            .map_err(|error| format!("默认词库索引载入失败（{}）：{error:#}", index.display()))?;
+        Ok((Arc::new(mapped), index))
+    } else {
+        let path = resources.join("lexicon.tsv");
+        let lexicon = wowtype_core::MemoryLexicon::from_tsv_path_cached(&path)
+            .map_err(|error| format!("默认词库载入失败（{}）：{error:#}", path.display()))?;
+        Ok((Arc::new(lexicon), path))
     }
-    resources.join("lexicon.tsv")
 }
 
 /// 载入引擎（慢：几秒），在后台线程里调。`lexicon` 是设置里的词库路径（空串用默认的）。
-pub fn load_engine(resources: &Path, store_dir: &Path, lexicon: &str) -> Result<Engine, String> {
+pub fn load_engine(resources: &Path, store_dir: &Path, configured: &str) -> Result<LoadedEngine, String> {
     // 开机时各项读盘互相争抢，分段用时写进日志，便于判断哪一步慢。
     let mut stages = Vec::new();
     let mut started = std::time::Instant::now();
@@ -170,19 +186,25 @@ pub fn load_engine(resources: &Path, store_dir: &Path, lexicon: &str) -> Result<
         stages.push(format!("{name} {} ms", started.elapsed().as_millis()));
         started = std::time::Instant::now();
     };
-    let lexicon_path = lexicon_path(resources, lexicon);
-    let index = resources.join("lexicon.ftd");
-    let lexicon: std::sync::Arc<dyn wowtype_core::Lexicon> =
-        if lexicon_path == resources.join("lexicon.tsv") && index.exists() {
-            // 完整校验只在安装、更新或文件变化后做一次，结果按文件身份记在本机缓存目录。
-            let record = crate::local_dir().join("cache").join("lexicon.verified");
-            std::sync::Arc::new(wowtype_core::lexicon::MappedLexicon::open_deployed(&index, &record)
-                .map_err(|e| format!("默认词库索引载入失败（{}）：{e:#}", index.display()))?)
-        } else {
-            // Existing TSV-only installations and user-selected dictionaries remain readable.
-            std::sync::Arc::new(wowtype_core::MemoryLexicon::from_tsv_path_cached(&lexicon_path)
-                .map_err(|e| format!("词库载入失败（{}）：{e:#}", lexicon_path.display()))?)
-        };
+    let custom = Path::new(configured);
+    let mut warning = None;
+    let mut invalid_custom_format = false;
+    let (lexicon, path): (Arc<dyn wowtype_core::Lexicon>, PathBuf) = if configured.is_empty()
+        || custom == resources.join("lexicon.tsv") || custom == resources.join("lexicon.ftd") {
+        default_lexicon(resources)?
+    } else {
+        match wowtype_core::MemoryLexicon::from_tsv_path_cached(custom) {
+            Ok(lexicon) => (Arc::new(lexicon), custom.to_owned()),
+            Err(error) => {
+                invalid_custom_format = error.downcast_ref::<std::io::Error>()
+                    .is_none_or(|cause| cause.kind() == std::io::ErrorKind::InvalidData);
+                let reason = format!("自定义词库载入失败（{configured}）：{error:#}");
+                let default = default_lexicon(resources).map_err(|error| format!("{reason}；{error}"))?;
+                warning = Some(format!("已使用默认词库；{reason}"));
+                default
+            }
+        }
+    };
     stage("词库");
     let lm: std::sync::Arc<dyn wowtype_core::LanguageModel> =
         match wowtype_core::lm::load_lm(resources.join("words.lm")) {
@@ -225,7 +247,7 @@ pub fn load_engine(resources: &Path, store_dir: &Path, lexicon: &str) -> Result<
     }
     stage("整句模型");
     crate::log(&format!("载入分段：{}", stages.join("，")));
-    Ok(engine)
+    Ok(LoadedEngine { engine, path, warning, invalid_custom_format })
 }
 
 /// 后台任务线程：给导出快照附上同步记录，写出同步文件。
@@ -296,6 +318,8 @@ impl Host {
             clients: HashMap::new(),
             engine: None,
             engine_error: None,
+            lexicon_warning: None,
+            lexicon_loading: true,
             mode: config.default_mode.resolve(store.load_mode()),
             brand_icon_revision: config.brand_icon_revision(),
             config,
@@ -368,18 +392,37 @@ impl Host {
     /// 先把学到的词存盘，新引擎会从文件读回来。
     pub fn take_lexicon_change(&mut self) -> Option<String> {
         let change = self.lexicon_change.take()?;
+        self.lexicon_loading = true;
+        self.lexicon_warning = None;
+        self.engine_error = None;
         self.dirty = true;
         if let Err(error) = self.save_learning() { crate::log(&error); }
         Some(change)
     }
 
-    /// 记下正在用的词库文件（状态里显示）。
-    pub fn set_lexicon_in_use(&mut self, path: String) {
-        self.lexicon_in_use = path;
+    pub fn finish_loading(&mut self, result: Result<LoadedEngine, String>) {
+        let loaded = match result {
+            Ok(loaded) => loaded,
+            Err(error) => return self.install_engine(Err(error)),
+        };
+        self.install_engine(Ok(loaded.engine));
+        if self.engine_error.is_some() { return; }
+        self.lexicon_in_use = loaded.path.display().to_string();
+        self.lexicon_warning = loaded.warning;
+        if loaded.invalid_custom_format {
+            self.config.lexicon.clear();
+            if let Err(error) = self.store.save_config(&self.config) {
+                if let Some(warning) = &mut self.lexicon_warning {
+                    warning.push_str(&format!("；无法保存默认词库设置：{error}"));
+                }
+            }
+        }
+        if let Some(warning) = &self.lexicon_warning { crate::log(warning); }
     }
 
     /// 后台载入好了：装上引擎，套用设置和用户数据。
     pub fn install_engine(&mut self, result: Result<Engine, String>) {
+        self.lexicon_loading = false;
         let result = result.and_then(|engine| {
             if let Some(current) = self.engine.as_deref() {
                 // 载入期间旧引擎仍接受输入，磁盘快照可能已过期。整体接续最新学习状态，
@@ -757,6 +800,8 @@ impl Host {
             neural_model: self.engine.as_ref().and_then(|engine| engine.model_path()).map_or_else(String::new, |path|
                 if path == self.store.dir().join("wetype/nlrgpt2_nnlm.bin") { "external".into() } else { "bundled".into() }),
             error: self.engine_error.clone(),
+            lexicon_warning: self.lexicon_warning.clone(),
+            lexicon_loading: self.lexicon_loading,
             input_idle_seconds: self.last_input.map(|at| at.elapsed().as_secs()),
         }
     }
@@ -1182,7 +1227,9 @@ impl Host {
 
     /// 给只有词语的词条注音：读正在用的词库文件，只收要用到的词和字。
     fn reading(&self, words: &[String]) -> Box<dyn dictfmt::Reading> {
-        let text = std::fs::read_to_string(&self.lexicon_in_use).unwrap_or_default();
+        let path = Path::new(&self.lexicon_in_use);
+        let source = if path == crate::resource_dir().join("lexicon.ftd") { path.with_extension("tsv") } else { path.into() };
+        let text = std::fs::read_to_string(source).unwrap_or_default();
         Box::new(LexiconReading::from_tsv(&text, words))
     }
 

@@ -1314,6 +1314,20 @@ func TestMainLexiconCanBeChangedAndReset(t *testing.T) {
 	}
 }
 
+func TestLexiconRecoveryIsVisibleWithoutReportingStartupFailure(t *testing.T) {
+	s, _ := newTestSettings()
+	const warning = "已使用默认词库；自定义词库第 3 行格式不正确"
+	if err := json.Unmarshal([]byte(`{"ready":true,"lexicon_warning":"`+warning+`"}`), &s.status); err != nil {
+		t.Fatal(err)
+	}
+	for _, page := range []string{"常规", "词库"} {
+		view := open(t, s, page)
+		if !view.HasText(warning) || view.HasText("词库载入失败："+warning) {
+			t.Fatalf("%s 没有区分已恢复和载入失败：%v", page, view.Texts())
+		}
+	}
+}
+
 func TestTraySwitchDefaultsOnAndTellsTheTrayApp(t *testing.T) {
 	s, b := newTestSettings()
 	var shown []bool
