@@ -1,6 +1,9 @@
 //! 成对标点的文档锚点。只有当前选区确实位于这次插入的右标点前才移动或删除。
-use super::{selection_range, set_selection, same_object, ITfContext, ITfRange, Result, TF_ANCHOR_END, TF_ANCHOR_START};
-use freetype_protocol::{keysym, modifier, Key, PairEdit};
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+
+use super::{selection_range, set_selection, same_object, ITfContext, ITfRange, Result, State, TF_ANCHOR_END, TF_ANCHOR_START};
+use freetype_protocol::{keysym, modifier, Frame, Key, PairEdit};
 use windows::Win32::UI::TextServices::{TF_GRAVITY_BACKWARD, TF_GRAVITY_FORWARD};
 
 #[derive(Clone)]
@@ -10,6 +13,7 @@ pub(super) struct Pair {
     right: ITfRange,
     opening: char,
     closing: char,
+    terminal: bool,
 }
 
 impl Pair {
@@ -32,7 +36,8 @@ impl Pair {
             // and push the right range after it.
             left.SetGravity(ec, TF_GRAVITY_BACKWARD, TF_GRAVITY_BACKWARD).ok()?;
             right.SetGravity(ec, TF_GRAVITY_FORWARD, TF_GRAVITY_FORWARD).ok()?;
-            let pair = Self { context: context.clone(), left, right, opening, closing };
+            let terminal = super::transitory(context) && at_document_end(context, end, ec);
+            let pair = Self { context: context.clone(), left, right, opening, closing, terminal };
             pair.intact(ec).then_some(pair)
         }
     }
@@ -48,6 +53,15 @@ impl Pair {
 
     fn intact(&self, ec: u32) -> bool {
         range_has(&self.left, ec, self.opening) && range_has(&self.right, ec, self.closing)
+    }
+
+    fn insert_before(&self, ec: u32, text: &str) -> Result<()> {
+        if !self.intact(ec) { return Err(windows::Win32::Foundation::E_FAIL.into()); }
+        unsafe {
+            let insertion = self.right.Clone()?;
+            insertion.Collapse(ec, TF_ANCHOR_START)?;
+            insertion.SetText(ec, 0, &super::wide(text))
+        }
     }
 
     pub fn permits(&self, context: &ITfContext, ec: u32, caret: &ITfRange, action: PairEdit) -> bool {
@@ -83,6 +97,88 @@ fn range_has(range: &ITfRange, ec: u32, expected: char) -> bool {
         && text[..(read as usize).min(text.len())].iter().copied().eq(expected.encode_utf16(&mut [0; 2]).iter().copied())
 }
 
+fn at_document_end(context: &ITfContext, range: &ITfRange, cookie: u32) -> bool {
+    (|| -> Result<bool> { unsafe {
+        let end = context.GetEnd(cookie)?;
+        if range.CompareEnd(cookie, &end, TF_ANCHOR_END)? == 0 { return Ok(true); }
+        let tail = range.Clone()?;
+        tail.Collapse(cookie, TF_ANCHOR_END)?;
+        let mut moved = 0;
+        tail.ShiftEnd(cookie, 2, &mut moved, std::ptr::null())?;
+        if tail.CompareEnd(cookie, &end, TF_ANCHOR_END)? != 0 { return Ok(false); }
+        let mut buffer = [0u16; 3];
+        let mut read = 0;
+        tail.GetText(cookie, 0, &mut buffer, &mut read)?;
+        Ok(matches!(&buffer[..read as usize], [10] | [13] | [13, 10] | [10, 10]))
+    } })().unwrap_or(false)
+}
+
+pub(super) fn prepare_commit(state: &Rc<RefCell<State>>, context: &ITfContext, frame: &Frame, client: u32) -> Option<Pair> {
+    if frame.commit.as_ref().is_none_or(String::is_empty) || frame.replace_space || frame.pair_edit.is_some()
+        || frame.caret_back != 0 || !frame.preedit.is_empty() { return None; }
+    let (pair, composition, generation) = {
+        let service = state.borrow();
+        let pair = service.pairs.last().filter(|pair| pair.terminal)?.clone();
+        (pair, service.composition.clone()?, service.generation)
+    };
+    if !same_object(&pair.context, context) { return None; }
+    let prepared = Rc::new(Cell::new(false));
+    let (done, shared, original) = (prepared.clone(), state.clone(), pair.clone());
+    let result = super::request_edit(context, client, super::TF_ES_SYNC | super::TF_ES_READWRITE, move |cookie| unsafe {
+        let range = composition.GetRange()?;
+        if range.IsEmpty(cookie)?.as_bool() { return Ok(()); }
+        let caret = range.Clone()?;
+        caret.Collapse(cookie, TF_ANCHOR_END)?;
+        if !original.permits(&original.context, cookie, &caret, PairEdit::Skip) || !at_document_end(&original.context, &original.right, cookie) { return Ok(()); }
+        range.SetText(cookie, 0, &[])?;
+        range.Collapse(cookie, TF_ANCHOR_START)?;
+        set_selection(&original.context, cookie, &range)?;
+        {
+            let mut service = shared.borrow_mut();
+            if service.generation != generation || !service.composition.as_ref().is_some_and(|live| same_object(live, &composition)) { return Err(windows::Win32::Foundation::E_ABORT.into()); }
+            service.composition = None;
+        }
+        if let Err(error) = composition.EndComposition(cookie) {
+            let mut service = shared.borrow_mut();
+            if service.generation == generation && service.composition.is_none() && service.context.as_ref().is_some_and(|live| same_object(live, &original.context)) { service.composition = Some(composition); }
+            return Err(error);
+        }
+        done.set(true);
+        Ok(())
+    });
+    if let Err(error) = result { crate::log::write("分段结束预编辑失败", &error.to_string()); }
+    prepared.get().then_some(pair)
+}
+
+pub(super) fn commit_prepared(state: &Rc<RefCell<State>>, pair: Pair, frame: Rc<Frame>, client: u32) {
+    let entered = Rc::new(Cell::new(false));
+    let submit = |flags| {
+        let (ran, shared, target, update) = (entered.clone(), state.clone(), pair.clone(), frame.clone());
+        super::request_edit(&pair.context, client, flags, move |cookie| {
+            ran.set(true);
+            let (current, composing) = { let service = shared.borrow(); (service.context.clone(), service.composition.is_some()) };
+            let in_place = !composing && current.as_ref().is_some_and(|live| same_object(live, &target.context))
+                && selection_range(&target.context, cookie).is_some_and(|caret| target.permits(&target.context, cookie, &caret, PairEdit::Skip));
+            let result = if in_place {
+                super::apply_document(&shared, &target.context, &update, cookie)
+            } else { target.insert_before(cookie, update.commit.as_deref().expect("prepared commit")) };
+            if let Err(error) = &result {
+                crate::log::write("更新文档失败", &error.to_string());
+                if update.undo_learning { let _ = super::call(&shared, &freetype_protocol::Request::UndoCommitLearning); }
+            } else if in_place { super::show_window(&shared, &update); }
+            result
+        })
+    };
+    if submit(super::TF_ES_SYNC | super::TF_ES_READWRITE).is_err() && !entered.get() {
+        if let Err(error) = submit(super::TF_ES_ASYNCDONTCARE | super::TF_ES_READWRITE) {
+            if !entered.get() {
+                crate::log::write("更新文档失败", &error.to_string());
+                if frame.undo_learning { let _ = super::call(state, &freetype_protocol::Request::UndoCommitLearning); }
+            }
+        }
+    }
+}
+
 fn closes_with(open: char, close: char, key: char) -> bool {
     key == close || matches!((open, close, key),
         ('（', '）', ')') | ('【', '】', ']') | ('《', '》', '>') | ('「', '」', '}')
@@ -92,6 +188,7 @@ fn closes_with(open: char, close: char, key: char) -> bool {
 #[derive(Default)]
 pub(super) struct Delivery {
     pub sent: bool,
+    pub released: bool,
     frames: Vec<freetype_protocol::Frame>,
 }
 
@@ -106,17 +203,25 @@ impl Delivery {
     }
 }
 
-pub(super) fn arrived(state: &std::rc::Rc<std::cell::RefCell<super::State>>) -> bool {
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Placement { Inside, AfterTerminal, Unknown }
+
+pub(super) fn placement(state: &Rc<RefCell<State>>) -> Placement {
     let (target, pair, client) = {
         let service = state.borrow();
         (service.context.clone(), service.pairs.last().cloned(), service.client_id)
     };
-    let (Some(target), Some(pair)) = (target, pair) else { return false; };
-    if !same_object(&target, &pair.context) { return false; }
-    let result = std::rc::Rc::new(std::cell::Cell::new(false));
+    let (Some(target), Some(pair)) = (target, pair) else { return Placement::Unknown; };
+    if !same_object(&target, &pair.context) { return Placement::Unknown; }
+    let result = Rc::new(Cell::new(Placement::Unknown));
     let (checked, context) = (result.clone(), target.clone());
     super::edit_with(&target, client, super::TF_ES_SYNC | super::TF_ES_READ, move |cookie| {
-        if let Some(caret) = selection_range(&context, cookie) { checked.set(pair.permits(&context, cookie, &caret, PairEdit::Skip)); }
+        if let Some(caret) = selection_range(&context, cookie) {
+            if pair.intact(cookie) && unsafe { caret.IsEmpty(cookie)?.as_bool() } {
+                if unsafe { caret.CompareStart(cookie, &pair.right, TF_ANCHOR_START)? } == 0 { checked.set(Placement::Inside); }
+                else if pair.terminal && unsafe { caret.CompareStart(cookie, &pair.right, TF_ANCHOR_END)? } == 0 { checked.set(Placement::AfterTerminal); }
+            }
+        }
         Ok(())
     });
     result.get()
@@ -141,12 +246,8 @@ pub(super) fn finish(state: &std::rc::Rc<std::cell::RefCell<super::State>>, same
             crate::log::write("更新文档失败", "原输入框的成对标点位置已失效");
             return;
         };
-        let result = super::request_edit(&context, client, super::TF_ES_ASYNCDONTCARE | super::TF_ES_READWRITE, move |cookie| unsafe {
-            if !anchor.intact(cookie) { return Err(windows::Win32::Foundation::E_FAIL.into()); }
-            let insertion = anchor.right.Clone()?;
-            insertion.Collapse(cookie, TF_ANCHOR_START)?;
-            insertion.SetText(cookie, 0, &super::wide(&committed))
-        });
+        let result = super::request_edit(&context, client, super::TF_ES_ASYNCDONTCARE | super::TF_ES_READWRITE,
+            move |cookie| anchor.insert_before(cookie, &committed));
         if let Err(error) = result { crate::log::write("更新文档失败", &error.to_string()); }
     }
 }

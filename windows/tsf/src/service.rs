@@ -931,6 +931,10 @@ fn apply(state: &Rc<RefCell<State>>, context: Option<&ITfContext>, frame: Frame,
     }
     let client_id = state.borrow().client_id;
     let shared = Rc::new(frame);
+    if let Some(pair) = pair::prepare_commit(state, context, &shared, client_id) {
+        pair::commit_prepared(state, pair, shared, client_id);
+        return;
+    }
     if sync {
         let (state2, context2, frame2) = (state.clone(), context.clone(), shared.clone());
         edit(context, client_id, true, move |ec| {
@@ -970,6 +974,7 @@ fn caret_back(state: &Rc<RefCell<State>>, frame: &Frame) {
     if s.window.as_ref().is_some_and(CandidateWindow::request_caret_tick) {
         s.caret_move = Some(keys::CaretMove::new(frame.caret_back, now_ms()));
         s.pair_delivery.sent = false;
+        s.pair_delivery.released = false;
     } else {
         crate::log::write("发送辅助按键失败", "无法安排成对标点的光标移动");
     }
@@ -999,8 +1004,10 @@ fn caret_tick(state: &Rc<RefCell<State>>) -> bool {
             return false;
         }
         keys::CaretStep::Send(_) if s.pair_delivery.sent => {
+            let released = s.pair_delivery.released;
             drop(s);
-            if pair::arrived(state) { pair::finish(state, true); return false; }
+            let placement = pair::placement(state);
+            if placement == pair::Placement::Inside || (released && placement != pair::Placement::AfterTerminal) { pair::finish(state, true); return false; }
             return true;
         }
         keys::CaretStep::Send(steps) => steps,
@@ -1746,7 +1753,8 @@ fn key_released(state: &Rc<RefCell<State>>, context: Option<&ITfContext>, wparam
     if own_input() {
         if vk == VK_LEFT.0 && unsafe { GetMessageExtraInfo() }.0 as usize == keys::CARET_END_TAG
             && state.borrow().pair_delivery.sent {
-            pair::finish(state, true);
+            state.borrow_mut().pair_delivery.released = true;
+            if pair::placement(state) != pair::Placement::AfterTerminal { pair::finish(state, true); }
         }
         return;
     }

@@ -43,10 +43,12 @@ struct Store {
     selection: Cell<TS_SELECTION_ACP>,
     /// How often a text service moved the host's selection.
     selection_sets: Cell<u32>,
+    completed_writes: RefCell<Option<Vec<(String, bool)>>>,
     sink: RefCell<Option<ITextStoreACPSink>>,
     /// Chromium and CUAS both advertise this; it does not describe text visibility.
     transitory: Cell<bool>,
     deny_read: Cell<bool>,
+    deny_next_write: Cell<bool>,
     scope: Cell<Option<InputScope>>,
     scope_requested: Cell<bool>,
     /// CUAS forwards committed text to the app, then empties its document.
@@ -92,6 +94,7 @@ impl ITextStoreACP_Impl for Store_Impl {
     }
     fn UnadviseSink(&self, _: Ref<IUnknown>) -> Result<()> { self.sink.borrow_mut().take(); Ok(()) }
     fn RequestLock(&self, flags: u32) -> Result<HRESULT> {
+        if flags & TS_LF_READWRITE.0 == TS_LF_READWRITE.0 && self.deny_next_write.replace(false) { return Ok(TS_E_SYNCHRONOUS); }
         if self.deny_read.get() && flags & TS_LF_READWRITE.0 == TS_LF_READ.0 {
             return Ok(TS_E_SYNCHRONOUS);
         }
@@ -102,6 +105,11 @@ impl ITextStoreACP_Impl for Store_Impl {
             if size > 0 {
                 self.app_text.borrow_mut().extend_from_slice(&self.text.borrow());
                 self.app_replace(0, size, "");
+            }
+        }
+        if flags & TS_LF_READWRITE.0 == TS_LF_READWRITE.0 && result.is_ok() {
+            if let Some(writes) = self.completed_writes.borrow_mut().as_mut() {
+                writes.push((String::from_utf16_lossy(&self.text.borrow()), self.composing.get()));
             }
         }
         Ok(result)
@@ -994,6 +1002,36 @@ fn transitory_hosts_place_their_own_caret_after_a_commit() {
 }
 
 #[test]
+fn inline_commit_before_a_terminal_pair_finishes_preedit_before_inserting_the_word() {
+    for (transient, suffix, split) in [(true, "", true), (true, "\n\n", true), (true, "乙", false), (true, "\n乙", false), (false, "", false)] {
+        in_editor(|editor, state, _| {
+            editor.store.transitory.set(transient);
+            editor.store.app_insert(&format!("甲{suffix}"));
+            editor.store.move_caret(1);
+            apply(&state, Some(&editor.context), Frame { handled: true, commit: Some("「」".into()),
+                caret_back: 1, pair_enabled: true, ..Frame::default() }, true);
+            editor.store.move_caret(2);
+            pair::finish(&state, true);
+            apply(&state, Some(&editor.context), Frame { handled: true, preedit: "shen me".into(),
+                preedit_cursor: 7, pair_enabled: true, ..Frame::default() }, true);
+            assert!(editor.store.composing.get());
+            *editor.store.completed_writes.borrow_mut() = Some(Vec::new());
+            apply(&state, Some(&editor.context), Frame { handled: true, commit: Some("什么".into()),
+                candidates: vec!["意思".into()], predict: true, pair_enabled: true, ..Frame::default() }, true);
+            let writes = editor.store.completed_writes.borrow_mut().take().unwrap();
+            let base = format!("甲「」{suffix}");
+            assert_eq!(writes.iter().any(|(text, composing)| text == &base && !composing), split,
+                "only a composing transient editor at its terminal closing mark needs separate host writes: {writes:?}");
+            assert_eq!(String::from_utf16_lossy(&editor.store.text.borrow()), format!("甲「什么」{suffix}"));
+            assert_eq!(editor.store.selection.get().acpStart, 4);
+            assert!(state.borrow().predicting && !editor.store.composing.get());
+            editor.store.app_insert("好");
+            assert_eq!(String::from_utf16_lossy(&editor.store.text.borrow()), format!("甲「什么好」{suffix}"));
+        });
+    }
+}
+
+#[test]
 fn paired_quote_survives_same_field_refocus_and_the_next_letter_preview() {
     in_editor(|editor, state, sink| unsafe {
         use_test_host(&state);
@@ -1019,6 +1057,51 @@ fn paired_quote_survives_same_field_refocus_and_the_next_letter_preview() {
 }
 
 #[test]
+fn prepared_terminal_commit_survives_a_lock_refusal_without_writing_at_a_moved_caret() {
+    in_editor(|editor, state, _| {
+        editor.store.transitory.set(true);
+        editor.store.app_insert("甲");
+        apply(&state, Some(&editor.context), Frame { commit: Some("「」".into()), caret_back: 1, pair_enabled: true, ..Frame::default() }, true);
+        editor.store.move_caret(2);
+        pair::finish(&state, true);
+        apply(&state, Some(&editor.context), Frame { preedit: "shen me".into(), preedit_cursor: 7, pair_enabled: true, ..Frame::default() }, true);
+        let frame = Rc::new(Frame { handled: true, commit: Some("什么".into()), pair_enabled: true, ..Frame::default() });
+        let pair = pair::prepare_commit(&state, &editor.context, &frame, editor.client).unwrap();
+        editor.store.move_caret(0);
+        editor.store.deny_next_write.set(true);
+        pair::commit_prepared(&state, pair, frame, editor.client);
+        assert!(!editor.store.deny_next_write.get());
+        assert_eq!(String::from_utf16_lossy(&editor.store.text.borrow()), "甲「什么」");
+        assert_eq!(editor.store.selection.get().acpStart, 0);
+    });
+}
+
+#[test]
+fn terminal_pair_release_waits_if_the_text_store_still_places_the_caret_outside() {
+    in_editor(|editor, state, sink| unsafe {
+        use_test_host(&state);
+        editor.store.transitory.set(true);
+        editor.store.app_insert("甲");
+        apply(&state, Some(&editor.context), Frame { commit: Some("「」".into()), caret_back: 1, pair_enabled: true, ..Frame::default() }, true);
+        editor.store.move_caret(3);
+        assert!(sink.OnTestKeyDown(&editor.context, WPARAM(0x43), LPARAM(0)).unwrap().as_bool());
+        assert!(sink.OnKeyDown(&editor.context, WPARAM(0x43), LPARAM(0)).unwrap().as_bool());
+        state.borrow_mut().pair_delivery.sent = true;
+        let release = || {
+            let old = windows::Win32::UI::WindowsAndMessaging::SetMessageExtraInfo(LPARAM(keys::CARET_END_TAG as isize));
+            let result = sink.OnTestKeyUp(&editor.context, WPARAM(0x25), LPARAM(0));
+            windows::Win32::UI::WindowsAndMessaging::SetMessageExtraInfo(old);
+            assert!(!result.unwrap().as_bool());
+        };
+        release();
+        assert_eq!(String::from_utf16_lossy(&editor.store.text.borrow()), "甲「」", "KeyUp is not a renderer acknowledgement");
+        editor.store.move_caret(2);
+        release();
+        assert_eq!(String::from_utf16_lossy(&editor.store.text.borrow()), "甲「c」");
+    });
+}
+
+#[test]
 fn fast_typing_cannot_write_preedit_or_commit_ahead_of_the_pair_arrow() {
     in_editor(|editor, state, sink| unsafe {
         use_test_host(&state);
@@ -1035,7 +1118,7 @@ fn fast_typing_cannot_write_preedit_or_commit_ahead_of_the_pair_arrow() {
             if vk == 0x43 { assert!(state.borrow().window.as_ref().unwrap().visible(), "candidates must not wait for Left"); }
         }
         editor.store.move_caret(3);
-        assert!(pair::arrived(&state), "a renderer that omits KeyUp can acknowledge through its actual caret");
+        assert!(pair::placement(&state) == pair::Placement::Inside, "a renderer that omits KeyUp can acknowledge through its actual caret");
         state.borrow_mut().pair_delivery.sent = true;
         let previous = windows::Win32::UI::WindowsAndMessaging::SetMessageExtraInfo(LPARAM(keys::CARET_END_TAG as isize));
         let released = sink.OnTestKeyUp(&editor.context, WPARAM(0x25), LPARAM(0));
