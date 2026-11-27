@@ -105,7 +105,8 @@ type settings struct {
 	wordError                   string
 	wordsLoaded                 bool
 	confirmClear                bool
-	confirmWipe                 bool
+	confirmFactoryReset         bool
+	resetting                   bool
 	confirmRestore              bool
 	restorePath, restoreSummary string
 	// 一键导出：正在选要导出的数据；exportParts 和 backupParts 一一对应（空：全选）。

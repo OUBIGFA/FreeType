@@ -39,7 +39,8 @@ func (f *fakeBackend) Call(r Request) (Response, error) {
 	case "set_config":
 		// 走一遍 JSON，和真的管道一样
 		raw, _ := json.Marshal(r["config"])
-		f.config = Config{}
+		// 服务端对缺少的字段补默认值，空对象用于恢复出厂设置。
+		f.config = defaultConfig()
 		_ = json.Unmarshal(raw, &f.config)
 		c := f.config
 		return Response{OK: true, Config: &c}, nil

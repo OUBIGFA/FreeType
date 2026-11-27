@@ -44,7 +44,7 @@ func (s *settings) view(c *ui.Context) {
 }
 
 func (s *settings) body(c *ui.Context, p palette) {
-	ui.Row(c).Grow(1).Children(func() {
+	ui.Row(c).Grow(1).Disabled(s.resetting).Children(func() {
 		ui.Column(c).Width(236).FillHeight().Padding(4, 12, 16, 12).Gap(14).Children(func() {
 			ui.Row(c).Gap(10).AlignItems(ui.Center).Padding(2, 8).Children(func() {
 				s.logo(c, 32)

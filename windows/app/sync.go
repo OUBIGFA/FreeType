@@ -88,10 +88,15 @@ func newDeviceID() (string, error) {
 	return hex.EncodeToString(raw), nil
 }
 
+// 初次使用和恢复出厂设置共用默认值；设备身份不属于用户设置。
+func defaultSyncSettings() syncSettings {
+	return syncSettings{Provider: "webdav", S3PathStyle: true, Schedule: "interval",
+		IntervalMinutes: 30, DailyTime: "21:00", SyncOnStart: true, RetryLimit: 3, KeepSnapshots: keepSnapshots}
+}
+
 // loadSyncSettings 读 sync.json；没有文件就是默认值。设备标识不对或没有时生成一个新的。
 func loadSyncSettings(dir string) (syncSettings, error) {
-	c := syncSettings{Provider: "webdav", S3PathStyle: true, Schedule: "interval",
-		IntervalMinutes: 30, DailyTime: "21:00", SyncOnStart: true, RetryLimit: 3, KeepSnapshots: keepSnapshots}
+	c := defaultSyncSettings()
 	data, err := os.ReadFile(filepath.Join(dir, "sync.json"))
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return c, fmt.Errorf("读取同步设置失败：%w", err)

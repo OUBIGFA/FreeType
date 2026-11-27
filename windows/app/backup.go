@@ -75,6 +75,17 @@ func (s *settings) backupSection(c *ui.Context) {
 			}
 		})
 	})
+	section(c, "恢复设置", func() {
+		s.settingRow(c, "sync/恢复出厂设置", func() {
+			if ui.Button(c, "恢复出厂设置").Disabled(!s.loaded || s.syncBusy != "" || s.autoSyncStatus.Busy).Clicked() {
+				s.confirmFactoryReset = true
+			}
+		})
+	})
+	if ui.AlertDialog(c, &s.confirmFactoryReset, "恢复出厂设置",
+		"将所有输入法设置和同步设置恢复为默认值；清除本机保存的同步账号、密码和计划\n保留词库、快捷短语、常用语、学习记录和输入统计；云端备份不变", "取消", "确认恢复") == 1 {
+		s.resetSettings()
+	}
 	s.exportDialog(c)
 	s.unlockDialog(c)
 	switch ui.AlertDialog(c, &s.confirmRestore, "导入全部设置", s.restoreSummary+"\n用备份替换对应数据；未备份的数据保持不变；请先导出当前数据", "取消", "导入并替换") {
