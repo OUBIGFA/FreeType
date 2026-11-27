@@ -118,7 +118,14 @@ pub(super) fn on_timer(state: &Rc<RefCell<State>>) {
 }
 
 fn insertion_rect(context: &ITfContext, cookie: u32) -> Option<RECT> {
+    use windows::Win32::System::Threading::GetCurrentThreadId;
+    use windows::Win32::UI::WindowsAndMessaging::{GUI_INMENUMODE, GUI_POPUPMENUMODE, GUI_SYSTEMMENUMODE};
     unsafe {
+        // Tray/context menus can retain the previous editor and its last caret.
+        // Check inside the edit session too: it may run after the menu opens.
+        let mut info = GUITHREADINFO { cbSize: std::mem::size_of::<GUITHREADINFO>() as u32, ..Default::default() };
+        GetGUIThreadInfo(GetCurrentThreadId(), &mut info).ok()?;
+        if (info.flags & (GUI_INMENUMODE | GUI_POPUPMENUMODE | GUI_SYSTEMMENUMODE)).0 != 0 { return None; }
         let mut selection = [TF_SELECTION::default()];
         let mut count = 0;
         context.GetSelection(cookie, TF_DEFAULT_SELECTION, &mut selection, &mut count).ok()?;
@@ -129,7 +136,7 @@ fn insertion_rect(context: &ITfContext, cookie: u32) -> Option<RECT> {
         let mut rect = RECT::default();
         let mut clipped = BOOL::from(true);
         context.GetActiveView().ok()?.GetTextExt(cookie, &range, &mut rect, &mut clipped).ok()?;
-        (rect.bottom > rect.top && rect.right >= rect.left).then_some(rect)
+        (!clipped.as_bool() && rect.bottom > rect.top && rect.right >= rect.left).then_some(rect)
     }
 }
 

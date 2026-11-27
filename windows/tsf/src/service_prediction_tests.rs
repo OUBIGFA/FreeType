@@ -1201,6 +1201,95 @@ fn focus_hint_is_not_shown_immediately_and_recognizes_thread_focus_return() {
 }
 
 #[test]
+fn focus_hint_requires_a_visible_insertion_point() {
+    in_editor(|editor, state, _| {
+        use_test_host(&state);
+        let mut config = state.borrow_mut().client.call(&Request::GetConfig).unwrap().config.unwrap();
+        config.hint_on_focus = true;
+        assert!(state.borrow_mut().client.call(&Request::SetConfig { config }).unwrap().ok);
+        let caret = RECT { left: 100, top: 100, right: 101, bottom: 120 };
+        for (extent, clipped, visible) in [(caret, true, false), (RECT::default(), false, false), (caret, false, true)] {
+            on_focus(&state, None);
+            on_focus(&state, Some(&editor.document));
+            editor.store.extent.set(Some(extent));
+            editor.store.clipped.set(clipped);
+            focus_notice::present(&state, Some(&editor.context));
+            assert_eq!(state.borrow().window.as_ref().unwrap().visible(), visible,
+                "a clipped or missing caret must not trigger a focus hint");
+        }
+        on_focus(&state, None);
+        focus_notice::present(&state, None);
+        assert!(!state.borrow().window.as_ref().unwrap().visible(), "leaving the editor must hide its hint");
+    });
+}
+
+#[test]
+fn focus_hint_does_not_announce_a_retained_editor_while_a_popup_menu_is_open() {
+    use windows::Win32::System::Threading::GetCurrentThreadId;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EndMenu, KillTimer, SetTimer, GUITHREADINFO, GUI_INMENUMODE, WS_POPUP, WS_VISIBLE,
+    };
+    thread_local! {
+        static INSPECT: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
+    }
+    unsafe extern "system" fn inspect(_: HWND, _: u32, timer: usize, _: u32) {
+        let _ = KillTimer(None, timer);
+        INSPECT.with(|slot| {
+            if let Some(inspect) = slot.borrow_mut().take() { inspect(); }
+        });
+        let _ = EndMenu();
+    }
+
+    in_editor(|editor, state, sink| unsafe {
+        use_test_host(&state);
+        let mut config = state.borrow_mut().client.call(&Request::GetConfig).unwrap().config.unwrap();
+        config.hint_on_focus = true;
+        assert!(state.borrow_mut().client.call(&Request::SetConfig { config }).unwrap().ok);
+        let thread: ITfThreadFocusSink = sink.cast().unwrap();
+        let owner = CreateWindowExW(WINDOW_EX_STYLE::default(), windows::core::w!("STATIC"),
+            None, WS_POPUP | WS_VISIBLE, 0, 0, 100, 100, None, None, None, None).unwrap();
+        let menu = CreatePopupMenu().unwrap();
+        AppendMenuW(menu, MF_STRING, 1, windows::core::w!("Test action")).unwrap();
+        let mut results = Vec::new();
+        // A tray menu can retain both the old TSF context and a valid text extent.
+        // Exercise a captured focus response as well as a thread-only return.
+        for captured in [true, false] {
+            with_window(&state, |window| window.hide());
+            on_focus(&state, None);
+            if captured { on_focus(&state, Some(&editor.document)); }
+            else {
+                state.borrow_mut().context = Some(editor.context.clone());
+                thread.OnKillThreadFocus().unwrap();
+                thread.OnSetThreadFocus().unwrap();
+            }
+            let outcome = Rc::new(Cell::new(None));
+            let (result, shared, context) = (outcome.clone(), state.clone(), editor.context.clone());
+            INSPECT.with(|slot| *slot.borrow_mut() = Some(Box::new(move || {
+                let mut info = GUITHREADINFO { cbSize: std::mem::size_of::<GUITHREADINFO>() as u32, ..Default::default() };
+                let menu_open = GetGUIThreadInfo(GetCurrentThreadId(), &mut info).is_ok()
+                    && info.flags.contains(GUI_INMENUMODE);
+                focus_notice::present(&shared, Some(&context));
+                result.set(Some((menu_open, shared.borrow().window.as_ref().unwrap().visible())));
+            })));
+            let timer = SetTimer(None, 0, 50, Some(inspect));
+            assert_ne!(timer, 0);
+            let _ = TrackPopupMenu(menu, TPM_NONOTIFY | TPM_RETURNCMD | TPM_RIGHTBUTTON, 20, 20, None, owner, None);
+            let _ = KillTimer(None, timer);
+            INSPECT.with(|slot| *slot.borrow_mut() = None);
+            results.push(outcome.get());
+        }
+        DestroyMenu(menu).unwrap();
+        DestroyWindow(owner).unwrap();
+        assert_eq!(results, [Some((true, false)), Some((true, false))],
+            "a real popup menu must suppress the hint even if the old editor still answers");
+        thread.OnKillThreadFocus().unwrap();
+        thread.OnSetThreadFocus().unwrap();
+        focus_notice::present(&state, Some(&editor.context));
+        assert!(state.borrow().window.as_ref().unwrap().visible(), "returning to the editor must still show the hint");
+    });
+}
+
+#[test]
 fn layout_notice_reentering_during_state_or_window_update_does_not_panic() {
     // Notepad's RichEdit answers candidate-window SetWindowPos with a synchronous
     // OnLayoutChange. A RefCell panic there aborts the host process.
