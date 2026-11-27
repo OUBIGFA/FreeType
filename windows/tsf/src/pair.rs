@@ -237,7 +237,9 @@ pub(super) fn finish(state: &std::rc::Rc<std::cell::RefCell<super::State>>, same
     };
     let Some(context) = context else { return; };
     if same_field {
-        for frame in delivery.frames { super::apply(state, Some(&context), frame, true); }
+        // 由定时器或 KeyUp 排空时不在 OnKeyDown 的同步写锁保证内。
+        // 让 TSF 在宿主允许时写入，不能因暂时拒绝同步锁丢掉已接管的文字。
+        for frame in delivery.frames { super::apply(state, Some(&context), frame, false); }
     } else {
         let _ = super::call(state, &freetype_protocol::Request::Reset { commit: false });
         let committed: String = delivery.frames.into_iter().filter_map(|frame| frame.commit).collect();

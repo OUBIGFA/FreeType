@@ -3,7 +3,8 @@ use windows::Win32::UI::TextServices::{ITfThreadFocusSink_Impl, TF_SD_READONLY};
 
 #[derive(Default)]
 pub(super) struct Notice {
-    field: Option<HWND>,
+    // 多个编辑文档可共用宿主窗口；同一文档的临时 context 更换不算切换输入框。
+    field: Option<(HWND, ITfDocumentMgr)>,
     thread_lost: bool,
     system_panel: bool,
     pending: bool,
@@ -23,12 +24,12 @@ impl Notice {
     }
 }
 
-fn field(context: Option<&ITfContext>) -> Option<HWND> {
+fn field(context: Option<&ITfContext>) -> Option<(HWND, ITfDocumentMgr)> {
     let context = context?;
     if disabled(Some(context)) || unsafe { context.GetStatus() }.is_ok_and(|status| status.dwDynamicFlags & TF_SD_READONLY != 0) {
         return None;
     }
-    Some(view_window(context).unwrap_or_else(|| unsafe { GetFocus() }))
+    Some((view_window(context).unwrap_or_else(|| unsafe { GetFocus() }), unsafe { context.GetDocumentMgr().ok()? }))
 }
 
 fn system_input_panel() -> bool {
@@ -58,16 +59,17 @@ fn schedule(state: &Rc<RefCell<State>>) {
 
 pub(super) fn observe(state: &Rc<RefCell<State>>, context: Option<&ITfContext>) {
     let field = field(context);
+    let editable = field.is_some();
     let changed = {
         let mut service = state.borrow_mut();
         let notice = &mut service.focus_notice;
         if notice.system_panel { return; }
         let changed = notice.field != field;
         notice.field = field;
-        if field.is_none() { notice.cancel(); }
+        if !editable { notice.cancel(); }
         changed
     };
-    if changed && field.is_some() { schedule(state); }
+    if changed && editable { schedule(state); }
 }
 
 pub(super) fn capture(state: &Rc<RefCell<State>>, frame: Frame) {

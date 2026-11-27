@@ -49,6 +49,7 @@ struct Store {
     transitory: Cell<bool>,
     deny_read: Cell<bool>,
     deny_next_write: Cell<bool>,
+    deny_sync_write: Cell<bool>,
     scope: Cell<Option<InputScope>>,
     scope_requested: Cell<bool>,
     /// CUAS forwards committed text to the app, then empties its document.
@@ -94,6 +95,8 @@ impl ITextStoreACP_Impl for Store_Impl {
     }
     fn UnadviseSink(&self, _: Ref<IUnknown>) -> Result<()> { self.sink.borrow_mut().take(); Ok(()) }
     fn RequestLock(&self, flags: u32) -> Result<HRESULT> {
+        if self.deny_sync_write.get() && flags & TS_LF_SYNC == TS_LF_SYNC
+            && flags & TS_LF_READWRITE.0 == TS_LF_READWRITE.0 { return Ok(TS_E_SYNCHRONOUS); }
         if flags & TS_LF_READWRITE.0 == TS_LF_READWRITE.0 && self.deny_next_write.replace(false) { return Ok(TS_E_SYNCHRONOUS); }
         if self.deny_read.get() && flags & TS_LF_READWRITE.0 == TS_LF_READ.0 {
             return Ok(TS_E_SYNCHRONOUS);
@@ -1139,6 +1142,69 @@ fn pending_pair_movement_never_follows_navigation_or_a_lost_thread() {
             else { note_key_down(&state, WPARAM(0x23), LPARAM(0)); }
             assert!(state.borrow().caret_move.is_none(), "no arrow may land at a different caret");
         }
+    });
+}
+
+#[test]
+fn deferred_pair_commit_survives_a_host_that_refuses_synchronous_writes() {
+    use windows::Win32::UI::WindowsAndMessaging::{MSG, PeekMessageW, DispatchMessageW, PM_REMOVE};
+    in_editor(|editor, state, sink| unsafe {
+        use_test_host(&state);
+        apply(&state, Some(&editor.context), Frame { commit: Some("（）".into()),
+            caret_back: 1, pair_enabled: true, ..Frame::default() }, true);
+        for vk in [0x43, 0x45, 0x53, 0x48, 0x49, 0x20] {
+            assert!(sink.OnTestKeyDown(&editor.context, WPARAM(vk), LPARAM(0)).unwrap().as_bool());
+            assert!(sink.OnKeyDown(&editor.context, WPARAM(vk), LPARAM(0)).unwrap().as_bool());
+        }
+        editor.store.move_caret(1);
+        // Timer/KeyUp delivery is outside the synchronous OnKeyDown guarantee.
+        editor.store.deny_sync_write.set(true);
+        pair::finish(&state, true);
+        let mut message = MSG::default();
+        while PeekMessageW(&mut message, None, 0, 0, PM_REMOVE).as_bool() { DispatchMessageW(&message); }
+        assert_eq!(String::from_utf16_lossy(&editor.store.text.borrow()), "（测试）",
+            "already accepted keys must not disappear when the host requires asynchronous delivery");
+    });
+}
+
+#[test]
+fn passed_through_typing_cancels_the_pending_pair_arrow() {
+    for preview in [true, false] {
+    in_editor(|editor, state, sink| unsafe {
+        use_test_host(&state);
+        apply(&state, Some(&editor.context), Frame { commit: Some("（）".into()),
+            caret_back: 1, pair_enabled: true, ..Frame::default() }, true);
+        assert!(state.borrow().caret_move.is_some());
+        let handled = if preview { sink.OnTestKeyDown(&editor.context, WPARAM(0x31), LPARAM(0)) }
+            else { sink.OnKeyDown(&editor.context, WPARAM(0x31), LPARAM(0)) };
+        assert!(!handled.unwrap().as_bool(),
+            "a plain digit outside composition belongs to the application");
+        editor.store.app_insert("1");
+        assert!(state.borrow().caret_move.is_none(), "a delayed Left must not move the caret after passed-through text");
+        assert_eq!(String::from_utf16_lossy(&editor.store.text.borrow()), "（）1");
+    });
+    }
+}
+
+#[test]
+fn focus_hint_distinguishes_documents_sharing_a_window() {
+    in_editor(|editor, state, _| unsafe {
+        use_test_host(&state);
+        let mut config = state.borrow_mut().client.call(&Request::GetConfig).unwrap().config.unwrap();
+        config.hint_on_focus = true;
+        assert!(state.borrow_mut().client.call(&Request::SetConfig { config }).unwrap().ok);
+        on_focus(&state, Some(&editor.document));
+        focus_notice::present(&state, Some(&editor.context));
+        assert!(state.borrow().window.as_ref().unwrap().visible());
+        let other = Editor::new();
+        on_focus(&state, Some(&other.document));
+        focus_notice::present(&state, Some(&other.context));
+        assert!(state.borrow().window.as_ref().unwrap().visible(), "another text document needs its own focus hint even in the same host window");
+        with_window(&state, |window| window.hide());
+        on_focus(&state, Some(&other.document));
+        focus_notice::present(&state, Some(&other.context));
+        assert!(!state.borrow().window.as_ref().unwrap().visible(), "repeated focus in that document must still be quiet");
+        state.borrow_mut().context = Some(editor.context.clone());
     });
 }
 

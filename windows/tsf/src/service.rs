@@ -1882,6 +1882,9 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         let revision = shown_revision(&self.state);
         let frame = call(&self.state, &Request::PhysicalKey { key, before: before.clone(), scan: 0, shown_revision: Some(revision) });
         if let Some(frame) = &frame {
+            // 放行的数字等会由宿主立即写入，无法进入延迟队列；不能让旧的左移键
+            // 跟在这些文字后执行。接管的拼音仍保持等待左移完成的原有顺序。
+            if !frame.handled && self.state.borrow().caret_move.is_some() { pair::finish(&self.state, true); }
             note_preview(&self.state, frame);
             if frame.handled {
                 if let Some(context) = pic.as_ref() {
@@ -1957,6 +1960,8 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
             }
         };
         let handled = frame.handled;
+        // 部分宿主直接调用正式按键回调，仍需在把键交给宿主前取消旧移动。
+        if !handled && self.state.borrow().caret_move.is_some() { pair::finish(&self.state, true); }
         if handled && keys::is_ctrl_space(&key) { self.state.borrow_mut().ctrl_space_toggled = Some(ms); }
         let visible = self.state.borrow().window.as_ref().is_some_and(|w| w.visible());
         if handled || frame.commit.is_some() || composing(&self.state) || visible {
