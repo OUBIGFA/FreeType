@@ -1,0 +1,12 @@
+{
+  "name": "ggml",
+  "version": "v1.1.1",
+  "revision": "bb877c0c51f38c52ee2d5e41d58e3d0c20f3fed4",
+  "url": "https://codeload.github.com/ggml-org/ggml/zip/bb877c0c51f38c52ee2d5e41d58e3d0c20f3fed4",
+  "archiveSha256": "4ea25bf451b7717baed1568c6db8642cd4a356ea503ebe57684670d66fa10d97",
+  "license": "MIT",
+  "sourceDirectory": ".local/dependencies/ggml-bb877c0c",
+  "derivedFiles": [
+    "windows/enhancement/gpt2.cpp"
+  ]
+}

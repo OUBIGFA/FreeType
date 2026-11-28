@@ -54,6 +54,40 @@ fn prediction_highlight_preserves_window_and_item_rectangles() {
 }
 
 #[test]
+fn sentence_blocks_and_raw_keys_have_real_layout_and_pointer_targets(){
+    let _desktop=PrivateDesktop::new();
+    let sentence=freetype_protocol::SentenceView{text:"我喜欢你".into(),raw:"woxihuanni".into(),cursor:Some(8),blocks:vec![
+        freetype_protocol::SentenceBlock{from:0,to:2,text:"我".into(),confirmed:true,..Default::default()},
+        freetype_protocol::SentenceBlock{from:2,to:8,text:"喜欢".into(),focused:true,..Default::default()},
+        freetype_protocol::SentenceBlock{from:8,to:10,text:"你".into(),..Default::default()},
+    ],alternatives:vec!["西环".into()],..Default::default()};
+    for scale in [1.0,1.5,2.0] {
+        let view=View{sentence:Some(sentence.clone()),candidates:vec!["西环".into(),"西幻".into()],font_size:20,font_family:"Microsoft YaHei".into(),available_width:600,revision:4,..Default::default()};
+        let (layout,pixels)=rendered(view,scale);
+        assert_eq!(layout.sentence_hits.len(),3);assert_eq!(layout.letter_hits.len(),10);
+        assert!(layout.sentence_hits.iter().all(|(r,_)|r.left>=0&&r.right<=layout.width&&r.bottom<=layout.height));
+        assert_eq!(layout.sentence_hits[1].1,8);
+        save_render(&format!("sentence-{scale}"),&layout,&pixels);
+    }
+}
+
+#[test]
+fn sentence_pointer_selects_a_block_without_committing_the_sentence(){
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::UI::WindowsAndMessaging::SendMessageW;
+    let _desktop=PrivateDesktop::new();let instance=HINSTANCE(unsafe{GetModuleHandleW(None).unwrap()}.0);
+    let window=CandidateWindow::new(instance).unwrap();let clicks=Rc::new(RefCell::new(Vec::new()));let capture=clicks.clone();
+    set_click_handler(Some(Box::new(move|c|capture.borrow_mut().push(c))));
+    let frame=Frame{sentence:Some(freetype_protocol::SentenceView{text:"你好".into(),raw:"nihao".into(),blocks:vec![freetype_protocol::SentenceBlock{from:0,to:5,text:"你好".into(),..Default::default()}],..Default::default()}),candidates:vec!["你好".into()],font_size:20,font_family:"Microsoft YaHei".into(),page_revision:17,..Default::default()};
+    window.update(&frame,Some(rect(100,100,2,24)));
+    let area=data_of(window.hwnd).unwrap().layout.sentence_hits[0].0;
+    let point=LPARAM((((area.top+area.bottom)/2)<<16|((area.left+area.right)/2))as isize);
+    unsafe{SendMessageW(window.hwnd,WM_LBUTTONDOWN,Some(WPARAM(0)),Some(point));SendMessageW(window.hwnd,WM_LBUTTONUP,Some(WPARAM(0)),Some(point));}
+    assert!(matches!(clicks.borrow().as_slice(),[Click::Candidate{action:CandidateAction::SentenceFocus{at:5},..}]));
+    window.hide();set_click_handler(None);
+}
+
+#[test]
 fn dictionary_annotations_fit_screen_width_without_changing_commit_candidates() {
     let _desktop = PrivateDesktop::new();
     for scale in [1.0, 1.5, 2.0] {

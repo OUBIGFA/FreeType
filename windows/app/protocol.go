@@ -299,6 +299,7 @@ type typingDay struct {
 
 // Response 是一条应答。
 type Response struct {
+    Enhancement *EnhancementStatus `json:"enhancement,omitempty"`
 	CandidateDiagnostics *CandidateDiagnostics `json:"candidate_diagnostics,omitempty"`
 	OK                   bool                  `json:"ok"`
 	ModifiedUnixMS       int64                 `json:"modified_unix_ms,omitempty"`

@@ -934,7 +934,7 @@ func TestLongWordCompletionSwitchSavesAndReloads(t *testing.T) {
 	if !s.config.LongWordCompletion {
 		t.Fatal("长词前缀补全应默认开启")
 	}
-	if err := tt.Click("长词前缀补全"); err != nil {
+	if err := tt.Click("词语前缀补全"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()

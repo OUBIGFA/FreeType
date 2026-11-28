@@ -164,7 +164,7 @@ impl SyllableKey {
 /// query 是一段连续音节；返回所有“音节序列恰好等于 query”的词。
 /// 简拼查询用 SyllableQuery::Jianpin，匹配每个音节的首字母。
 pub trait Lexicon: Send + Sync {
-    /// 至少四个完整音节起，取词频最高的更长汉字词；word_prefix 非空时还要匹配字面前缀。
+    /// 至少两个完整音节起，取词频最高的更长汉字词；word_prefix 非空时还要匹配字面前缀。
     fn complete_long_word(&self, _prefix: &[SyllableKey], _word_prefix: &str) -> Option<LexEntry> {
         None
     }
@@ -366,7 +366,7 @@ pub trait PredictionIndex {
 pub struct MemoryLexicon {
     entries: Vec<LexEntry>,
     /// 只按前四个音节分桶，每个长词存一次；查询不会遍历整份词库。
-    long_prefix_index: HashMap<[SyllableKey; 4], Vec<usize>>,
+    long_prefix_index: HashMap<[SyllableKey; 2], Vec<usize>>,
     full_index: HashMap<Vec<SyllableKey>, Vec<usize>>,
     jianpin_index: HashMap<Vec<u8>, Vec<usize>>,
     /// 模糊音索引：键是各音节在全部分组都打开时的归并键（`syllable::fuzzy_key`），
@@ -424,8 +424,8 @@ impl MemoryLexicon {
         });
         let rare = self.entries[idx].is_rare();
         let entries = &self.entries;
-        if keys.len() > 4 {
-            self.long_prefix_index.entry(keys[..4].try_into().unwrap()).or_default().push(idx);
+        if keys.len() > 2 {
+            self.long_prefix_index.entry(keys[..2].try_into().unwrap()).or_default().push(idx);
         }
         // 每组里生僻字（LexEntry::is_rare）排在最后，lookup_common 读到它们就停
         let push = |list: &mut Vec<usize>| {
@@ -813,7 +813,7 @@ impl MemoryLexicon {
 
 impl Lexicon for MemoryLexicon {
     fn long_completions(&self, prefix: &[SyllableKey], word_prefix: &str, limit: usize) -> Vec<LexEntry> {
-        let Some(head) = prefix.get(..4).and_then(|slice| <[SyllableKey; 4]>::try_from(slice).ok()) else { return Vec::new(); };
+        let Some(head) = prefix.get(..2).and_then(|slice| <[SyllableKey; 2]>::try_from(slice).ok()) else { return Vec::new(); };
         let Some(indices) = self.long_prefix_index.get(&head) else { return Vec::new(); };
         let mut entries: Vec<_> = indices.iter().map(|&i| &self.entries[i])
             .filter(|entry| long_word_matches(entry, prefix, word_prefix)).collect();
@@ -821,7 +821,7 @@ impl Lexicon for MemoryLexicon {
         entries.into_iter().take(limit.min(32)).cloned().collect()
     }
     fn complete_long_word(&self, prefix: &[SyllableKey], word_prefix: &str) -> Option<LexEntry> {
-        let head: [SyllableKey; 4] = prefix.get(..4)?.try_into().ok()?;
+        let head: [SyllableKey; 2] = prefix.get(..2)?.try_into().ok()?;
         self.long_prefix_index.get(&head)?.iter().map(|&i| &self.entries[i])
             .filter(|entry| long_word_matches(entry, prefix, word_prefix))
             .max_by(|a, b| long_word_order(a, b)).cloned()
@@ -1312,6 +1312,15 @@ impl UserLexicon {
         self.learned_codes.read().map(|words| {
             words.iter().filter(|(input, _, _)| input == &code).cloned().collect()
         }).unwrap_or_default()
+    }
+
+    pub(crate) fn learned_code_prefix(&self,code:&str)->Vec<(String,String,f64)>{
+        let code=code.to_ascii_lowercase();
+        self.learned_codes.read().map(|words|words.iter().filter(|(input,word,_)|input.starts_with(&code)&&input.len()>code.len()&&word.bytes().all(|b|b.is_ascii_alphabetic())).cloned().collect()).unwrap_or_default()
+    }
+
+    pub(crate) fn personal_long_completions(&self,prefix:&[SyllableKey],word_prefix:&str)->Vec<LexEntry>{
+        self.snapshot.read().map(|s|s.long_completions(prefix,word_prefix,32)).unwrap_or_default()
     }
 
     pub fn custom_words(&self) -> Vec<(String, String, f64)> {

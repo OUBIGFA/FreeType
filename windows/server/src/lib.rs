@@ -13,6 +13,8 @@ mod dictionary_catalog;
 mod lookup_mode;
 mod sync_merge;
 pub mod tasks;
+#[cfg(windows)]
+mod enhancement;
 pub mod tools;
 
 #[cfg(windows)]

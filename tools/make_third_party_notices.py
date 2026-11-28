@@ -248,6 +248,13 @@ def collect(output):
     authorization = check_authorization()
     run(["go", "mod", "verify"], APP)
     components = collect_rust(output)
+    runtime = json.loads((ROOT / "third_party/manifests/enhancement-runtime.json").read_text(encoding="utf-8"))
+    runtime_source = ROOT / runtime["sourceDirectory"]
+    runtime_archive = ROOT / ".local/dependencies/ggml-v1.1.1.zip"
+    if sha256(runtime_archive) != runtime["archiveSha256"]:
+        raise ValueError("ggml corresponding source checksum mismatch")
+    components.append(copy_component(output, "native:ggml", runtime["version"], runtime_source,
+                                     notice_paths=["LICENSE"], source_archive=runtime_archive))
     # These remain independent licensed data. Include exact editable inputs and the
     # generator, including the complete decomposition upstream archive (GPL source).
     from make_input_tools import check as check_input_tools, prepare_sources

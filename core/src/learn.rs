@@ -71,6 +71,7 @@ pub(crate) struct NewWord {
 
 /// 保存改动前后的值；撤销只还原仍是 after 的记录，不覆盖其他会话的新选择。
 pub(crate) enum Change {
+    Boundary(String, Option<(Vec<(String,String)>,u64)>, (Vec<(String,String)>,u64)),
     Word(String, Option<HistoryEntry>, HistoryEntry),
     Pair(String, String, Option<HistoryEntry>, HistoryEntry),
     UserWord(String, Option<(String, f64)>, (String, f64)),
@@ -108,6 +109,7 @@ impl Journal {
 
 /// 可跨线程保存的一份学习快照。序列化、裁剪和写盘都可以移出按键线程。
 pub struct LearningSnapshot {
+    boundaries: crate::sentence::Boundaries,
     user_words: Vec<(String, String, f64)>,
     words: HashMap<String, HistoryEntry>,
     pairs: UserPairs,
@@ -118,7 +120,7 @@ impl LearningSnapshot {
     pub fn save(self, dict: &Path, history: &Path) -> Result<()> {
         write_atomic(dict, &crate::lexicon::user_dict_text(&self.user_words))
             .context("保存学习词条")?;
-        write_atomic(history, &history_text(&self.words, &self.pairs, &self.pending))
+        write_atomic(history, &(history_text(&self.words, &self.pairs, &self.pending)+&boundary_text(&self.boundaries)))
             .context("保存输入习惯")?;
         Ok(())
     }
@@ -127,6 +129,7 @@ impl LearningSnapshot {
 impl Engine {
     pub fn learning_snapshot(&self) -> LearningSnapshot {
         LearningSnapshot {
+            boundaries: self.sentence_boundaries(),
             user_words: self.lexicon.words(),
             words: self.history.read().unwrap().clone(),
             pairs: self.pairs.read().unwrap().clone(),
@@ -166,6 +169,10 @@ impl Engine {
         let mut changed = false;
         for change in changes {
             changed |= match change {
+                Change::Boundary(key,before,after)=>{
+                    let mut rows=self.boundaries.write().unwrap();
+                    if rows.get(&key)!=Some(&after){false}else{if let Some(value)=before{rows.insert(key,value);}else{rows.remove(&key);}true}
+                }
                 Change::Word(word, before, after) => restore_entry(&mut self.history.write().unwrap(), word, before, Some(after)),
                 Change::Pair(prev, word, before, after) => self.pairs.write().unwrap().restore(prev, word, before, after),
                 Change::UserWord(word, before, after) => self.lexicon.restore_word(&word, before, after),
@@ -476,6 +483,10 @@ fn heat_text(heat: f64) -> String {
     format!("{heat:.3}").trim_end_matches('0').trim_end_matches('.').to_owned()
 }
 
+pub(crate) fn boundary_text(rows:&crate::sentence::Boundaries)->String {
+    if rows.is_empty(){String::new()}else{format!("b\t{}\n",serde_json::to_string(rows).expect("boundary text"))}
+}
+
 /// 读回输入习惯。允许旧整数热度和新版小数；整份文件无法识别时通知调用方留底。
 pub(crate) fn load_history<P: AsRef<Path>>(
     path: P,
@@ -500,6 +511,7 @@ pub(crate) fn load_history<P: AsRef<Path>>(
             Some(HistoryEntry { count, last_used_ms: last.parse().ok()? })
         };
         match parts.as_slice() {
+            ["b", value] if serde_json::from_str::<crate::sentence::Boundaries>(value).is_ok()=>{loaded+=1;}
             ["w", word, count, last] if !word.is_empty() => {
                 if let Some(e) = entry(count, last) {
                     words.insert((*word).to_string(), e);

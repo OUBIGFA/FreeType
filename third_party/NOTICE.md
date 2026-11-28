@@ -86,3 +86,10 @@ NSIS `COPYING` 区分通用代码的 zlib/libpng 许可、bzip2 压缩模块的 
 升级依赖、替换图标、改动词库或修改上游代码后，重新运行统一构建入口。构建从锁定依赖提取原文；缺许可文件、缺 MPL 对应源码、数据修订不匹配或摘要不符时停止，不能复用另一份安装器的声明。
 
 项目来源登记为 `https://github.com/OUBIGFA/FreeType/tree/main/third_party`。公开发布前核对本次包的许可清单没有未解决项，并核对固定修订源码链接、必要修改及生成脚本的取得方式；本地来源归档不上传。来源包还包含该构建源码树的 `project/FreeType-source.tar`，用于核对转换脚本和预编译索引生成代码；安装器与来源包的配对记录在 `build-info.json`。
+
+
+### 可选增强模型运行库
+
+FreeType 的 GPT-2 CPU 计算图基于 ggml v1.1.1 的 MIT 示例 `examples/gpt-2/main-backend.cpp`，固定修订 `bb877c0c51f38c52ee2d5e41d58e3d0c20f3fed4`。FreeType 增加 GGUF 读取、树形注意力掩码、辅助头计算和有界接口；修改文件为 `windows/enhancement/gpt2.cpp`。原许可保存在 `third_party/licenses/ggml-LICENSE.txt`，原始源码归档和校验见 `enhancement-runtime.json`，随本地同版本来源包保留。
+
+Nova 模型是用户主动从发布方下载的独立可选数据，不随 FreeType 安装器或来源包分发。发布方声明 GPL-3.0；模型修订、地址和摘要见 `optional-enhancement.json`。本项目没有复制 Nova GPL 程序源码到输入引擎。额外训练语料不公开，不能据此宣称训练过程完全可复现。任何未来重新分发模型的行为仍须独立核对来源及适用义务。

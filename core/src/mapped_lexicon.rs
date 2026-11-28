@@ -37,6 +37,7 @@ pub struct MappedLexicon {
     count: usize,
     total: f64,
     compact: bool,
+    completions: std::sync::Mutex<HashMap<(Vec<SyllableKey>,String),Vec<LexEntry>>>,
 }
 
 fn checksum(reader: impl Read) -> std::io::Result<u32> {
@@ -307,6 +308,7 @@ impl MappedLexicon {
             count,
             total,
             compact,
+            completions: Default::default(),
         })
     }
 
@@ -386,7 +388,9 @@ impl MappedLexicon {
 
 impl Lexicon for MappedLexicon {
     fn long_completions(&self, prefix: &[SyllableKey], word_prefix: &str, limit: usize) -> Vec<LexEntry> {
-        if prefix.len() < 4 || limit == 0 { return Vec::new(); }
+        if prefix.len() < 2 || limit == 0 { return Vec::new(); }
+        let cache_key=(prefix.to_vec(),word_prefix.to_owned());
+        if let Some(found)=self.completions.lock().unwrap().get(&cache_key){return found.iter().take(limit.min(32)).cloned().collect();}
         let prefix_key = full_key(prefix.iter().copied());
         let mut stream = self.index.range().ge(&prefix_key).into_stream();
         let mut best = Vec::new();
@@ -396,13 +400,14 @@ impl Lexicon for MappedLexicon {
             for entry in self.entries(key).filter(|entry| long_word_matches(entry, prefix, word_prefix)) {
                 best.push(entry);
                 best.sort_unstable_by(|a, b| long_word_order(b, a));
-                best.truncate(limit.min(32));
+                best.truncate(32);
             }
         }
-        best
+        let mut cache=self.completions.lock().unwrap();if cache.len()>=512{cache.clear();}cache.insert(cache_key,best.clone());
+        best.truncate(limit.min(32));best
     }
     fn complete_long_word(&self, prefix: &[SyllableKey], word_prefix: &str) -> Option<LexEntry> {
-        if prefix.len() < 4 { return None; }
+        if prefix.len() < 2 { return None; }
         // 复用已部署的全拼 FST；只读取前缀范围，无须改文件格式或另建常驻索引。
         let prefix_key = full_key(prefix.iter().copied());
         let mut stream = self.index.range().ge(&prefix_key).into_stream();

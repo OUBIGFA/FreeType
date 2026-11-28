@@ -82,7 +82,7 @@ fn long_completion_commits_once_in_full_and_shuangpin_sessions() {
 fn long_completion_requires_complete_syllables_and_can_be_disabled() {
     let mut engine = engine();
     for input in [
-        "zhonghua",
+        "zhong",
         "zhrm",
         "zhonghuarenmi",
         "zhonghuarenmni",
@@ -256,7 +256,8 @@ fn long_completion_compiled_and_cached_dictionaries_match_and_filter_by_word() {
             "中华人民共和国"
         );
         assert!(lexicon.complete_long_word(&prefix, "中华仁民").is_none());
-        assert!(lexicon.complete_long_word(&prefix[..3], "").is_none());
+        assert!(lexicon.complete_long_word(&prefix[..1], "").is_none());
+        assert!(lexicon.complete_long_word(&prefix[..2], "").is_some());
         let longer =
             wowtype_core::lexicon::parse_pinyin_keys("zhong hua ren min gong he guo").unwrap();
         assert_eq!(

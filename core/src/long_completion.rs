@@ -20,7 +20,7 @@ impl Engine {
         let Ok(prefix) = parse_pinyin_keys(&top.pinyin) else {
             return;
         };
-        if prefix.len() < 4 || prefix.iter().any(|key| key.erhua) {
+        if prefix.len() < 2 || prefix.iter().any(|key| key.erhua) {
             return;
         }
         // 简拼、末音节没打完和纠错都不扩写；双拼必须成对，并与实际解码读音一致。
@@ -54,10 +54,19 @@ impl Engine {
         } else {
             ""
         };
-        let choices = self.lexicon.long_completions(&prefix, word_prefix, 16);
+        let mut choices = self.lexicon.long_completions(&prefix, word_prefix, 16);
+        // A learned phrase must not disappear because the current homophone is
+        // 这时 rather than 这是. Personal words match the entered reading first.
+        let personal=self.lexicon.personal_long_completions(&prefix,"");
+        let personal_words:std::collections::HashSet<_>=personal.iter().map(|e|e.word.clone()).collect();
+        choices.extend(personal);
+        let at=crate::now_ms();
+        choices.sort_by(|a,b|self.history_heat(&b.word,at).total_cmp(&self.history_heat(&a.word,at))
+            .then_with(||personal_words.contains(&b.word).cmp(&personal_words.contains(&a.word))).then_with(||b.freq.total_cmp(&a.freq)));
+        let mut seen=std::collections::HashSet::new();choices.retain(|c|seen.insert(c.word.clone()));
         // 诗句/专名按读音补全不以通用模型词表为门槛；仅有一个词库扩展也保留。
         // 整词有多个扩展时优先模型中真正收录的词，避免高词频切词残片占住补全位。
-        let selected = if word_prefix.is_empty() || choices.len() <= 1 {
+        let selected = if prefix.len()<4 || choices.first().is_some_and(|c|personal_words.contains(&c.word)||self.history_heat(&c.word,at)>0.0) || word_prefix.is_empty() || choices.len() <= 1 {
             choices.first()
         } else {
             choices.iter().find(|entry| self.lm.knows_word(&entry.word) == Some(true)).or_else(|| {
@@ -76,12 +85,21 @@ impl Engine {
                 }).max_by(|a, b| a.freq.total_cmp(&b.freq))
             })
         };
-        let Some(entry) = selected.cloned() else {
+        let Some(selected) = selected.cloned() else {
             return;
         };
+        let mut entries=vec![selected];
+        if prefix.len()<4 {
+            for entry in choices {if entries.len()>=3{break;}if !entries.iter().any(|c|c.word==entry.word){entries.push(entry);}}
+        }
+        let top_heat=self.history_heat(&top.text,at);
+        let top_score=top.score;
+        let mut position=1;
+        let mut promoted=0;
+        for entry in entries {
         let text = self.shown_text(&entry.word);
         if candidates.iter().any(|candidate| candidate.text == text) {
-            return;
+            continue;
         }
         let pinyin = entry
             .keys
@@ -91,9 +109,11 @@ impl Engine {
             .join(" ");
         let score = candidates
             .get(1)
-            .map_or(top.score - 1.0, |next| (top.score + next.score) / 2.0);
+            .map_or(top_score - 1.0, |next| (top_score + next.score) / 2.0);
+        let heat=self.history_heat(&entry.word,at);
+        let insert=if heat>=6.0&&heat>top_heat+2.0{let i=promoted;promoted+=1;i}else{position.min(candidates.len())};
         candidates.insert(
-            1,
+            insert,
             Candidate {
                 text,
                 pinyin: pinyin.clone(),
@@ -109,6 +129,7 @@ impl Engine {
                 long_completion: true,
             },
         );
+        position+=1;
         if candidates.len() > self.config.max_candidates {
             // 原样字母始终可选；名额只够首选和原文时，宁可不显示补全。
             let drop = candidates
@@ -118,6 +139,30 @@ impl Engine {
                 .find(|(index, candidate)| *index > 1 && !crate::is_raw_candidate(candidate))
                 .map_or(1, |(index, _)| index);
             candidates.remove(drop);
+        }
+        }
+    }
+
+    pub(crate) fn add_english_prefix(&self,raw:&str,at:u64,candidates:&mut Vec<Candidate>){
+        if !self.config.long_word_completion||!self.config.english_candidate||raw.len()<2||raw.len()>31||!raw.bytes().all(|c|c.is_ascii_alphabetic())||self.config.max_candidates<2{return;}
+        let prefix=raw.to_ascii_lowercase();
+        let mut words=self.lexicon.learned_code_prefix(&prefix);
+        // Ordered range lookup avoids scanning the full bundled English table.
+        if let Ok(table)=self.english.read(){
+            for (code,text) in table.range(prefix.clone()..).take_while(|(code,_)|code.starts_with(&prefix)){
+                if code.len()>prefix.len(){words.push((code.clone(),text.clone(),1.0));}
+            }
+        }
+        words.retain(|(_,word,_)|raw.len()>=3||self.history_heat(word,at)>=3.0);
+        words.sort_by(|a,b|self.history_heat(&b.1,at).total_cmp(&self.history_heat(&a.1,at)).then_with(||a.0.len().cmp(&b.0.len())).then_with(||a.0.cmp(&b.0)));
+        let mut seen=std::collections::HashSet::new();words.retain(|(_,word,_)|seen.insert(word.clone()));words.truncate(3);
+        let top_heat=candidates.first().map_or(0.0,|c|self.history_heat(&c.text,at));
+        let mut promoted=0;
+        for (position,(code,word,freq)) in words.into_iter().enumerate(){
+            if candidates.iter().any(|c|c.text==word){continue;}
+            let heat=self.history_heat(&word,at);let index=if heat>=6.0&&heat>top_heat+2.0{let i=promoted;promoted+=1;i}else{(position+1).min(candidates.len())};
+            candidates.insert(index,Candidate{text:word.clone(),pinyin:code.clone(),score:heat,features:Feature::default(),words:vec![CandidateWord{text:word,pinyin:code,freq,known:true}],consumed:raw.len(),long_completion:true});
+            if candidates.len()>self.config.max_candidates {if let Some(i)=candidates.iter().rposition(|c|!crate::is_raw_candidate(c)){candidates.remove(i);}}
         }
     }
 }

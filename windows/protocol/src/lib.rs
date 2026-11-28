@@ -811,6 +811,12 @@ pub struct TypingDay {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CandidateAction {
+    SentenceFocus { at: usize },
+    SentenceCaret { at: usize },
+    SentencePage { next: bool },
+    SentenceChoose { index: usize },
+    SentenceResize { expand: bool },
+    SentenceLeave,
     Select { index: usize },
     Page { next: bool },
     Forget { index: usize },
@@ -882,6 +888,9 @@ pub enum Request {
     CapsLock { on: bool },
     /// 服务状态（版本、词库是否载入、模式）。
     Status,
+    EnhancementStatus,
+    SetEnhancement { enabled: bool },
+    RefreshEnhancement { revision: u64 },
     /// 现在开着窗口的程序（设置里添加指定软件时挑）。
     ListApps,
     GetConfig,
@@ -990,6 +999,11 @@ pub enum PairEdit { Skip, Erase }
 /// 一次按键之后 DLL 要做的事。
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Frame {
+    #[serde(default)]
+    pub enhancement_pending: bool,
+    /// Optional sentence editing metadata; offsets refer to the original keys.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sentence: Option<SentenceView>,
     /// 显示注音/释义，与实际候选及上屏内容分离。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub annotations: Vec<String>,
@@ -1108,6 +1122,23 @@ pub struct Frame {
     pub want_before: bool,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SentenceBlock {
+    pub from: usize, pub to: usize, pub text: String,
+    pub confirmed: bool, pub corrected: bool, pub focused: bool,
+    #[serde(default)]
+    pub uncertain: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SentenceView {
+    pub text: String, pub raw: String, pub cursor: Option<usize>,
+    pub blocks: Vec<SentenceBlock>, pub alternatives: Vec<String>,
+    pub page: usize,
+    pub has_prev: bool,
+    pub has_next: bool,
+}
+
 fn is_zero(n: &usize) -> bool {
     *n == 0
 }
@@ -1171,6 +1202,8 @@ pub struct BrandIcon {
 /// 应答。成功时按请求种类填 `frame`、`status`、`config` 等之一。
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Response {
+    #[serde(default, skip_serializing_if="Option::is_none")]
+    pub enhancement: Option<EnhancementStatus>,
     pub ok: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub candidate_diagnostics: Option<CandidateDiagnostics>,
@@ -1208,6 +1241,13 @@ pub struct Response {
     pub apps: Option<Vec<AppWindow>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub typing_stats: Option<std::collections::BTreeMap<String, TypingDay>>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct EnhancementStatus {
+    pub enabled: bool,
+    pub state: String,
+    pub error: String,
 }
 
 /// 后台记录状态；不含输入内容，只在用户打开诊断入口时请求。

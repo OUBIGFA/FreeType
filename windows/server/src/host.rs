@@ -87,6 +87,7 @@ struct Client {
 }
 
 pub struct Host {
+    enhancement: Arc<crate::enhancement::Worker>,
     clients: HashMap<ClientId, Client>,
     /// 会话借用它；见模块说明里的规则。
     engine: Option<Box<Engine>>,
@@ -311,12 +312,15 @@ fn is_hotkey(key: &Key, name: &str) -> bool {
 
 impl Host {
     pub fn new(store: Store) -> Self {
+        let enhancement=crate::enhancement::Worker::new(store.dir().to_path_buf());
+        if std::fs::read_to_string(store.dir().join("enhancement/enabled.txt")).is_ok_and(|s|s.trim()=="1") {enhancement.enable(true);}
         let diagnostic_dir = if store.dir() == crate::data_dir() { crate::local_dir() } else { store.dir().join("local") };
         let config = store.load_config();
         let recent_emoji = store.load_recent_emoji();
         let mut stats = crate::stats::Stats::new(store.dir().to_path_buf());
         if config.typing_stats { stats.prepare(); }
         let mut host = Self {
+            enhancement,
             clients: HashMap::new(),
             engine: None,
             engine_error: None,
@@ -448,6 +452,7 @@ impl Host {
                     }
                 }
                 configure_engine(&mut engine, &self.config);
+                if self.enhancement.status().enabled {engine.set_enhancement(Some(self.enhancement.clone()));}
                 self.engine = Some(Box::new(engine));
                 self.engine_error = None;
                 self.apply_user_data();
@@ -1017,8 +1022,9 @@ impl Host {
             self.style(&mut frame, mode);
             return Response::with_frame(frame);
         }
-        if let Some((pending, mut state, out)) = client.pending.take() {
+        if let Some((pending, mut state, mut out)) = client.pending.take() {
             if pending == real && before.is_none() && state.session.accept_preview() {
+                out.frame.enhancement_pending=state.session.enhancement_pending();
                 client.state = state;
                 return self.finish(mode, out);
             }
@@ -1137,6 +1143,12 @@ impl Host {
             return self.with_client(id, |state, env| state.current(true, env));
         }
         match action {
+            CandidateAction::SentenceFocus{at}=>self.with_client(id,|state,env|state.sentence_action(wowtype_core::sentence::Action::Focus{at},env)),
+            CandidateAction::SentenceCaret{at}=>self.with_client(id,|state,env|state.sentence_action(wowtype_core::sentence::Action::Caret{at},env)),
+            CandidateAction::SentencePage{next}=>self.with_client(id,|state,env|state.sentence_action(wowtype_core::sentence::Action::Page{next},env)),
+            CandidateAction::SentenceChoose{index}=>self.with_client(id,|state,env|{let page=state.session.sentence_view().map_or(0,|v|v.page);state.sentence_action(wowtype_core::sentence::Action::Choose{index:index+page*9},env)}),
+            CandidateAction::SentenceResize{expand}=>self.with_client(id,|state,env|state.sentence_action(wowtype_core::sentence::Action::Resize{expand},env)),
+            CandidateAction::SentenceLeave=>self.with_client(id,|state,env|state.sentence_action(wowtype_core::sentence::Action::Leave,env)),
             CandidateAction::Select { index } => self.with_client(id, |state, env| state.select(index, env)),
             CandidateAction::Page { next } => self.with_client(id, |state, env| state.page(next, env)),
             CandidateAction::Forget { index } => self.forget(id, index),
@@ -1881,6 +1893,19 @@ impl Host {
                 ..Response::ok()
             },
             Request::SetNeuralModel { path } => self.change_neural_model(path),
+            Request::EnhancementStatus=>Response{enhancement:Some(self.enhancement.status()),..Response::ok()},
+            Request::SetEnhancement{enabled}=>{
+                let dir=self.store.dir().join("enhancement");
+                if let Err(e)=std::fs::create_dir_all(&dir).and_then(|_|crate::store::write_atomic(&dir.join("enabled.txt"),if enabled{"1"}else{"0"})){return Response::error(e.to_string());}
+                self.enhancement.enable(enabled);
+                if let Some(engine)=self.engine.as_deref(){engine.set_enhancement(enabled.then(||self.enhancement.clone() as Arc<dyn wowtype_core::enhancement::Backend>));}
+                Response{enhancement:Some(self.enhancement.status()),..Response::ok()}
+            },
+            Request::RefreshEnhancement{revision}=>{
+                if self.clients.get(&id).is_some_and(|c|c.revision==revision&&c.state.session.composing()) {
+                    self.with_client(id,|state,env|{let changed=state.session.refresh_enhancement();state.current(changed,env)})
+                }else{Response::ok()}
+            },
             Request::SetConfig { config } => match self.save_config(config) {
                 Ok(()) => self.config_response(),
                 Err(e) => Response::error(e),

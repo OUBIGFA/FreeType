@@ -1353,6 +1353,7 @@ fn on_click(state: &Weak<RefCell<State>>, click: Click) {
         return;
     };
     let request = match click {
+        Click::RefreshEnhancement(revision)=>Request::RefreshEnhancement{revision},
         Click::LanguageMenu(x, y) => {
             let (context, generation) = {
                 let mut s = state.borrow_mut();

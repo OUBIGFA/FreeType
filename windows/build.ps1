@@ -216,6 +216,7 @@ if (-not $SkipTests) {
 }
 
 Step 'Building Rust components'
+Invoke-Native python @('-X', 'utf8', 'tools/build_enhancement.py')
 Invoke-Native cargo @('build', '--locked', '--release', '-p', 'freetype-server', '-p', 'freetype-tsf')
 Invoke-Native rustup @('target', 'add', 'i686-pc-windows-msvc')
 Invoke-Native cargo @('build', '--locked', '--release', '-p', 'freetype-tsf', '--target', 'i686-pc-windows-msvc')
@@ -233,11 +234,13 @@ $WhiteIcons = Join-Path $Icons 'white'
 Invoke-Native python @('-X', 'utf8', 'windows\tools\make_icons.py', 'windows\assets\freetype-white-logo.png', $WhiteIcons)
 Copy-Item -LiteralPath $WhiteIcons -Destination (Join-Path $Resources 'icons') -Recurse
 Copy-Item 'target\release\FreeTypeServer.exe', 'target\release\freetype_tsf.dll' $Bin
+Copy-Item '.local\build\enhancement\FreeTypeEnhancement.dll' $Bin
 Copy-Item 'target\i686-pc-windows-msvc\release\freetype_tsf.dll' (Join-Path $Bin 'x86')
 foreach ($name in 'words.lm', 'english.txt', 'LICENSE', 'SOURCE.txt', 'VERSION', 'MANIFEST.json', 'WANXIANG-LICENSE-SCOPE.md', 'WANXIANG-NOTICE.md') {
     Copy-Item (Join-Path $Data $name) (Join-Path $Resources 'data')
 }
 Copy-Item (Join-Path $Data 'nnlm.bin'), 'third_party\manifests\neural-model.json', 'core\data\s2t.tsv' (Join-Path $Resources 'data')
+Copy-Item 'third_party\manifests\optional-enhancement.json' (Join-Path $Resources 'data')
 foreach ($name in 'english-lookup.ftd', 'english-spelling.ftd', 'radical-lookup.ftd', 'INPUT-TOOLS.json') {
     Copy-Item -LiteralPath (Join-Path $Data $name) -Destination (Join-Path $Resources 'data')
 }
@@ -397,6 +400,7 @@ $Info = [ordered]@{
         'FreeType.exe'                 = Sha256 (Join-Path $AppBuild 'windows-amd64\FreeType.exe')
         'bin/FreeTypeServer.exe'       = Sha256 (Join-Path $Bin 'FreeTypeServer.exe')
         'bin/freetype_tsf.dll'         = Sha256 (Join-Path $Bin 'freetype_tsf.dll')
+        'bin/FreeTypeEnhancement.dll'   = Sha256 (Join-Path $Bin 'FreeTypeEnhancement.dll')
         'bin/x86/freetype_tsf.dll'     = Sha256 (Join-Path $Bin 'x86\freetype_tsf.dll')
         'bin/freetype.ico'             = Sha256 (Join-Path $Bin 'freetype.ico')
     }

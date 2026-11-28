@@ -1,0 +1,13 @@
+{
+  "name": "Nova optional GPT-2 enhancement",
+  "version": "v1",
+  "modelUrl": "https://github.com/nova-ime/nova-model/releases/download/v1/gpt2.gguf",
+  "sha256": "b72e0c8728e05454677373c700aba7860c8595c589d73b39683e3de2671708e3",
+  "bytes": 116198144,
+  "repository": "https://github.com/nova-ime/nova-model",
+  "revision": "22e326df4fc41a62161f1e1973ed267e93a92f2b",
+  "license": "GPL-3.0 as declared by publisher",
+  "distribution": "User-initiated direct download; weights are not included in installer or source archive",
+  "runtime": "ggml MIT; independent FreeType adapter of ggml GPT-2 example",
+  "trainingProvenance": "Publisher continues training UER gpt2-chinese-cluecorpussmall; extra training corpus is not public; no claim of complete training reproducibility"
+}

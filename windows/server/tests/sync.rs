@@ -34,6 +34,7 @@ fn sync_export_reports_modification_time_without_turning_reads_into_edits() {
     let again = export(&mut host, &path);
     assert_eq!(serde_json::to_value(again).unwrap()["modified_unix_ms"], stamp);
     assert_eq!(std::fs::read(path).unwrap(), data);
+    drop(host);
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -65,6 +66,7 @@ fn sync_restore_rejects_changed_local_data_then_replaces_with_remote_defaults_an
     let source_records = source.as_object_mut().unwrap().remove("sync_records");
     assert_eq!(actual, source, "整份恢复必须还原全部正文与默认值");
     assert_ne!(actual_records, source_records, "主动恢复使用本机的新编辑版本，而非复用旧快照版本");
+    drop(local);drop(remote);
     std::fs::remove_dir_all(dir).unwrap();
     std::fs::remove_dir_all(remote_dir).unwrap();
 }
@@ -82,6 +84,8 @@ fn sync_restore_waits_for_composition_to_finish() {
     assert!(result.error.unwrap().contains("正在输入"));
     host.handle(1, Request::Reset { commit: false });
     assert!(request(&mut host, restore).ok);
+    // Host owns background persistence; finish it before removing its data.
+    drop(host);
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -102,5 +106,6 @@ fn backup_accepts_connection_and_embedded_sync_metadata_without_reexporting_them
     let cloud: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
     assert!(cloud.get("sync_connection").is_none());
     assert!(cloud.get("sync_metadata").is_none());
+    drop(host);
     std::fs::remove_dir_all(dir).unwrap();
 }

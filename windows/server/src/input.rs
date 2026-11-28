@@ -24,7 +24,7 @@ use crate::lookup_mode::{Action as LookupAction, Kind as LookupKind, LookupMode}
 use crate::tools::{self, Outcome, Page, Sources, Tool};
 
 /// 光标前记多少个字当上文。
-const CONTEXT_CHARS: usize = 16;
+const CONTEXT_CHARS: usize = 30;
 /// 标点上屏前最多连按几次空格把句首词选完。
 const MAX_HEAD_COMMITS: usize = 32;
 
@@ -398,6 +398,13 @@ impl ClientState {
             forgot: core.forgot,
             ..Out::default()
         };
+        out.frame.sentence=self.session.sentence_view().map(|v|freetype_protocol::SentenceView {
+            text:v.text.clone(),raw:v.raw.clone(),cursor:v.cursor,
+            blocks:v.blocks.iter().map(|b|freetype_protocol::SentenceBlock{from:b.from,to:b.to,text:b.text.clone(),confirmed:b.confirmed,corrected:b.corrected,focused:b.focused,uncertain:b.uncertain}).collect(),
+            alternatives:v.alternatives.iter().skip(v.page*9).take(9).map(|a|a.text.clone()).collect(),
+            page:v.page,has_prev:v.page>0,has_next:(v.page+1)*9<v.alternatives.len(),
+        });
+        out.frame.enhancement_pending=self.session.enhancement_pending();
         if let Some(text) = &core.commit {
             if let Some(choice) = self.session.last_choice() {
                 if choice.kind == CandidateKind::Emoji && !choice.emoji.is_empty() {
@@ -472,6 +479,13 @@ impl ClientState {
         out.frame.cursor = core.cand_cursor;
         out.frame.has_prev = core.has_prev;
         out.frame.has_next = core.has_next;
+        if let Some(sentence)=out.frame.sentence.as_ref().filter(|v|v.cursor.is_some()) {
+            out.frame.candidates=sentence.alternatives.clone();
+            out.frame.labels=(1..=sentence.alternatives.len()).map(|n|n.to_string()).collect();
+            out.frame.annotations.clear();out.frame.badges.clear();out.frame.pin_slots.clear();
+            out.frame.cursor=None;out.frame.has_prev=sentence.has_prev;out.frame.has_next=sentence.has_next;out.frame.forgettable=false;
+            out.frame.title=Some("数字选局部备选；[ ] 调整切分；End 返回整句".into());
+        }
         if out.frame.commit.is_some() {
             // 选的词上屏了：接着联想（原样上屏的字母、标点后面接不上，自然没有）
             self.start_prediction(env);
@@ -497,6 +511,11 @@ impl ClientState {
         }
         let core = self.session.frame(handled);
         self.core_frame(core, env)
+    }
+
+    pub fn sentence_action(&mut self, action:wowtype_core::sentence::Action, env:&Env)->Out {
+        if self.tool.is_some()||self.raw.is_some()||self.lookup.is_some(){return self.current(false,env);}
+        let frame=self.session.sentence_action(action);self.core_frame(frame,env)
     }
 
     /// 打开工具栏或表情面板（结束正在打的字）。

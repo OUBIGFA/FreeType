@@ -904,6 +904,7 @@ func (s *settings) featuresPage(c *ui.Context) {
 	})
 	section(c, "智能输入", func() {
 		s.neuralModelRow(c)
+        s.enhancementRow(c)
 		changed = s.settingSwitch(c, "features/长词前缀补全", false, &s.config.LongWordCompletion) || changed
 		changed = s.settingSwitch(c, "features/邮箱、网址补全", false, &s.config.EmailCompletion) || changed
 		changed = s.settingSwitch(c, "features/日期时间", false, &s.config.DateTime) || changed

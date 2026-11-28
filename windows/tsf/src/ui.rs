@@ -60,6 +60,7 @@ const PREDICT_MS: u32 = 6000;
 /// 单次空格暂留在输入法编辑区，双击窗口结束后提交为普通空格。
 const PREDICTION_SPACE_TIMER: usize = 5;
 const FOCUS_NOTICE_TIMER: usize = 6;
+const ENHANCEMENT_TIMER: usize = 7;
 /// 按住多久算长按。
 const LONG_PRESS_MS: u32 = 500;
 /// 联想显示时，本线程里点到候选窗以外（见 [`watch_outside_clicks`]）。
@@ -70,6 +71,7 @@ const WM_MOUSELEAVE: u32 = 0x02a3;
 /// 候选窗上的点击（交给文本服务处理）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Click {
+    RefreshEnhancement(u64),
     LanguageMenu(i32, i32),
     Candidate { action: CandidateAction, revision: u64 },
     /// 展开固定排位子菜单，带原候选页的绘制编号。
@@ -314,6 +316,7 @@ fn theme_for_appearance(style: &str, custom: Option<&CandidateSkin>, light: bool
 /// 要画的东西。
 #[derive(Clone, Default, PartialEq)]
 struct View {
+    sentence: Option<freetype_protocol::SentenceView>,
     title: Option<String>,
     preedit: String,
     candidates: Vec<String>,
@@ -370,6 +373,8 @@ impl View {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Part {
+    Sentence(usize),
+    Letter,
     Title,
     Preedit,
     Label(usize),
@@ -379,6 +384,8 @@ enum Part {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Hover {
+    Sentence(usize),
+    Letter(usize),
     Item(usize),
     Arrow(bool),
 }
@@ -407,6 +414,8 @@ impl Piece {
 /// 排好的版：每一块的位置。
 #[derive(Default)]
 struct Layout {
+    sentence_hits: Vec<(RECT,usize)>,
+    letter_hits: Vec<(RECT,usize)>,
     width: i32,
     height: i32,
     parts: Vec<Piece>,
@@ -466,9 +475,31 @@ fn layout(view: &View, fonts: &Fonts, scale: f32) -> Result<Layout> {
         }
         let mut y = pad;
         let mut width = 0;
+        if let Some(sentence)=&view.sentence {
+            let limit=if view.available_width>0{view.available_width-2*pad}else{s(900.0)};
+            let mut x=pad;let height=fonts.main.text("中")?.size.cy+s(8.0);
+            for (i,b) in sentence.blocks.iter().enumerate() {
+                let text=fonts.main.text(&b.text)?;let w=text.size.cx+s(14.0);
+                if x>pad&&x+w>limit {x=pad;y+=height+s(3.0);}
+                let area=rect(x,y,w,height);
+                out.sentence_hits.push((area,b.to));
+                out.parts.push(Piece::new(Part::Sentence(i),text.clone(),(x+s(7.0))as f32,text.centered_y(&area)));
+                x+=w+s(3.0);width=width.max(x);
+            }
+            y+=height+s(4.0);
+            // The raw-key row is the pointer equivalent of keyboard caret editing.
+            let mut x=pad;
+            for (at,ch) in sentence.raw.char_indices() {
+                let text=fonts.small.text(&ch.to_string())?;let w=text.size.cx.max(s(7.0));
+                if x>pad&&x+w>limit{x=pad;y+=text.size.cy+s(4.0);}
+                let area=rect(x,y,w,text.size.cy+s(4.0));out.letter_hits.push((area,at+ch.len_utf8()));
+                out.parts.push(Piece::new(Part::Letter,text,x as f32,y as f32));x+=w;width=width.max(x);
+            }
+            y+=fonts.small.text("a")?.size.cy+s(7.0);
+        }
         for (text, part) in [
             (view.title.clone().unwrap_or_default(), Part::Title),
-            (view.preedit.clone(), Part::Preedit),
+            (if view.sentence.is_some(){String::new()}else{view.preedit.clone()}, Part::Preedit),
         ] {
             if text.is_empty() {
                 continue;
@@ -654,6 +685,14 @@ fn draw(hdc: HDC, data: &Data) -> Result<()> {
         for piece in &data.layout.parts {
             let color = match piece.part {
                 Part::Hint => t.emphasis,
+                Part::Letter=>t.muted,
+                Part::Sentence(i)=>match data.view.sentence.as_ref().and_then(|v|v.blocks.get(i)) {
+                    Some(b) if b.focused=>t.emphasis,
+                    Some(b) if b.confirmed=>rgb(0x27,0x87,0x64),
+                    Some(b) if b.corrected=>rgb(0x80,0x5b,0xa8),
+                    Some(b) if b.uncertain=>rgb(0xa4,0x69,0x28),
+                    _=>t.text,
+                },
                 Part::Title | Part::Preedit => t.muted,
                 Part::Label(i) => if selected(i) { t.accent_text } else { t.muted },
                 Part::Candidate(i) => if selected(i) { t.accent_text } else { t.text },
@@ -677,6 +716,9 @@ fn data_of(hwnd: HWND) -> Option<&'static mut Data> {
 }
 
 fn hit(data: &Data, x: i32, y: i32) -> Option<Hover> {
+    let contains=|r:&RECT|x>=r.left&&x<r.right&&y>=r.top&&y<r.bottom;
+    if let Some((_,at))=data.layout.sentence_hits.iter().find(|(r,_)|contains(r)){return Some(Hover::Sentence(*at));}
+    if let Some((_,at))=data.layout.letter_hits.iter().find(|(r,_)|contains(r)){return Some(Hover::Letter(*at));}
     let inside = |r: &RECT| x >= r.left && x < r.right && y >= r.top && y < r.bottom;
     if let Some((_, next, _)) = data.layout.arrows.iter().find(|(r, _, _)| inside(r)) {
         let enabled = if *next { data.view.has_next } else { data.view.has_prev };
@@ -814,7 +856,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
                     break;
                 }
                 if let Some(data) = data_of(hwnd) {
-                    dispatch(data.click(CandidateAction::Page { next: steps < 0 }));
+                    dispatch(data.click(if data.view.sentence.as_ref().is_some_and(|v|v.cursor.is_some()){CandidateAction::SentencePage { next:steps<0 }}else{CandidateAction::Page { next: steps < 0 }}));
                 }
             }
             LRESULT(0)
@@ -861,8 +903,10 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
                     return None;
                 }
                 match hit(data, x, y) {
-                    Some(Hover::Item(i)) if pressed == Some(i) => Some(data.click(CandidateAction::Select { index: i })),
-                    Some(Hover::Arrow(next)) => Some(data.click(CandidateAction::Page { next })),
+                    Some(Hover::Item(i)) if pressed == Some(i) => Some(data.click(if data.view.sentence.as_ref().is_some_and(|v|v.cursor.is_some()){CandidateAction::SentenceChoose { index:i }}else{CandidateAction::Select { index: i }})),
+                    Some(Hover::Sentence(at))=>Some(data.click(CandidateAction::SentenceFocus{at})),
+                    Some(Hover::Letter(at))=>Some(data.click(CandidateAction::SentenceCaret{at})),
+                    Some(Hover::Arrow(next)) => Some(data.click(if data.view.sentence.as_ref().is_some_and(|v|v.cursor.is_some()){CandidateAction::SentencePage { next }}else{CandidateAction::Page { next }})),
                     _ => None,
                 }
             });
@@ -932,6 +976,11 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         WM_TIMER if wparam.0 == FOCUS_NOTICE_TIMER => {
             unsafe { let _ = KillTimer(Some(hwnd), FOCUS_NOTICE_TIMER); }
             dispatch(Click::FocusNotice);
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == ENHANCEMENT_TIMER => {
+            unsafe {let _=KillTimer(Some(hwnd),ENHANCEMENT_TIMER);}
+            if let Some(data)=data_of(hwnd){dispatch(Click::RefreshEnhancement(data.painted_revision));}
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == HINT_TIMER => {
@@ -1091,6 +1140,7 @@ impl CandidateWindow {
         }
         unsafe {
             let _ = KillTimer(Some(self.hwnd), PREDICT_TIMER);
+            let _ = KillTimer(Some(self.hwnd), ENHANCEMENT_TIMER);
             let _ = ShowWindow(self.hwnd, SW_HIDE);
         }
         watch_outside_clicks(self.hwnd, false);
@@ -1136,7 +1186,12 @@ impl CandidateWindow {
     /// 按应答更新；`caret` 是编辑区（或光标）在屏幕上的位置。
     pub fn update(&self, frame: &Frame, caret: Option<RECT>) {
         if !self.alive.get() { return; }
+        unsafe {
+            if frame.enhancement_pending {SetTimer(Some(self.hwnd),ENHANCEMENT_TIMER,100,None);}
+            else {let _=KillTimer(Some(self.hwnd),ENHANCEMENT_TIMER);}
+        }
         let view = View {
+            sentence: frame.sentence.clone(),
             title: frame.title.clone(),
             preedit: if frame.hide_candidate_preedit { String::new() } else { frame.preedit.clone() },
             candidates: frame.candidates.clone(),

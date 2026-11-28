@@ -70,6 +70,11 @@ fn rows(snapshot: &Value) -> Result<BTreeMap<String, Value>, String> {
         }
     }
     // 最近表情按列表整体更新，避免并集合并把已清理的顺序变成字典序。
+    for domain in ["boundaries","pending"] {
+        if let Some(records)=snapshot["learning"][domain].as_object() {
+            for (reading,value) in records {rows.insert(key(&[domain,reading]),value.clone());}
+        }
+    }
     rows.insert(key(&["recent"]), snapshot["recent_emoji"].clone());
     if rows.len() > MAX_RECORDS { return Err("同步记录过多".into()); }
     Ok(rows)
@@ -90,7 +95,7 @@ fn validate(journal: &Journal) -> Result<(), String> {
         let parts: Vec<String> = serde_json::from_str(name).map_err(error)?;
         let valid = match parts.first().map(String::as_str) {
             Some("config") => parts.len() == 2 && defaults.get(&parts[1]).is_some() && !local_config(&parts[1]),
-            Some("dictionary" | "common" | "words" | "history") => parts.len() == 2,
+            Some("dictionary" | "common" | "words" | "history" | "boundaries" | "pending") => parts.len() == 2,
             Some("quick" | "pairs") => parts.len() == 3,
             Some("entry") => parts.len() == 4,
             Some("recent") => parts.len() == 1,
@@ -243,6 +248,8 @@ pub(crate) fn merge(local: &Value, remote: &Value) -> Result<(Value, SyncMergePr
     let mut result = local.clone();
     result["quick_phrases"] = json!([]); result["common_phrases"] = json!([]); result["dictionaries"] = json!([]);
     for name in ["words", "history", "pairs"] { result["learning"][name] = json!([]); }
+    result["learning"]["boundaries"]=json!({});
+    result["learning"]["pending"]=json!({});
     let mut dictionaries: BTreeMap<String, (String, Metadata, Vec<msime::DictEntry>)> = BTreeMap::new();
     for (name, record) in &journal.records {
         let parts: Vec<String> = serde_json::from_str(name).map_err(error)?;
@@ -260,6 +267,8 @@ pub(crate) fn merge(local: &Value, remote: &Value) -> Result<(Value, SyncMergePr
             "quick" => result["quick_phrases"].as_array_mut().unwrap().push(value.clone()),
             "common" => result["common_phrases"].as_array_mut().unwrap().push(value.clone()),
             "words" | "history" | "pairs" => result["learning"][&parts[0]].as_array_mut().unwrap().push(value.clone()),
+            "boundaries" => result["learning"]["boundaries"][&parts[1]]=value.clone(),
+            "pending" => result["learning"]["pending"][&parts[1]]=value.clone(),
             "recent" => result["recent_emoji"] = value.clone(),
             "entry" => if let Some((_, _, entries)) = dictionaries.get_mut(&parts[1]) {
                 let weight = value.as_u64().filter(|v| *v <= u32::MAX as u64).ok_or("同步词频无效")? as u32;

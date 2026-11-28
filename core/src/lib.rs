@@ -22,6 +22,8 @@ pub mod llama;
 pub mod lm;
 pub mod msime;
 pub mod nnlm;
+pub mod sentence;
+pub mod enhancement;
 pub mod predict;
 pub mod preedit;
 pub mod rank;
@@ -195,6 +197,8 @@ pub struct Engine {
     /// 用户选词历史：候选文本 -> (次数, 上次时间)。
     history: RwLock<HashMap<String, HistoryEntry>>,
     pending_words: RwLock<HashMap<String, learn::NewWord>>,
+    boundaries: RwLock<sentence::Boundaries>,
+    enhancement: RwLock<Option<Arc<dyn enhancement::Backend>>>,
     learning_journal: std::sync::Mutex<learn::Journal>,
     /// 光标前已上屏的文本，用于上下文 bigram 特征。
     context: RwLock<String>,
@@ -211,7 +215,7 @@ pub struct Engine {
     /// 简繁字符映射表。
     converter: RwLock<Arc<Converter>>,
     /// 英文词表：小写编码 -> 上屏形式（github -> GitHub）。
-    english: RwLock<Arc<HashMap<String, String>>>,
+    english: RwLock<Arc<std::collections::BTreeMap<String, String>>>,
     /// 字级神经语言模型（微信输入法的 nlrgpt2，本机有才加载），给整句候选重排。
     nnlm: RwLock<Option<Arc<nnlm::Nnlm>>>,
     nnlm_path: RwLock<Option<std::path::PathBuf>>,
@@ -231,6 +235,8 @@ impl Engine {
             config: EngineConfig::default(),
             history: RwLock::new(HashMap::new()),
             pending_words: RwLock::new(HashMap::new()),
+            boundaries: RwLock::new(sentence::Boundaries::new()),
+            enhancement: RwLock::new(None),
             learning_journal: std::sync::Mutex::new(learn::Journal::default()),
             context: RwLock::new(String::new()),
             pairs: RwLock::new(UserPairs::default()),
@@ -240,7 +246,7 @@ impl Engine {
             input_tools: OnceLock::new(),
             manual_pins: RwLock::new(session::ManualPins::new()),
             converter: RwLock::new(Arc::new(Converter::new())),
-            english: RwLock::new(Arc::new(HashMap::new())),
+            english: RwLock::new(Arc::new(std::collections::BTreeMap::new())),
             nnlm: RwLock::new(None),
             nnlm_path: RwLock::new(None),
             lookup_memo: lexicon::LookupMemo::default(),
@@ -372,6 +378,17 @@ impl Engine {
         }
     }
 
+    /// An explicit block merge always requires a second confirmation, including
+    /// longer names; ordinary automatic sentence learning keeps its own policy.
+    pub fn record_merged_word(&self,word:&str,pinyin:&str){
+        if !self.config.auto_learn||word.is_empty()||word.chars().count()>32{return;}
+        let word=self.lexicon_form(word);let at=now_ms();
+        self.record_selection_at(&word,at);
+        if self.confirm_pending(&word,pinyin,at,true)||self.lexicon.user_word(&word).is_some(){
+            self.add_learned_word(&word,pinyin,f64::from(self.config.auto_learn_threshold.max(1)));
+        }
+    }
+
     fn confirm_pending(&self, word: &str, code: &str, at_ms: u64, compose: bool) -> bool {
         let code = code.trim().to_ascii_lowercase();
         let Ok(mut words) = self.pending_words.write() else { return false; };
@@ -499,12 +516,19 @@ impl Engine {
             .read()
             .map_err(|_| anyhow::anyhow!("pairs lock poisoned"))?;
         let pending = self.pending_words.read().map_err(|_| anyhow::anyhow!("pending words lock poisoned"))?;
-        learn::write_atomic(path.as_ref(), &learn::history_text(&history, &pairs, &pending))?;
+        learn::write_atomic(path.as_ref(), &(learn::history_text(&history, &pairs, &pending)+&learn::boundary_text(&self.sentence_boundaries())))?;
         Ok(())
     }
 
     /// 读回 [`Engine::save_history`] 存的输入习惯，返回条数。
     pub fn load_history<P: AsRef<std::path::Path>>(&self, path: P) -> Result<usize> {
+        // Validate the added section before mutating any learning state.
+        let text=std::fs::read_to_string(path.as_ref())?;
+        let mut boundaries=sentence::Boundaries::new();
+        for line in text.lines().filter_map(|s|s.strip_prefix("b\t")) {
+            boundaries=serde_json::from_str(line)?;
+            anyhow::ensure!(sentence::valid_boundaries(&boundaries),"切分记录格式不正确");
+        }
         let mut history = self
             .history
             .write()
@@ -514,7 +538,8 @@ impl Engine {
             .write()
             .map_err(|_| anyhow::anyhow!("pairs lock poisoned"))?;
         let mut pending = self.pending_words.write().map_err(|_| anyhow::anyhow!("pending words lock poisoned"))?;
-        learn::load_history(path, &mut history, &mut pairs, &mut pending)
+        let n=learn::load_history(path, &mut history, &mut pairs, &mut pending)?;
+        let count=boundaries.len();*self.boundaries.write().unwrap()=boundaries;Ok(n+count)
     }
 
     fn history_heat(&self, word: &str, at_ms: u64) -> f64 {
@@ -617,7 +642,8 @@ impl Engine {
 
     /// 从字符串载入英文词表（追加），返回累计词条数。
     pub fn load_english_str(&self, text: &str) -> usize {
-        let mut map: HashMap<String, String> = self
+        use std::collections::btree_map::Entry;
+        let mut map: std::collections::BTreeMap<String, String> = self
             .english
             .read()
             .map(|m| m.as_ref().clone())
@@ -742,7 +768,9 @@ impl Engine {
         if word.is_empty() || self.lexicon.is_custom(word) {
             return false;
         }
-        let mut forgot = self.lexicon.remove(word);
+        let mut boundaries=self.boundaries.write().unwrap();let before=boundaries.len();
+        boundaries.retain(|_,(parts,_)|!parts.iter().any(|(w,_)|w==word));
+        let mut forgot = self.lexicon.remove(word)||before!=boundaries.len();drop(boundaries);
         if let Ok(mut history) = self.history.write() {
             forgot |= history.remove(word).is_some();
         }
@@ -764,6 +792,7 @@ impl Engine {
 
     /// 忘掉学到的全部东西：用户词库、选词热度和搭配（自定义词不动）。
     pub fn clear_learned(&self) {
+        self.boundaries.write().unwrap().clear();
         self.lexicon.clear();
         if let Ok(mut pending) = self.pending_words.write() { pending.clear(); }
         self.clear_learning_journal();
@@ -833,6 +862,7 @@ impl Engine {
         };
         self.prepend_custom_codes(raw, at_ms, &mut result);
         self.add_long_completion(raw, &mut result);
+        self.add_english_prefix(raw,at_ms,&mut result);
         if let Ok(mut last) = self.last_words.write() {
             last.clear();
             for c in &result {

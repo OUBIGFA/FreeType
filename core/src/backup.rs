@@ -51,6 +51,8 @@ impl Engine {
             "words": words,
             "history": history,
             "pairs": pairs,
+            "boundaries": self.sentence_boundaries(),
+            "pending": self.pending_words.read().unwrap().iter().map(|(word,row)|(word.clone(),(row.pinyin.clone(),row.first_ms))).collect::<std::collections::BTreeMap<_,_>>(),
         }))? + "\n")
     }
 
@@ -59,6 +61,10 @@ impl Engine {
         let mut data: Value = serde_json::from_str(text).context("学习备份不是有效的 JSON")?;
         ensure!(data["format"] == "freetype-learning", "不是 FreeType 学习备份");
         ensure!(data["version"] == 1, "不支持这个学习备份版本");
+        let boundaries:crate::sentence::Boundaries=match data.get("boundaries"){Some(v)=>serde_json::from_value(v.clone())?,None=>Default::default()};
+        ensure!(crate::sentence::valid_boundaries(&boundaries),"切分记录格式不正确");
+        let pending:std::collections::BTreeMap<String,(String,u64)>=match data.get("pending"){Some(v)=>serde_json::from_value(v.clone())?,None=>Default::default()};
+        ensure!(pending.len()<=crate::learn::MAX_HISTORY_WORDS&&pending.iter().all(|(word,(code,_))|valid_word(word)&&valid_word(code)),"待确认词记录不正确");
         let words: Vec<(String, String, f64)> = serde_json::from_value(data["words"].take())
             .context("学习备份中的词条格式不正确")?;
         let entries: Vec<(String, f64, u64)> = serde_json::from_value(data["history"].take())
@@ -104,6 +110,17 @@ impl Engine {
             }
         }
         crate::learn::prune_learning(&mut history, &mut current_pairs);
+        let mut current=self.boundaries.write().unwrap();
+        for (key,row) in boundaries {
+            if current.get(&key).is_none_or(|v|row.1>v.1) && (current.len()<2000||current.contains_key(&key)) {current.insert(key,row);changed+=1;}
+        }
+        let mut current_pending=self.pending_words.write().unwrap();
+        for (word,(pinyin,first_ms)) in pending {
+            if crate::now_ms().saturating_sub(first_ms)>crate::learn::NEW_WORD_TTL_MS{continue;}
+            if current_pending.get(&word).is_none_or(|r|first_ms>r.first_ms)&&current_pending.len()<crate::learn::MAX_HISTORY_WORDS{
+                current_pending.insert(word,crate::learn::NewWord{pinyin,first_ms});changed+=1;
+            }
+        }
         if changed > 0 { self.clear_learning_journal(); }
         Ok(changed)
     }

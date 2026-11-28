@@ -2931,3 +2931,48 @@ fn typing_while_the_dictionary_loads_says_so_and_recovers_once_ready() {
     assert_eq!(frame.title, None);
     cleanup(&host);
 }
+
+#[test]
+fn sentence_actions_require_current_display_and_preserve_session(){
+    let mut host=host("sentence-actions");
+    let frame=typing(&mut host,"nihaoshijie");let revision=frame.page_revision;
+    let stale=host.handle(1,Request::CandidateAction{revision:revision.wrapping_add(1),action:CandidateAction::SentenceFocus{at:5}}).frame.unwrap();
+    assert!(stale.sentence.unwrap().cursor.is_none());
+    let revision=stale.page_revision;
+    let focus=host.handle(1,Request::CandidateAction{revision,action:CandidateAction::SentenceFocus{at:5}}).frame.unwrap();
+    assert_eq!(focus.sentence.unwrap().cursor,Some(5));assert!(focus.commit.is_none());
+    let reset=host.handle(1,Request::Reset{commit:false}).frame.unwrap();assert!(reset.sentence.is_none());
+    let late=host.handle(1,Request::RefreshEnhancement{revision:focus.page_revision});assert!(late.frame.is_none());
+    cleanup(&host);
+}
+
+#[test]
+fn boundary_and_pending_learning_sync_replay_does_not_multiply_or_revive_deletions(){
+    let mut a=host("sentence-sync-a");let mut b=host("sentence-sync-b");
+    a.engine.as_ref().unwrap().remember_boundary("ni hao shi jie",vec![("你".into(),"ni".into()),("好世界".into(),"hao shi jie".into())]);
+    a.engine.as_ref().unwrap().record_merged_word("你好世界","ni hao shi jie");
+    let file=a.data_dir().join("boundary-sync.json");let path=file.display().to_string();
+    assert!(a.handle(1,Request::ExportSyncSettings{path:path.clone()}).ok);
+    assert!(b.handle(1,Request::MergeSettings{path:path.clone()}).ok);
+    assert!(b.handle(1,Request::MergeSettings{path:path.clone()}).ok);
+    assert_eq!(b.engine.as_ref().unwrap().sentence_boundaries().len(),1);
+    assert!(!b.engine.as_ref().unwrap().user_words().iter().any(|(_,w,_)|w=="你好世界"));
+    b.engine.as_ref().unwrap().record_merged_word("你好世界","ni hao shi jie");
+    assert!(b.engine.as_ref().unwrap().user_words().iter().any(|(_,w,_)|w=="你好世界"));
+    cleanup(&a);cleanup(&b);
+}
+
+#[test]
+fn accepted_key_preview_exposes_new_model_job_to_the_candidate_window(){
+    struct Delayed;impl wowtype_core::enhancement::Backend for Delayed {
+        fn submit(&self,_:wowtype_core::enhancement::Query){}
+        fn answer(&self,_:&str)->Option<wowtype_core::enhancement::Answer>{None}
+    }
+    let mut host=host("model-preview");host.engine.as_ref().unwrap().set_enhancement(Some(Arc::new(Delayed)));
+    for c in "nihao".chars(){
+        let preview=Key{keysym:c as u32,modifiers:0,test:true};host.handle(1,Request::Key{key:preview,before:None});
+        let result=host.handle(1,Request::Key{key:Key{test:false,..preview},before:None}).frame.unwrap();
+        if c=='o'{assert!(result.enhancement_pending,"accepted preview must start polling");}
+    }
+    cleanup(&host);
+}
