@@ -1,5 +1,179 @@
-//! 上屏联想的单次与双击空格在真实 TSF 编辑会话中的行为。
+//! 上屏联想的方向键、单次与双击空格在真实 TSF 编辑会话中的行为。
 use super::*;
+
+/// Exercise the TSF callbacks and the real prediction engine together. Older
+/// popup-only tests could not detect a text snapshot cancelling the server page.
+fn commit_prediction(editor: &Editor, state: &Rc<RefCell<State>>, sink: &ITfKeyEventSink) {
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let data = std::env::temp_dir().join(format!(
+        "freetype-prediction-{}-{}-{}",
+        std::process::id(),
+        unsafe { GetCurrentThreadId() },
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let mut host = freetype_server::host::Host::new(freetype_server::store::Store::new(data));
+    let lexicon = wowtype_core::MemoryLexicon::from_tsv_str(
+        "jin tian\t今天\t500000\nxia yu\t下雨\t20000\ntian qi\t天气\t60000\nkai hui\t开会\t30000\nbu cuo\t不错\t40000\n",
+    )
+    .unwrap();
+    let lm = wowtype_core::BigramLm::from_bigram_tsv_str(
+        "今天\t下雨\t300\n今天\t天气\t200\n天气\t不错\t300\n开会\t今天\t5\n不错\t今天\t5\n下雨\t今天\t5\n",
+    )
+    .unwrap();
+    host.install_engine(Ok(wowtype_core::Engine::new(
+        std::sync::Arc::new(lexicon),
+        std::sync::Arc::new(lm),
+    )));
+    host.connect(1, "notepad.exe".into());
+    state.borrow_mut().client = Client::with_test_host(host);
+    let mut config = state
+        .borrow_mut()
+        .client
+        .call(&Request::GetConfig)
+        .unwrap()
+        .config
+        .unwrap();
+    config.predict_next = true;
+    config.predict_double_space = false;
+    assert!(
+        state
+            .borrow_mut()
+            .client
+            .call(&Request::SetConfig { config })
+            .unwrap()
+            .ok
+    );
+    for vk in b"JINTIAN " {
+        unsafe {
+            assert!(sink
+                .OnTestKeyDown(&editor.context, WPARAM(*vk as usize), LPARAM(0))
+                .unwrap()
+                .as_bool());
+            assert!(sink
+                .OnKeyDown(&editor.context, WPARAM(*vk as usize), LPARAM(0))
+                .unwrap()
+                .as_bool());
+        }
+    }
+    assert!(state.borrow().predicting);
+}
+
+#[test]
+fn prediction_arrows_keep_the_page_when_rich_text_reports_a_different_context() {
+    for snapshot in [None, Some(""), Some("# 今天")] {
+        for previews in [0, 1, 2] {
+            in_editor(|editor, state, sink| unsafe {
+                commit_prediction(editor, &state, &sink);
+                // A formatted editor may expose its parent text snapshot after
+                // the commit. Its insertion point and visible prediction are unchanged.
+                let _parent = snapshot.map(|text| {
+                    editor.store.transitory.set(true);
+                    ParentDocument::new(editor, false, text)
+                });
+                if let Some(text) = snapshot {
+                    assert_eq!(read_before(&state, &editor.context).as_deref(), Some(text));
+                }
+                let selection_sets = editor.store.selection_sets.get();
+                for (vk, repeat) in [(0x27, false), (0x27, true), (0x25, false), (0x27, false)] {
+                    let lp = LPARAM(if repeat { 1 << 30 } else { 0 });
+                    for _ in 0..previews {
+                        assert!(sink.OnTestKeyDown(&editor.context, WPARAM(vk), lp).unwrap().as_bool(),
+                            "snapshot={snapshot:?}, previews={previews}: prediction navigation must stay owned");
+                    }
+                    assert!(sink
+                        .OnKeyDown(&editor.context, WPARAM(vk), lp)
+                        .unwrap()
+                        .as_bool());
+                    assert!(state.borrow().predicting);
+                    assert_eq!(
+                        String::from_utf16_lossy(&editor.store.text.borrow()),
+                        "今天"
+                    );
+                    assert_eq!(
+                        editor.store.selection_sets.get(),
+                        selection_sets,
+                        "navigation must not move the document caret"
+                    );
+                }
+                assert!(sink
+                    .OnTestKeyDown(&editor.context, WPARAM(0x20), LPARAM(0))
+                    .unwrap()
+                    .as_bool());
+                assert!(sink
+                    .OnKeyDown(&editor.context, WPARAM(0x20), LPARAM(0))
+                    .unwrap()
+                    .as_bool());
+                assert_eq!(
+                    String::from_utf16_lossy(&editor.store.text.borrow()),
+                    "今天天气",
+                    "snapshot={snapshot:?}, previews={previews}"
+                );
+            });
+        }
+    }
+}
+
+#[test]
+fn prediction_arrows_pass_through_after_the_document_caret_moves() {
+    for vk in [0x25, 0x27] {
+        in_editor(|editor, state, sink| unsafe {
+            commit_prediction(editor, &state, &sink);
+            editor.store.move_caret(0);
+            assert!(!sink
+                .OnTestKeyDown(&editor.context, WPARAM(vk), LPARAM(0))
+                .unwrap()
+                .as_bool());
+            assert!(!state.borrow().predicting);
+            assert_eq!(
+                String::from_utf16_lossy(&editor.store.text.borrow()),
+                "今天"
+            );
+        });
+    }
+}
+
+#[test]
+fn prediction_arrows_respect_the_switch_and_modified_navigation() {
+    for disabled in [false, true] {
+        for vk in [0x25, 0x27] {
+            in_editor(|editor, state, sink| unsafe {
+                commit_prediction(editor, &state, &sink);
+                let _keyboard = if disabled {
+                    let mut config = state
+                        .borrow_mut()
+                        .client
+                        .call(&Request::GetConfig)
+                        .unwrap()
+                        .config
+                        .unwrap();
+                    config.predict_arrows = false;
+                    assert!(
+                        state
+                            .borrow_mut()
+                            .client
+                            .call(&Request::SetConfig { config })
+                            .unwrap()
+                            .ok
+                    );
+                    None
+                } else {
+                    let mut pressed = [0; 256];
+                    pressed[0x11] = 0x80;
+                    Some(TestKeyboard::with_state(pressed))
+                };
+                assert!(!sink
+                    .OnTestKeyDown(&editor.context, WPARAM(vk), LPARAM(0))
+                    .unwrap()
+                    .as_bool());
+                assert!(!state.borrow().predicting);
+                assert_eq!(
+                    String::from_utf16_lossy(&editor.store.text.borrow()),
+                    "今天"
+                );
+            });
+        }
+    }
+}
 
 #[test]
 fn prediction_first_space_is_owned_before_any_application_key_is_dispatched() {
@@ -295,7 +469,7 @@ fn prediction_double_space_respects_message_timing_and_duplicate_previews() {
             ..Key::default()
         };
         assert_eq!(
-            prediction_space_key(&state, &editor.context, preview, false, 1, 1000)
+            prediction_key(&state, &editor.context, preview, false, 1, 1000)
                 .0
                 .keysym,
             0x20
@@ -334,12 +508,12 @@ fn prediction_single_space_uses_the_page_only_while_the_caret_matches() {
             ..Key::default()
         };
         assert_eq!(
-            prediction_space_key(&state, &editor.context, space, false, revision, 1000),
+            prediction_key(&state, &editor.context, space, false, revision, 1000),
             (space, true)
         );
         editor.store.move_caret(1);
         assert_eq!(
-            prediction_space_key(&state, &editor.context, space, false, revision, 1100),
+            prediction_key(&state, &editor.context, space, false, revision, 1100),
             (space, false)
         );
         assert_eq!(shown_revision(&state), 0);
@@ -362,7 +536,7 @@ fn prediction_double_space_does_not_replace_text_after_a_caret_move() {
             ..Key::default()
         };
         assert_eq!(
-            prediction_space_key(&state, &editor.context, space, false, 1, 1100),
+            prediction_key(&state, &editor.context, space, false, 1, 1100),
             (space, false)
         );
         assert_eq!(

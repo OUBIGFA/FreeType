@@ -832,7 +832,7 @@ fn press_space(editor: &Editor, state: &Rc<RefCell<State>>, ms: u32) -> Key {
         ..Key::default()
     };
     let revision = shown_revision(state);
-    let (key, belongs) = prediction_space_key(state, &editor.context, key, false, revision, ms);
+    let (key, belongs) = prediction_key(state, &editor.context, key, false, revision, ms);
     assert!(belongs);
     key
 }

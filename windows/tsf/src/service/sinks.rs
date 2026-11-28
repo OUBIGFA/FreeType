@@ -190,8 +190,8 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         {
             return Ok(true.into());
         }
-        let (key, prediction_space) = pic.as_ref().map_or((key, false), |context| {
-            prediction_space_key(
+        let (key, prediction_owned) = pic.as_ref().map_or((key, false), |context| {
+            prediction_key(
                 &self.state,
                 context,
                 key,
@@ -200,14 +200,14 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                 ms,
             )
         });
-        if prediction_space && key.keysym == 0x20 && self.state.borrow().predict_double_space {
+        if prediction_owned && key.keysym == 0x20 && self.state.borrow().predict_double_space {
             return Ok(true.into());
         }
         // 在决定接管按键前读取上文。若等到 OnKeyDown 才读，CUAS 的空文档会让
         // 自动空格从“接管并上屏”变成“放行”，重命名等输入框会丢掉这一次按键。
         let before = pic
             .as_ref()
-            .filter(|_| !prediction_space)
+            .filter(|_| !prediction_owned)
             .and_then(|context| key_before(&self.state, context));
         let revision = shown_revision(&self.state);
         let frame = call(
@@ -299,7 +299,7 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                 return Ok(true.into());
             }
         }
-        let (key, prediction_space) = prediction_space_key(
+        let (key, prediction_owned) = prediction_key(
             &self.state,
             &context,
             key,
@@ -307,10 +307,10 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
             shown_revision(&self.state),
             ms,
         );
-        if prediction_space && key.keysym == 0x20 && self.state.borrow().predict_double_space {
+        if prediction_owned && key.keysym == 0x20 && self.state.borrow().predict_double_space {
             return Ok(true.into());
         }
-        let before = if prediction_space {
+        let before = if prediction_owned {
             None
         } else {
             preview

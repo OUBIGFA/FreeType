@@ -170,8 +170,9 @@ pub(super) fn prediction_space_timeout(state: &Rc<RefCell<State>>) {
 
 /// Both TSF callbacks use the same candidate page and caret. A fresh text
 /// snapshot can lag behind the commit in a rich editor, so do not send it as
-/// `before` for this space. A verified move still invalidates the prediction.
-pub(super) fn prediction_space_key(
+/// `before` for space or arrow navigation. A verified move still invalidates
+/// the prediction; the server continues to enforce the individual key switches.
+pub(super) fn prediction_key(
     state: &Rc<RefCell<State>>,
     context: &ITfContext,
     key: Key,
@@ -179,7 +180,12 @@ pub(super) fn prediction_space_key(
     revision: u64,
     ms: u32,
 ) -> (Key, bool) {
-    if key.keysym != 0x20 || !plain_key(key) || repeat || revision == 0 {
+    let space = key.keysym == 0x20;
+    if !(space || matches!(key.keysym, keysym::LEFT | keysym::RIGHT))
+        || !plain_key(key)
+        || (space && repeat)
+        || revision == 0
+    {
         return (key, false);
     }
     let (client_id, anchor, pending, double) = {
@@ -223,6 +229,11 @@ pub(super) fn prediction_space_key(
     if result.get() {
         dismiss_prediction(state);
         return (key, false);
+    }
+    // Arrow repeats still navigate. They neither start the space transaction
+    // nor reload a rich editor's delayed/empty surrounding-text snapshot.
+    if !space {
+        return (key, true);
     }
     if second {
         return (
