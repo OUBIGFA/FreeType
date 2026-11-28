@@ -204,6 +204,11 @@ $env:FREETYPE_BUILD_VERSION = $Version
 $env:FREETYPE_BUILD_APP = $AppDir
 
 if (-not $SkipTests) {
+    Step 'Checking source formatting'
+    # 统一格式让并行修改的差异只含实际改动；格式不符时先运行 cargo fmt --all 与 gofmt -w。
+    Invoke-Native cargo @('fmt', '--all', '--check')
+    $Unformatted = @(& gofmt -l $AppDir)
+    if ($LASTEXITCODE -ne 0 -or $Unformatted.Count -gt 0) { throw "gofmt reports unformatted files: $($Unformatted -join ', ')" }
     Step 'Running tests'
     Invoke-Native python @('-X', 'utf8', '-m', 'unittest', 'discover', '-s', 'tests/repository', '-v')
     Invoke-Native python @('-X', 'utf8', '-m', 'unittest', 'discover', '-s', 'tests/data', '-v')

@@ -35,13 +35,13 @@ $env:CARGO_HOME = Join-Path $Toolchains 'cargo'
 $CargoBin = Join-Path $env:CARGO_HOME 'bin'
 New-Item -ItemType Directory -Force -Path $CargoBin | Out-Null
 # Rustup proxies choose the project-local toolchain by their executable name.
-foreach ($Proxy in @('rustup.exe', 'rustc.exe', 'cargo.exe')) {
+foreach ($Proxy in @('rustup.exe', 'rustc.exe', 'cargo.exe', 'rustfmt.exe', 'cargo-fmt.exe')) {
     Copy-Item -LiteralPath $RustupSource -Destination (Join-Path $CargoBin $Proxy) -Force
 }
 $GoBin = Join-Path $LocalGo 'bin'
 $env:PATH = "$CargoBin;$GoBin;$env:PATH"
 Invoke-Native rustup @('set', 'default-host', 'x86_64-pc-windows-msvc')
-Invoke-Native rustup @('toolchain', 'install', $RustVersion, '--profile', 'minimal', '--no-self-update')
+Invoke-Native rustup @('toolchain', 'install', $RustVersion, '--profile', 'minimal', '--component', 'rustfmt', '--no-self-update')
 Invoke-Native rustup @('default', $RustVersion)
 $env:RUSTUP_TOOLCHAIN = $RustVersion
 $env:GOTOOLCHAIN = 'local'

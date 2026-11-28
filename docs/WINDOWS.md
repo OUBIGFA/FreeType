@@ -383,7 +383,7 @@ Rime 的 `import_tables` 使用相对词典名（如 `cn_dicts/base`）；绝对
 
    安装器生成后，脚本核对五个文件的版本资源、NSIS 与所附源码的版本一致性、随包声明及逐文件摘要，再使用一次性测试进程验证复制前的进程结束步骤。全部通过后才更新固定安装器、`.sha256` 和 `build-info.json`。构建记录包含内部构建号、源码树（`git write-tree` 的结果）、工具链版本、组件及数据摘要、白霜和万象修订、词条数、版本资源、声明清单摘要及未解决授权项。mygo 首次打包会下载 NSIS 3.13 到 `%LOCALAPPDATA%\mygo` 并校验摘要。
 
-构建会先检查仓库索引，再运行仓库、数据和应用测试。源码快照只包含已跟踪文件的工作区内容和已暂存的新文件，不自动纳入其他未跟踪资料。构建目录内有未跟踪源码时先报错，需审阅并暂存后重试。构建前后必须得到相同的源码提交和源码树；不一致时不更新固定测试包。Rust 使用锁定依赖构建，Go 不允许在构建中改写模块清单。
+构建会先检查仓库索引和代码格式（`cargo fmt --all --check`、`gofmt -l`），再运行仓库、数据和应用测试。源码快照只包含已跟踪文件的工作区内容和已暂存的新文件，不自动纳入其他未跟踪资料。构建目录内有未跟踪源码时先报错，需审阅并暂存后重试。构建前后必须得到相同的源码提交和源码树；不一致时不更新固定测试包。Rust 使用锁定依赖构建，Go 不允许在构建中改写模块清单。
 
 默认构建仍生成 `output/release/FreeType-0.0.1-Setup.exe`。指定产品版本时，脚本复制已跟踪的应用源码到本次临时目录，只在副本中调整 mygo 配置和 NSIS 版本；Rust 资源与服务状态使用同一个构建版本。候选输出不会覆盖固定测试安装器：
 
@@ -396,6 +396,8 @@ powershell -File windows/build.ps1 -Version 0.1.0
 单独运行测试：
 
 ```powershell
+cargo fmt --all --check
+gofmt -l windowspp
 cargo test -p wowtype-core --no-default-features
 cargo test -p freetype-protocol -p freetype-server -p freetype-tsf
 python -X utf8 tools/check_repo.py
