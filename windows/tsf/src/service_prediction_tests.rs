@@ -2856,9 +2856,11 @@ fn closing_key_before_the_pair_arrow_is_ordinary_input_when_the_switch_is_off() 
             },
             true,
         );
-        sink.OnTestKeyDown(&editor.context, WPARAM(0xDD), LPARAM(0))
+        let _ = sink
+            .OnTestKeyDown(&editor.context, WPARAM(0xDD), LPARAM(0))
             .unwrap();
-        sink.OnKeyDown(&editor.context, WPARAM(0xDD), LPARAM(0))
+        let _ = sink
+            .OnKeyDown(&editor.context, WPARAM(0xDD), LPARAM(0))
             .unwrap();
         assert!(
             state.borrow().caret_move.is_some(),

@@ -22,13 +22,13 @@
 use crate::datetime::LocalTime;
 use crate::Engine;
 
+mod commit;
 mod compose;
 mod keys;
 mod paging;
 mod sentence;
 #[path = "session_trace.rs"]
 mod trace;
-mod commit;
 
 /// 平台无关的键码：XKB keysym 的子集（fcitx5 直接用，macOS 外壳把 kVK_* 翻成这个）。
 pub mod keysym {
