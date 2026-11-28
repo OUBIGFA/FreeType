@@ -258,6 +258,9 @@ func (a *app) makeTray() {
 		log.Println("tray:", err)
 		return
 	}
+	// 左键单击或双击托盘图标都直接打开设置；窗口已打开时只切到前台，不重复创建。
+	// 右键仍弹出菜单。mygo 在 Windows 上每次左键松开都会回调一次。
+	tray.OnClick(a.openSettings)
 	a.tray = tray
 }
 
