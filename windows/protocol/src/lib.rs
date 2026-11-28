@@ -387,6 +387,8 @@ pub struct Config {
     pub auto_pair: bool,
     /// 习惯连打左右两半时，补全后紧接着按下的右半标点不再重复插入（默认关）。
     pub auto_pair_absorb_closing: bool,
+    /// 每七天检查并下载词库更新包（默认关）；下载校验后在下次服务启动时生效。
+    pub dictionary_auto_update: bool,
     /// 中英文之间自动加空格（总开关，默认开）；字母、数字两种分别控制。
     pub autospace: bool,
     pub autospace_letters: bool,
@@ -523,6 +525,7 @@ impl Default for Config {
             corner_quotes: false,
             auto_pair: true,
             auto_pair_absorb_closing: false,
+            dictionary_auto_update: false,
             autospace: true,
             autospace_letters: true,
             autospace_digits: true,
@@ -1022,6 +1025,22 @@ pub enum Request {
     RefreshEnhancement {
         revision: u64,
     },
+    /// 词库更新包的本机状态（设置程序用）。
+    DictionaryUpdateStatus,
+    /// 设置程序已把校验过的更新包解到 `data-updates/<version>`：登记为下次启动生效。
+    /// `automatic` 记下是否由自动更新登记，关闭自动更新时只撤销这类安排。
+    StageDictionaryUpdate {
+        version: String,
+        #[serde(default)]
+        automatic: bool,
+    },
+    /// 下次启动换回上一份词库（上一份为空表示随安装包的词库）。
+    RestorePreviousDictionary,
+    /// 撤销尚未生效的更新；`automatic_only` 时只撤销自动登记的。
+    CancelPendingDictionary {
+        #[serde(default)]
+        automatic_only: bool,
+    },
     /// 现在开着窗口的程序（设置里添加指定软件时挑）。
     ListApps,
     GetConfig,
@@ -1401,6 +1420,8 @@ pub struct BrandIcon {
 pub struct Response {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enhancement: Option<EnhancementStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dictionary_update: Option<DictionaryUpdateStatus>,
     pub ok: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub candidate_diagnostics: Option<CandidateDiagnostics>,
@@ -1438,6 +1459,26 @@ pub struct Response {
     pub apps: Option<Vec<AppWindow>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub typing_stats: Option<std::collections::BTreeMap<String, TypingDay>>,
+}
+
+/// 词库更新包状态。版本为空串表示随安装包的词库。
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DictionaryUpdateStatus {
+    /// 更新包所在目录（`%LOCALAPPDATA%\FreeType\data-updates`）；设置程序解包到这里。
+    pub directory: String,
+    /// 本次服务启动实际载入的词库版本。
+    pub active: String,
+    /// 随安装包词库的数据版本。
+    pub bundled: String,
+    pub current: String,
+    pub previous: String,
+    /// 下次服务启动时生效的版本。
+    pub pending: String,
+    pub pending_automatic: bool,
+    /// 最近一次未能生效的版本及原因。
+    pub failed_version: String,
+    pub failed_reason: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

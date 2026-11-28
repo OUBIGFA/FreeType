@@ -31,8 +31,10 @@ type app struct {
 	settings  *settings
 	tray      *mygo.Tray
 	updates   *updates
-	syncer    *autoSync
-	syncError string
+	// 词库更新包：检查、下载和校验在设置程序里进行，服务进程下次启动时切换。
+	dataUpdates *dataUpdates
+	syncer      *autoSync
+	syncError   string
 	// 图像只在外观改变时载入；窗口关闭后仍保留，供托盘及新窗口继续使用。
 	iconConfig         Config
 	iconLogo, iconTray []byte
@@ -111,6 +113,10 @@ func (a *app) openSettings() {
 		}
 	} else {
 		s.updateStatus.Message = "更新检查暂不可用，请重启 FreeType 后重试"
+	}
+	if a.dataUpdates != nil {
+		s.dataUpdates, s.dataUpdate = a.dataUpdates, a.dataUpdates.snapshot()
+		go func() { _ = a.dataUpdates.refresh() }()
 	}
 	s.openTable = func(title string) string {
 		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
@@ -294,6 +300,21 @@ func main() {
 		} else {
 			log.Println("update data directory:", err)
 		}
+		dataTransport := netproxy.Transport().Clone()
+		dataTransport.ResponseHeaderTimeout = 30 * time.Second
+		if manager, err := newDataUpdates(a.client, &http.Client{Transport: dataTransport}, ""); err != nil {
+			log.Println("initialize dictionary updates:", err)
+		} else {
+			a.dataUpdates = manager
+			manager.changed = func(state dataUpdateState) {
+				mygo.RunOnMain(func() {
+					if a.settings != nil && a.win != nil {
+						settings := a.settings
+						a.win.Update(func() { settings.dataUpdate = state })
+					}
+				})
+			}
+		}
 		go func() {
 			err := ensureServer(a.client, a.resources, 60*time.Second)
 			// 窗口可以先显示；载入结束后重新读状态，修正首次连接失败或未就绪的画面。
@@ -343,6 +364,9 @@ func main() {
 								if a.updates != nil {
 									a.updates.setAutomatic(response.Config.AutoUpdate)
 								}
+								if a.dataUpdates != nil {
+									a.dataUpdates.setAutomatic(response.Config.DictionaryAutoUpdate)
+								}
 							}
 						})
 					}
@@ -372,6 +396,10 @@ func main() {
 				}
 				a.showTray(loadedConfig.TrayIcon)
 			})
+			if a.dataUpdates != nil {
+				_ = a.dataUpdates.refresh()
+				a.dataUpdates.setAutomatic(loadedConfig.DictionaryAutoUpdate)
+			}
 			if a.updates == nil {
 				return
 			}
@@ -399,6 +427,9 @@ func main() {
 	}
 	if a.updates != nil {
 		a.updates.close()
+	}
+	if a.dataUpdates != nil {
+		a.dataUpdates.close()
 	}
 	if a.syncer != nil {
 		a.syncer.close()

@@ -74,6 +74,9 @@ func (s *settings) resetSettings() {
 			if s.onAutomaticUpdate != nil {
 				s.onAutomaticUpdate(s.config.AutoUpdate)
 			}
+			if s.dataUpdates != nil {
+				s.dataUpdates.setAutomatic(s.config.DictionaryAutoUpdate)
+			}
 		}
 	})
 }

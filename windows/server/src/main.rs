@@ -24,7 +24,8 @@ mod app {
 
     use freetype_protocol::{pipe_name, Command, Request};
     use freetype_server::desktop::{self, BarEvent};
-    use freetype_server::host::{load_engine, Host, LoadedEngine};
+    use freetype_server::dictionary_updates;
+    use freetype_server::host::{load_engine_from, Host, LoadedEngine};
     use freetype_server::pipe::{self, Message};
     use freetype_server::store::Store;
     use freetype_server::{data_dir, instance_suffix, local_dir, log, resource_dir, setup};
@@ -48,7 +49,15 @@ mod app {
         std::thread::spawn(move || {
             freetype_server::background_thread();
             let started = std::time::Instant::now();
-            let result = load_engine(&resources, &store_dir, &lexicon);
+            // 词库更新包只在服务启动时切换；之后换主词库重新载入沿用启动时选定的目录。
+            let result = if generation == 0 {
+                dictionary_updates::activate(&dictionary_updates::root(), &resources, |dir| {
+                    load_engine_from(&resources, dir, &store_dir, &lexicon)
+                })
+            } else {
+                let dictionary = dictionary_updates::active_dir(&resources);
+                load_engine_from(&resources, &dictionary, &store_dir, &lexicon)
+            };
             match &result {
                 Ok(loaded) => log(&format!(
                     "词库载入完成（{}），用时 {} ms",
@@ -110,6 +119,22 @@ mod app {
                     return 1;
                 }
                 return 0;
+            }
+            Some("--check-dictionary") => {
+                let result = match args.as_slice() {
+                    [_, dir] => dictionary_updates::check_built_package(std::path::Path::new(dir)),
+                    _ => Err("需要词库更新包目录".into()),
+                };
+                return match result {
+                    Ok(version) => {
+                        println!("词库更新包 {version} 检查通过");
+                        0
+                    }
+                    Err(error) => {
+                        eprintln!("{error}");
+                        1
+                    }
+                };
             }
             Some("--serve") => return serve(),
             Some("--set-brand-icon") => {

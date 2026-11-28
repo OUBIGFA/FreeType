@@ -42,6 +42,8 @@ fn local_config(name: &str) -> bool {
             | "app_presets"
             | "app_preset_rules"
             | "vim_mode_apps"
+            // 每台电脑自行决定是否下载词库更新包，不随同步打开别的设备的下载。
+            | "dictionary_auto_update"
     )
 }
 fn error(error: impl std::fmt::Display) -> String {

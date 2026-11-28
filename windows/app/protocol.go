@@ -74,6 +74,7 @@ type Config struct {
 	CornerQuotes         bool        `json:"corner_quotes"`
 	AutoPair             bool        `json:"auto_pair"`
 	AutoPairAbsorb       bool        `json:"auto_pair_absorb_closing"`
+	DictionaryAutoUpdate bool        `json:"dictionary_auto_update"`
 	Autospace            bool        `json:"autospace"`
 	AutospaceLetters     bool        `json:"autospace_letters"`
 	AutospaceDigits      bool        `json:"autospace_digits"`
@@ -302,25 +303,26 @@ type typingDay struct {
 
 // Response 是一条应答。
 type Response struct {
-	Enhancement          *EnhancementStatus    `json:"enhancement,omitempty"`
-	CandidateDiagnostics *CandidateDiagnostics `json:"candidate_diagnostics,omitempty"`
-	OK                   bool                  `json:"ok"`
-	ModifiedUnixMS       int64                 `json:"modified_unix_ms,omitempty"`
-	Error                string                `json:"error,omitempty"`
-	Status               *Status               `json:"status,omitempty"`
-	Config               *Config               `json:"config,omitempty"`
-	QuickPhrases         []QuickPhrase         `json:"quick_phrases,omitempty"`
-	CommonPhrases        []string              `json:"common_phrases,omitempty"`
-	Dictionaries         []Dictionary          `json:"dictionaries,omitempty"`
-	DictionaryPage       *DictionaryPage       `json:"dictionary_page,omitempty"`
-	SyncMerge            *SyncMergePreview     `json:"sync_merge,omitempty"`
-	SyncFormat           int                   `json:"sync_format,omitempty"`
-	UserWords            []UserWord            `json:"user_words,omitempty"`
-	Report               *ImportReport         `json:"report,omitempty"`
-	Frame                *Frame                `json:"frame,omitempty"`
-	Apps                 []AppWindow           `json:"apps,omitempty"`
-	TypingStats          map[string]typingDay  `json:"typing_stats,omitempty"`
-	ShuangpinExample     string                `json:"shuangpin_example,omitempty"`
+	Enhancement          *EnhancementStatus      `json:"enhancement,omitempty"`
+	DictionaryUpdate     *DictionaryUpdateStatus `json:"dictionary_update,omitempty"`
+	CandidateDiagnostics *CandidateDiagnostics   `json:"candidate_diagnostics,omitempty"`
+	OK                   bool                    `json:"ok"`
+	ModifiedUnixMS       int64                   `json:"modified_unix_ms,omitempty"`
+	Error                string                  `json:"error,omitempty"`
+	Status               *Status                 `json:"status,omitempty"`
+	Config               *Config                 `json:"config,omitempty"`
+	QuickPhrases         []QuickPhrase           `json:"quick_phrases,omitempty"`
+	CommonPhrases        []string                `json:"common_phrases,omitempty"`
+	Dictionaries         []Dictionary            `json:"dictionaries,omitempty"`
+	DictionaryPage       *DictionaryPage         `json:"dictionary_page,omitempty"`
+	SyncMerge            *SyncMergePreview       `json:"sync_merge,omitempty"`
+	SyncFormat           int                     `json:"sync_format,omitempty"`
+	UserWords            []UserWord              `json:"user_words,omitempty"`
+	Report               *ImportReport           `json:"report,omitempty"`
+	Frame                *Frame                  `json:"frame,omitempty"`
+	Apps                 []AppWindow             `json:"apps,omitempty"`
+	TypingStats          map[string]typingDay    `json:"typing_stats,omitempty"`
+	ShuangpinExample     string                  `json:"shuangpin_example,omitempty"`
 }
 
 type CandidateDiagnostics struct {

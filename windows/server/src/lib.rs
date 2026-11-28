@@ -5,6 +5,8 @@ mod candidate_diagnostics;
 pub mod dictfmt;
 mod dictionary_catalog;
 #[cfg(windows)]
+pub mod dictionary_updates;
+#[cfg(windows)]
 mod enhancement;
 pub mod host;
 pub mod input;

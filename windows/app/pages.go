@@ -1110,6 +1110,7 @@ func (s *settings) dictsPage(c *ui.Context) {
 		hint(c, s.status.LexiconWarning)
 	}
 	hint(c, "默认词库包含白霜、万象补充和项目热词；自定义主词库每行填写拼音、词语和词频，用制表符分隔；文件无法载入时使用默认词库；其他格式请使用下方的导入词库")
+	s.dictionaryUpdateSection(c)
 	section(c, "导入词库", func() {
 		s.settingRow(c, "dicts/导入词库", func() {
 			if ui.PrimaryButton(c, "导入词库").Label("导入词库文件").Clicked() {

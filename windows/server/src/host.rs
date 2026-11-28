@@ -192,6 +192,17 @@ pub fn load_engine(
     store_dir: &Path,
     configured: &str,
 ) -> Result<LoadedEngine, String> {
+    load_engine_from(resources, resources, store_dir, configured)
+}
+
+/// 同 [`load_engine`]，但默认主词库和英文词表从 `dictionary` 读取（词库更新包）；
+/// 模型、简繁映射和查词数据仍从随安装包的 `resources` 读取。
+pub fn load_engine_from(
+    resources: &Path,
+    dictionary: &Path,
+    store_dir: &Path,
+    configured: &str,
+) -> Result<LoadedEngine, String> {
     // 开机时各项读盘互相争抢，分段用时写进日志，便于判断哪一步慢。
     let mut stages = Vec::new();
     let mut started = std::time::Instant::now();
@@ -205,8 +216,9 @@ pub fn load_engine(
     let (lexicon, path): (Arc<dyn wowtype_core::Lexicon>, PathBuf) = if configured.is_empty()
         || custom == resources.join("lexicon.tsv")
         || custom == resources.join("lexicon.ftd")
+        || custom == dictionary.join("lexicon.ftd")
     {
-        default_lexicon(resources)?
+        default_lexicon(dictionary)?
     } else {
         match wowtype_core::MemoryLexicon::from_tsv_path_cached(custom) {
             Ok(lexicon) => (Arc::new(lexicon), custom.to_owned()),
@@ -216,7 +228,7 @@ pub fn load_engine(
                     .is_none_or(|cause| cause.kind() == std::io::ErrorKind::InvalidData);
                 let reason = format!("自定义词库载入失败（{configured}）：{error:#}");
                 let default =
-                    default_lexicon(resources).map_err(|error| format!("{reason}；{error}"))?;
+                    default_lexicon(dictionary).map_err(|error| format!("{reason}；{error}"))?;
                 warning = Some(format!("已使用默认词库；{reason}"));
                 default
             }
@@ -233,7 +245,7 @@ pub fn load_engine(
     // 模糊音和默认开启的纠错兜底都使用此索引。必须在后台载入阶段建好，
     // 否则 ready 后的首次按键仍会遍历整份词库，可能超过 TSF 的 1.5 秒等待上限。
     engine.prepare_fuzzy();
-    let _ = engine.load_english(resources.join("english.txt"));
+    let _ = engine.load_english(dictionary.join("english.txt"));
     let _ = engine.load_conversion(resources.join("s2t.tsv"));
     if resources.join("INPUT-TOOLS.json").is_file() {
         engine
@@ -1531,10 +1543,23 @@ impl Host {
         }
     }
 
+    /// 词库更新的操作只读写一个小记录文件；校验大文件在设置程序和启动载入线程里做。
+    fn dictionary_update_response(&self, result: Result<(), String>) -> Response {
+        let status = crate::dictionary_updates::status(
+            &crate::dictionary_updates::root(),
+            &crate::resource_dir(),
+        );
+        Response {
+            dictionary_update: Some(status),
+            ..result.map_or_else(Response::error, |()| Response::ok())
+        }
+    }
+
     /// 给只有词语的词条注音：读正在用的词库文件，只收要用到的词和字。
     fn reading(&self, words: &[String]) -> Box<dyn dictfmt::Reading> {
         let path = Path::new(&self.lexicon_in_use);
-        let source = if path == crate::resource_dir().join("lexicon.ftd") {
+        // 默认词库只有编译索引（随安装包或更新包）；注音读同名的文本词库（若存在）。
+        let source = if path.extension().is_some_and(|ext| ext == "ftd") {
             path.with_extension("tsv")
         } else {
             path.into()
@@ -2548,6 +2573,24 @@ impl Host {
                 ..Response::ok()
             },
             Request::SetNeuralModel { path } => self.change_neural_model(path),
+            Request::DictionaryUpdateStatus => self.dictionary_update_response(Ok(())),
+            Request::StageDictionaryUpdate { version, automatic } => {
+                let root = crate::dictionary_updates::root();
+                let result = crate::dictionary_updates::stage(&root, &version, automatic);
+                self.dictionary_update_response(result)
+            }
+            Request::RestorePreviousDictionary => {
+                let result =
+                    crate::dictionary_updates::restore_previous(&crate::dictionary_updates::root());
+                self.dictionary_update_response(result)
+            }
+            Request::CancelPendingDictionary { automatic_only } => {
+                let result = crate::dictionary_updates::cancel_pending(
+                    &crate::dictionary_updates::root(),
+                    automatic_only,
+                );
+                self.dictionary_update_response(result)
+            }
             Request::EnhancementStatus => Response {
                 enhancement: Some(self.enhancement.status()),
                 ..Response::ok()

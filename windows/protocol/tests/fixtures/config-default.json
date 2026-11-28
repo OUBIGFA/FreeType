@@ -34,6 +34,7 @@
   "corner_quotes": false,
   "date_time": true,
   "default_mode": "chinese",
+  "dictionary_auto_update": false,
   "digit_halfwidth_punct": true,
   "digit_punct_exceptions": true,
   "digit_punct_fullwidth": 1,

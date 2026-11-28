@@ -60,6 +60,9 @@ type settings struct {
 	onUpdateNow       func()
 	onAutomaticUpdate func(bool)
 	updateStatus      updateState
+	// 词库更新包：管理器做网络与校验，视图只显示状态并提交操作。
+	dataUpdates *dataUpdates
+	dataUpdate  dataUpdateState
 
 	page                         string
 	loaded                       bool
@@ -294,6 +297,9 @@ func (s *settings) saveConfig() {
 			s.updateBrandIcon()
 			if s.onAutomaticUpdate != nil {
 				s.onAutomaticUpdate(s.config.AutoUpdate)
+			}
+			if s.dataUpdates != nil {
+				s.dataUpdates.setAutomatic(s.config.DictionaryAutoUpdate)
 			}
 			s.wordsLoaded = false
 		}
