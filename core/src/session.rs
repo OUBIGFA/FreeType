@@ -1332,11 +1332,25 @@ impl<'e> Session<'e> {
         let Some((engine,key))=self.engine.zip(self.enhancement_key.as_ref())else{return false;};
         let Some(answer)=engine.enhancement_backend().and_then(|b|b.answer(key))else{return false;};
         self.enhancement_key=None;
-        let Some(first)=self.candidates.first_mut()else{return false;};
+        let Some(first)=self.candidates.first()else{return false;};
+        // 用户固定的首选优先于模型，不能在异步刷新时改掉明确排位。
+        if first.pin_position > 0 { return false; }
         if first.text==answer.text&&first.words==answer.words{return false;}
         let previous:Vec<_>=first.text.chars().collect();
-        first.text=engine.shown_text(&answer.text);first.commit=first.text.clone();first.pinyin=answer.pinyin;
-        first.words=answer.words.into_iter().map(|(w,p)|(engine.shown_text(&w),p)).collect();first.pin_key=None;
+        let text=engine.shown_text(&answer.text);
+        // 模型只能提升已有建议或加入新建议；原首选仍必须可选。按消费长度区分
+        // 完整候选与同文本句首候选，避免替换上屏语义；复用已有词的读音与固定排位资格。
+        let existing=self.candidates.iter().position(|c| c.text==text && c.consumed==self.input.len()
+            && c.kind==CandidateKind::Word && !c.long_completion);
+        let mut suggestion=existing.map(|i|self.candidates.remove(i)).unwrap_or_else(|| Candidate {
+            text:text.clone(),commit:text,consumed:self.input.len(),kind:CandidateKind::Word,
+            ..Candidate::default()
+        });
+        suggestion.pinyin=answer.pinyin;
+        suggestion.words=answer.words.into_iter().map(|(w,p)|(engine.shown_text(&w),p)).collect();
+        self.candidates.insert(0,suggestion);
+        engine.apply_pins(&self.input,&mut self.candidates);
+        let first=&self.candidates[0];
         self.sentence.accept_model(&self.input,&first.text,&first.pinyin,&first.words,engine);
         let mut at=0;
         for b in &mut self.sentence.view.blocks {

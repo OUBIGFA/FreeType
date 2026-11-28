@@ -211,6 +211,32 @@ func TestCandidatePreviewCentersWhenItFits(test *testing.T) {
 	}
 }
 
+func TestCandidatePreviewCoversTopEdgeWhileSettingsScroll(test *testing.T) {
+	state, _ := newTestSettings()
+	state.page = "candidates"
+	state.config.SentenceEditor = true
+	view := ui.NewTester(state.view, 1100, 900)
+	for _, offset := range []float32{160, 300, 480} {
+		state.pageScroll.Y = offset
+		view.Frame()
+		view.Frame()
+		saveUIFrame(test, fmt.Sprintf("preview-top-%d", int(offset)), view)
+		image := view.Image()
+		background := image.At(250, 33)
+		var exposed int
+		for y := 32; y < 36; y++ {
+			for x := 280; x < 1050; x++ {
+				if image.At(x, y) != background {
+					exposed++
+				}
+			}
+		}
+		if exposed != 0 {
+			test.Errorf("滚动 %.0f 后顶部空隙露出 %d 个下层像素", offset, exposed)
+		}
+	}
+}
+
 func TestCandidatePreviewTracksEditorPositionAndVisibleOptions(test *testing.T) {
 	state, _ := newTestSettings()
 	state.page = "candidates"

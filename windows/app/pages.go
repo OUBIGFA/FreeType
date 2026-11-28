@@ -696,7 +696,8 @@ func (s *settings) candidatePreview(c *ui.Context) {
 	}
 	all := []string{"你好", "拟好", "你", "泥", "妮", "逆", "呢", "倪", "腻", "溺"}
 	words := all[:min(max(s.config.PageSize, 1), len(all))]
-	ui.Column(c).FillWidth().Gap(8).Margin(4, 0, 0, 0).Padding(0, 0, 8, 0).Background(p.page).Sticky().Top(0).Children(func() {
+	// 顶部留白放在有背景的内边距中，吸顶后不能让滚动内容透过外边距。
+	ui.Column(c).FillWidth().Gap(8).Padding(4, 0, 8, 0).Background(p.page).Sticky().Top(0).Children(func() {
 		ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(8).Children(func() {
 			ui.Text(c, "预览").FontSize(textSize(c, 13)).FontWeight(500).TextColor(p.muted).Grow(1)
 			s.logo(c, 24)

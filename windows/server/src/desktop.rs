@@ -594,9 +594,53 @@ impl Drop for BarIcon {
 }
 thread_local! { static BRAND: std::cell::RefCell<Option<BarIcon>> = const { std::cell::RefCell::new(None) }; }
 
+/// 先按最终物理像素进行面积采样，再生成同尺寸图标，避免系统直接缩小大 PNG 时产生锯齿。
+fn scaled_brand_icon(bytes: &[u8], size: i32) -> windows::core::Result<windows::Win32::UI::WindowsAndMessaging::HICON> {
+    use windows::Win32::Graphics::Imaging::*;
+    use windows::Win32::Graphics::Gdi::{CreateBitmap, CreateDIBSection, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS};
+    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED};
+    use windows::Win32::UI::WindowsAndMessaging::{CreateIconIndirect, ICONINFO};
+    struct Apartment;
+    impl Drop for Apartment { fn drop(&mut self) { unsafe { CoUninitialize(); } } }
+    unsafe {
+        CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
+        let _apartment = Apartment;
+        let factory: IWICImagingFactory = CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
+        let stream = factory.CreateStream()?;
+        stream.InitializeFromMemory(bytes)?;
+        let decoder = factory.CreateDecoderFromStream(&stream, std::ptr::null(), WICDecodeMetadataCacheOnLoad)?;
+        let frame = decoder.GetFrame(0)?;
+        // 先预乘透明度再缩放，透明边缘不会混入原图中不可见的颜色。
+        let source = factory.CreateFormatConverter()?;
+        source.Initialize(&frame, &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeCustom)?;
+        let scaler = factory.CreateBitmapScaler()?;
+        scaler.Initialize(&source, size as u32, size as u32, WICBitmapInterpolationModeFant)?;
+        // 缩放用预乘像素，交给 HICON 前转回独立透明度；否则原生绘制会再次
+        // 乘 alpha，让半透明的粉色或白色轮廓变成灰黑边。
+        let output = factory.CreateFormatConverter()?;
+        output.Initialize(&scaler, &GUID_WICPixelFormat32bppBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeCustom)?;
+        let info = BITMAPINFO { bmiHeader: BITMAPINFOHEADER { biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: size, biHeight: -size, biPlanes: 1, biBitCount: 32, biCompression: BI_RGB.0, ..Default::default() }, ..Default::default() };
+        let mut bits = std::ptr::null_mut();
+        let bitmap = CreateDIBSection(None, &info, DIB_RGB_COLORS, &mut bits, None, 0)?;
+        let result = (|| {
+            let pixels = std::slice::from_raw_parts_mut(bits as *mut u8, (size * size * 4) as usize);
+            output.CopyPixels(std::ptr::null(), (size * 4) as u32, pixels)?;
+            let mask_bits = vec![0u8; ((size as usize + 15) / 16) * 2 * size as usize];
+            let mask = CreateBitmap(size, size, 1, 1, Some(mask_bits.as_ptr().cast()));
+            if mask.0.is_null() { return Err(windows::core::Error::from_thread()); }
+            let icon = CreateIconIndirect(&ICONINFO { fIcon: true.into(), hbmMask: mask, hbmColor: bitmap, ..Default::default() });
+            let _ = DeleteObject(mask.into());
+            icon
+        })();
+        let _ = DeleteObject(bitmap.into());
+        result
+    }
+}
+
 // 图像解码只在桌面线程的品牌或 DPI 变化时执行，不进入按键线程。
 fn draw_brand(hdc: windows::Win32::Graphics::Gdi::HDC, area: RECT, state: &BarState, size: i32) {
-    use windows::Win32::UI::WindowsAndMessaging::{CreateIconFromResourceEx, DrawIconEx, DI_NORMAL, IMAGE_FLAGS};
+    use windows::Win32::UI::WindowsAndMessaging::{DrawIconEx, DI_NORMAL};
     BRAND.with(|cache| {
         let mut cache = cache.borrow_mut();
         if cache.as_ref().is_none_or(|c| c.appearance != state.brand_icon || c.custom != state.custom_brand_icon || c.size != size) {
@@ -620,7 +664,7 @@ fn draw_brand(hdc: windows::Win32::Graphics::Gdi::HDC, area: RECT, state: &BarSt
                 }
                 _ => include_bytes!("../../assets/freetype-logo.png"),
             };
-            match unsafe { CreateIconFromResourceEx(bytes, true, 0x0003_0000, size, size, IMAGE_FLAGS(0)) } {
+            match scaled_brand_icon(bytes, size) {
                 Ok(icon) => *cache = Some(BarIcon { appearance: state.brand_icon.clone(), custom: state.custom_brand_icon.clone(), size, icon }),
                 Err(error) => { crate::log(&format!("状态栏品牌图标创建失败：{error}")); return; }
             }
