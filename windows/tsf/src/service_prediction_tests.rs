@@ -2744,3 +2744,96 @@ fn prediction_escape_owns_down_repeat_and_release_but_not_the_next_press() {
         );
     });
 }
+
+/// Issue #13：习惯连打左右两半的用户，在补全的左移键送达前就按下右半标点。
+/// 这时光标还在补全的右标点后面，右键只应撤销待发的左移、不再插入第二个右标点。
+#[test]
+fn closing_key_before_the_pair_arrow_lands_keeps_a_single_closing_mark() {
+    in_editor(|editor, state, sink| unsafe {
+        use_test_host(&state);
+        apply(
+            &state,
+            Some(&editor.context),
+            Frame {
+                commit: Some("【】".into()),
+                caret_back: 1,
+                pair_enabled: true,
+                ..Frame::default()
+            },
+            true,
+        );
+        assert!(state.borrow().caret_move.is_some());
+        assert_eq!(
+            editor.store.selection.get().acpStart,
+            2,
+            "Left not delivered yet"
+        );
+        let tested = sink
+            .OnTestKeyDown(&editor.context, WPARAM(0xDD), LPARAM(0))
+            .unwrap()
+            .as_bool();
+        let handled = sink
+            .OnKeyDown(&editor.context, WPARAM(0xDD), LPARAM(0))
+            .unwrap()
+            .as_bool();
+        assert!(
+            tested && handled,
+            "the closing key must not reach the application"
+        );
+        assert!(
+            state.borrow().caret_move.is_none(),
+            "the pending Left must be dropped"
+        );
+        let mut message = windows::Win32::UI::WindowsAndMessaging::MSG::default();
+        while windows::Win32::UI::WindowsAndMessaging::PeekMessageW(
+            &mut message,
+            None,
+            0,
+            0,
+            windows::Win32::UI::WindowsAndMessaging::PM_REMOVE,
+        )
+        .as_bool()
+        {
+            windows::Win32::UI::WindowsAndMessaging::DispatchMessageW(&message);
+        }
+        assert_eq!(
+            String::from_utf16_lossy(&editor.store.text.borrow()),
+            "【】"
+        );
+        assert_eq!(editor.store.selection.get().acpStart, 2);
+    });
+}
+
+/// 左移键已送达、光标在两半之间时，按右半标点只跳过已有的右标点。
+#[test]
+fn closing_key_inside_a_pair_skips_the_existing_closing_mark() {
+    in_editor(|editor, state, sink| unsafe {
+        use_test_host(&state);
+        apply(
+            &state,
+            Some(&editor.context),
+            Frame {
+                commit: Some("【】".into()),
+                caret_back: 1,
+                pair_enabled: true,
+                ..Frame::default()
+            },
+            true,
+        );
+        editor.store.move_caret(1);
+        pair::finish(&state, true);
+        assert!(sink
+            .OnTestKeyDown(&editor.context, WPARAM(0xDD), LPARAM(0))
+            .unwrap()
+            .as_bool());
+        assert!(sink
+            .OnKeyDown(&editor.context, WPARAM(0xDD), LPARAM(0))
+            .unwrap()
+            .as_bool());
+        assert_eq!(
+            String::from_utf16_lossy(&editor.store.text.borrow()),
+            "【】"
+        );
+        assert_eq!(editor.store.selection.get().acpStart, 2);
+    });
+}

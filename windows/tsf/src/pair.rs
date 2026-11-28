@@ -106,6 +106,16 @@ impl Pair {
             }
     }
 
+    /// 补全的左移键还没发出时，光标仍紧跟在补全的右标点后面。
+    pub fn caret_after_closing(&self, context: &ITfContext, ec: u32, caret: &ITfRange) -> bool {
+        same_object(&self.context, context)
+            && self.intact(ec)
+            && unsafe {
+                caret.IsEmpty(ec).is_ok_and(|empty| empty.as_bool())
+                    && caret.CompareStart(ec, &self.right, TF_ANCHOR_END) == Ok(0)
+            }
+    }
+
     pub fn apply(&self, context: &ITfContext, ec: u32, action: PairEdit) -> Result<bool> {
         let Some(caret) = selection_range(context, ec) else {
             return Ok(false);
@@ -317,6 +327,11 @@ pub(super) struct Delivery {
 }
 
 impl Delivery {
+    /// 还没发出左移键，也没有排队等它的文字。
+    pub fn untouched(&self) -> bool {
+        !self.sent && self.frames.is_empty()
+    }
+
     pub fn defer(&mut self, frame: &freetype_protocol::Frame) -> bool {
         if frame.commit.is_none() && frame.preedit.is_empty() && self.frames.is_empty() {
             return false;

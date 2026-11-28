@@ -1372,17 +1372,23 @@ fn verified_pair_key(
     state: &Rc<RefCell<State>>,
     context: Option<&ITfContext>,
     key: Key,
-) -> Option<PairEdit> {
+) -> Option<(PairEdit, bool)> {
     let context = context?;
-    let (action, composition, client_id) = {
+    let (action, composition, client_id, arrow_pending) = {
         let s = state.borrow();
         if !s.pair_enabled || (s.busy && s.composition.is_none()) {
             return None;
         }
         let action = s.pairs.last()?.for_key(key, s.composition.is_some())?;
-        (action, s.composition.clone(), s.client_id)
+        // 左右两半都要按 Shift（（）、《》）时，用户常一直按着 Shift 连打两半；
+        // 补全的左移键要等 Shift 松开才发，右半标点会先到。
+        let arrow_pending = action == PairEdit::Skip
+            && s.composition.is_none()
+            && s.caret_move.is_some()
+            && s.pair_delivery.untouched();
+        (action, s.composition.clone(), s.client_id, arrow_pending)
     };
-    let accepted = Rc::new(std::cell::Cell::new(false));
+    let accepted = Rc::new(std::cell::Cell::new(None));
     let (out, state, doc) = (accepted.clone(), state.clone(), context.clone());
     edit_with(context, client_id, TF_ES_SYNC | TF_ES_READ, move |ec| {
         let caret = if let Some(comp) = composition {
@@ -1399,11 +1405,17 @@ fn verified_pair_key(
         };
         let state = state.borrow();
         if let (Some(caret), Some(last)) = (caret, state.pairs.last()) {
-            out.set(last.permits(&doc, ec, &caret, action));
+            if last.permits(&doc, ec, &caret, action) {
+                out.set(Some(false));
+            } else if arrow_pending && last.caret_after_closing(&doc, ec, &caret) {
+                // 光标已经在右标点后面，正是跳过后的位置：吞掉这个右键，
+                // 由 OnKeyDown 撤销待发的左移键，不再插入第二个右标点（Issue #13）。
+                out.set(Some(true));
+            }
         }
         Ok(())
     });
-    accepted.get().then_some(action)
+    accepted.get().map(|cancel_arrow| (action, cancel_arrow))
 }
 
 fn plain_key(key: Key) -> bool {
@@ -2564,7 +2576,12 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         if prediction_escape_down(&self.state, Some(&context), key, repeat) {
             return Ok(true.into());
         }
-        if let Some(action) = verified_pair_key(&self.state, Some(&context), key) {
+        if let Some((action, cancel_arrow)) = verified_pair_key(&self.state, Some(&context), key) {
+            if cancel_arrow {
+                let mut s = self.state.borrow_mut();
+                s.caret_move = None;
+                s.pair_delivery = Default::default();
+            }
             if let Some(mut frame) = call(&self.state, &Request::ClosePair) {
                 frame.pair_edit = Some(action);
                 apply(&self.state, Some(&context), frame, true);
