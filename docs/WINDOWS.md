@@ -16,7 +16,7 @@ flowchart LR
 - **输入法 DLL**（`windows/tsf`）：TSF 文本服务。把按键翻成键码交给服务进程，按应答组字、上屏，在光标下方画候选窗，在任务栏显示「中 / 英」按钮。服务进程连不上或 1.5 秒没应答时不吃键，应用照常收到按键，并记进日志 `tsf.log`；连接、握手、断线重连和分块应答共用这一次期限。
 - **服务进程**（`windows/server`）：只有一个，常驻引擎（加载词库需要 1.5–7 秒、几百 MB 内存，不能放进每个应用）。每条管道连接一个输入会话。它还画桌面上的悬浮状态栏、在设置打开时记录剪贴板历史。处理请求时出错会写日志、重置那一个输入框，服务进程不退出。按键由引擎线程处理；同步快照的比较、合并、写文件和同步记录登记放在单独的后台任务线程，引擎线程只做取快照和应用合并结果。服务进程优先级高于普通应用一级，并退出 Windows 的节能降速；写盘和后台任务线程降回普通应用水平。
 - **托盘与设置**（`windows/app`）：mygo v0.10.0 原生界面。开机以 `--background` 启动，只放托盘图标并确保服务进程在跑。
-- **协议**（`windows/protocol`）：管道消息定义，DLL、服务进程共用；设置程序在 `windows/app/protocol.go` 里有同样的结构（必须列全设置字段，见文件说明）。
+- **协议**（`windows/protocol`）：管道消息定义，DLL、服务进程共用；设置程序在 `windows/app/protocol.go` 里有同样的结构（必须列全设置字段，见文件说明）。两端共用默认设置夹具 `windows/protocol/tests/fixtures/config-default.json`：Rust 测试核对它与 `Config::default()` 一致，Go 测试核对读入再写出不丢字段、默认值相同。增删设置字段后用 `FREETYPE_UPDATE_FIXTURES=1` 重跑 `cargo test -p freetype-protocol --test config_contract` 更新夹具。
 
 管道名为 `\\.\pipe\FreeType-<当前用户 SID>`。访问控制允许当前用户、SYSTEM 和应用容器读写，完整性标签为低，商店应用和浏览器沙箱里的输入法也能连上。
 
