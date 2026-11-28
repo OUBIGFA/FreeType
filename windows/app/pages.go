@@ -45,16 +45,13 @@ func (s *settings) view(c *ui.Context) {
 
 func (s *settings) body(c *ui.Context, p palette) {
 	ui.Row(c).Grow(1).Disabled(s.resetting).Children(func() {
-		ui.Column(c).Width(236).FillHeight().Padding(4, 12, 16, 12).Gap(14).Children(func() {
-			ui.Row(c).Gap(10).AlignItems(ui.Center).Padding(2, 8).Children(func() {
+		ui.Column(c).Width(236).FillHeight().Padding(space1, space3, space4, space3).Gap(space4).Children(func() {
+			ui.Row(c).Gap(space3).AlignItems(ui.Center).Padding(space1, space2).Children(func() {
 				s.logo(c, 32)
-				ui.Column(c).Gap(1).Children(func() {
-					ui.Text(c, "FreeType").FontSize(textSize(c, 15)).FontWeight(600)
-					ui.Text(c, "输入法设置").FontSize(textSize(c, 12)).TextColor(p.muted)
-				})
+				ui.Text(c, "FreeType").FontSize(textSize(c, 16)).FontWeight(600)
 			})
 			ui.Scroll(c).Grow(1).FillWidth().Children(func() {
-				ui.Column(c).Gap(2).Children(func() {
+				ui.Column(c).Gap(space1).Children(func() {
 					for _, pg := range pages {
 						if navItem(c, *pg.Icon, pg.Name, s.page == pg.ID) {
 							if s.page != pg.ID {
@@ -78,9 +75,9 @@ func (s *settings) body(c *ui.Context, p palette) {
 		if strings.TrimSpace(s.settingQuery) != "" {
 			contentKey, scroll = "search", &s.searchScroll
 		}
-		ui.Scroll(c).Key(contentKey).TrackScroll(scroll).Grow(1).FillHeight().Padding(8, 28, 36, 28).Children(func() {
+		ui.Scroll(c).Key(contentKey).TrackScroll(scroll).Grow(1).FillHeight().Padding(space2, space10, space12, space10).Children(func() {
 			// 宽度不变，窗口宽了左右留出一样的空
-			ui.Column(c).MaxWidth(860).FillWidth().Margin(0, ui.Auto).Gap(6).Children(func() {
+			ui.Column(c).MaxWidth(860).FillWidth().Margin(0, ui.Auto).Gap(space2).Children(func() {
 				if strings.TrimSpace(s.settingQuery) != "" {
 					s.searchPage(c)
 					return
@@ -150,34 +147,28 @@ func (s *settings) logo(c *ui.Context, size float32) {
 func (s *settings) statusCard(c *ui.Context) {
 	p := colors(c)
 	t := c.Theme()
-	card := ui.Row(c).Gap(16).Padding(18, rowInset).Radius(panelRadius).Background(p.card).Border(1, p.border).AlignItems(ui.Center)
-	if !c.Preferences().HighContrast {
-		alpha := float32(0.03)
-		if t.Dark {
-			alpha = 0.18
-		}
-		card.Shadow(0, 1, 3, 0, ui.RGBA(0, 0, 0, alpha))
-	}
-	card.Children(func() {
-		s.logo(c, 44)
-		ui.Column(c).Grow(1).Basis(0).MinWidth(0).Gap(4).Children(func() {
-			ui.Text(c, "FreeType 输入法").FontSize(textSize(c, 16)).FontWeight(600).Wrap()
-			switch {
-			case s.statusErr != "":
-				ui.Text(c, "无法连接输入法服务："+s.statusErr).TextColor(t.Danger).Wrap()
-			case s.status.Error != "":
-				ui.Text(c, s.status.Error).TextColor(t.Danger).Wrap()
-			case !s.status.Ready:
-				ui.Text(c, "输入法服务正在载入词库").TextColor(p.muted)
-			default:
-				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-					ui.Icon(c, statusCheck).FontSize(textSize(c, 15)).TextColor(t.Success)
-					ui.Text(c, "正在运行 · 版本 "+s.version).FontSize(textSize(c, 13)).TextColor(p.muted).Wrap()
-				})
-				if s.status.LexiconWarning != "" {
-					ui.Text(c, s.status.LexiconWarning).Wrap()
+	panel(c).Margin(space4, 0, 0, 0).Children(func() {
+		ui.Row(c).FillWidth().Gap(space4).Padding(space5, rowInset).AlignItems(ui.Center).Children(func() {
+			s.logo(c, 48)
+			ui.Column(c).Grow(1).Basis(0).MinWidth(0).Gap(space1).Children(func() {
+				ui.Text(c, "FreeType 输入法").FontSize(textSize(c, fontHeading)).FontWeight(600).Wrap()
+				switch {
+				case s.statusErr != "":
+					ui.Text(c, "无法连接输入法服务："+s.statusErr).TextColor(t.Danger).Wrap()
+				case s.status.Error != "":
+					ui.Text(c, s.status.Error).TextColor(t.Danger).Wrap()
+				case !s.status.Ready:
+					ui.Text(c, "输入法服务正在载入词库").TextColor(p.muted)
+				default:
+					ui.Row(c).Gap(space1).AlignItems(ui.Center).Children(func() {
+						ui.Icon(c, statusCheck).FontSize(textSize(c, 15)).TextColor(t.Success)
+						ui.Text(c, "正在运行 · 版本 "+s.version).FontSize(textSize(c, fontCaption)).TextColor(p.muted).Wrap()
+					})
+					if s.status.LexiconWarning != "" {
+						ui.Text(c, s.status.LexiconWarning).Wrap()
+					}
 				}
-			}
+			})
 		})
 	})
 	section(c, "", func() {
@@ -290,7 +281,7 @@ func (s *settings) statusBarAppearance(c *ui.Context) (changed bool) {
 	}
 	changed = switchLine(c, "阴影", "", &s.config.BarShadow, true) || changed
 	subRow(c, "显示组件", "", func() {
-		ui.Row(c).Wrap().Gap(10).Children(func() {
+		ui.Row(c).Wrap().Gap(space3).Children(func() {
 			for _, part := range []struct {
 				label string
 				bit   int
@@ -308,7 +299,7 @@ func (s *settings) statusBarAppearance(c *ui.Context) (changed bool) {
 }
 
 func (s *settings) candidatesPage(c *ui.Context) {
-	pageHeader(c, "候选窗与外观", "调整候选窗显示和 FreeType 品牌图标")
+	pageHeader(c, "候选窗与外观", "")
 	if !s.loaded {
 		s.candidatePreview(c)
 		return
@@ -349,8 +340,7 @@ func (s *settings) candidatesPage(c *ui.Context) {
 				s.settingBlock(c, "candidates/自定义配色", func() {
 					subContent(c, func() {
 						p := colors(c)
-						ui.Text(c, "选择预设配色快速开始，或单独调整下方各部分颜色").FontSize(textSize(c, 12.5)).TextColor(p.muted).Wrap()
-						ui.Row(c).FillWidth().Wrap().GapX(8).GapY(8).AlignItems(ui.Center).Children(func() {
+						ui.Row(c).FillWidth().Wrap().GapX(space2).GapY(space2).AlignItems(ui.Center).Children(func() {
 							for _, tpl := range candidateSkinTemplates {
 								active := sameCandidateSkin(s.config.CandidateSkin, tpl.skin)
 								if skinPresetChip(c, tpl.name, tpl.skin, active) {
@@ -378,14 +368,14 @@ func (s *settings) candidatesPage(c *ui.Context) {
 							fields = append(fields, skinColorField{"选中背景", d.Accent, &s.config.CandidateSkin.Accent})
 						}
 						fields = append(fields, skinColorField{"选中文字", d.AccentText, &s.config.CandidateSkin.AccentText})
-						ui.Row(c).FillWidth().Wrap().GapX(10).GapY(10).Children(func() {
+						// 颜色项排成网格，不给每项单独画框；色块本身就是控件的轮廓。
+						ui.Row(c).FillWidth().Wrap().GapX(space6).GapY(space3).Children(func() {
 							for _, item := range fields {
 								col := parseSkinColor(*item.field, item.fallback)
-								ui.Row(c).AlignItems(ui.Center).Gap(10).Padding(6, 10).Radius(controlRadius).
-									Background(p.card).Border(1, p.subBorder).MinWidth(max(176, textSize(c, 176))).MaxWidthPercent(100).Children(func() {
-									ui.Column(c).Grow(1).MinWidth(0).Gap(1).Children(func() {
-										ui.Text(c, item.label).FontSize(textSize(c, 13)).FontWeight(500).SingleLine()
-										ui.Text(c, strings.ToUpper(formatHexRGB(col))).FontSize(textSize(c, 12)).TextColor(p.muted).FontFeatures("tnum").SingleLine()
+								ui.Row(c).AlignItems(ui.Center).Gap(space3).MinWidth(max(176, textSize(c, 176))).MaxWidthPercent(100).Children(func() {
+									ui.Column(c).Grow(1).MinWidth(0).Gap(0).Children(func() {
+										ui.Text(c, item.label).SingleLine()
+										ui.Text(c, strings.ToUpper(formatHexRGB(col))).FontSize(textSize(c, fontCaption)).TextColor(p.muted).FontFeatures("tnum").SingleLine()
 									})
 									if ui.ColorWell(c, &col).Label(item.label).Changed() {
 										col.A = 255
@@ -404,7 +394,7 @@ func (s *settings) candidatesPage(c *ui.Context) {
 							selBg = accentCol
 						}
 						if colorContrast(textCol, bg) < 3 || colorContrast(accentTextCol, selBg) < 3 {
-							ui.Text(c, "当前文字与背景对比度较低，可能不易辨认").FontSize(textSize(c, 12.5)).TextColor(p.muted).Wrap()
+							caption(c, "当前文字与背景对比度较低，可能不易辨认")
 						}
 					})
 				})
@@ -448,7 +438,7 @@ func (s *settings) candidatesPage(c *ui.Context) {
 			if size == 0 {
 				size = float64(s.config.FontSize) * 0.78
 			}
-			if ui.NumberInput(c, &size, 10, 36, 1).Width(110).Label("预编辑字号").Changed() {
+			if ui.NumberInput(c, &size, 10, 36, 1).Width(120).Label("预编辑字号").Changed() {
 				s.config.PreeditSize = int(size)
 				changed = true
 			}
@@ -543,9 +533,9 @@ func skinPresetChip(c *ui.Context, name string, skin CandidateSkin, active bool)
 	if !skin.AccentFill {
 		accent = parseSkinColor(skin.AccentText, d.AccentText)
 	}
-	chip := ui.ButtonBase(c).MinHeight(max(32, textSize(c, 32))).Padding(5, 10).Gap(8).
+	chip := ui.ButtonBase(c).MinHeight(max(space8, textSize(c, space8))).Padding(space1, space3).Gap(space2).
 		Radius(controlRadius).AlignItems(ui.Center).Cursor(ui.CursorPointer).Label(name)
-	chipBorder := p.subBorder
+	chipBorder := p.border
 	if active {
 		chipBorder = c.Theme().Focus
 		if c.Preferences().HighContrast {
@@ -566,7 +556,7 @@ func skinPresetChip(c *ui.Context, name string, skin CandidateSkin, active bool)
 			ui.Row(c).Width(9).Height(8).Radius(2).Background(accent)
 			ui.Row(c).Width(6).Height(3).Radius(1).Background(textCol)
 		})
-		label := ui.Text(c, name).FontSize(textSize(c, 13)).SingleLine()
+		label := ui.Text(c, name).FontSize(textSize(c, fontCaption)).SingleLine()
 		if active {
 			label.FontWeight(600)
 		}
@@ -697,19 +687,18 @@ func (s *settings) candidatePreview(c *ui.Context) {
 	all := []string{"你好", "拟好", "你", "泥", "妮", "逆", "呢", "倪", "腻", "溺"}
 	words := all[:min(max(s.config.PageSize, 1), len(all))]
 	// 顶部留白放在有背景的内边距中，吸顶后不能让滚动内容透过外边距。
-	ui.Column(c).FillWidth().Gap(8).Padding(4, 0, 8, 0).Background(p.page).Sticky().Top(0).Children(func() {
-		ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(8).Children(func() {
-			ui.Text(c, "预览").FontSize(textSize(c, 13)).FontWeight(500).TextColor(p.muted).Grow(1)
+	ui.Column(c).FillWidth().Gap(space3).Padding(space4, 0, space2, 0).Background(p.page).Sticky().Top(0).Children(func() {
+		ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(space2).Children(func() {
+			sectionTitle(c, "预览").Grow(1)
 			s.logo(c, 24)
 			if ui.Button(c, "移动示例光标").Clicked() {
 				s.previewCaretMoved = !s.previewCaretMoved
 			}
 		})
 		// 外层画安静的预览舞台，横排按真实字号绘制；超出可用宽度时在预览内滚动，不压缩候选词。
-		ui.Column(c).FillWidth().Padding(16, rowInset, 12, rowInset).Radius(panelRadius).
-			Background(p.subtle).Border(1, p.border).Children(func() {
-			ui.Row(c).FillWidth().Gap(4).Padding(0, 4, 8, 4).Children(func() {
-				ui.Text(c, "输入位置").FontSize(textSize(c, 12)).TextColor(p.muted)
+		panel(c).Padding(space4, rowInset, space3, rowInset).Children(func() {
+			ui.Row(c).FillWidth().Gap(space1).Padding(0, 0, space2, 0).AlignItems(ui.Center).Children(func() {
+				caption(c, "输入位置")
 				if s.previewCaretMoved {
 					ui.Text(c, "示例文字").Font(family).FontSize(size)
 				}
@@ -734,7 +723,7 @@ func (s *settings) candidatePreview(c *ui.Context) {
 						if s.config.SentenceEditor && s.config.SentenceEditorPosition == "above" {
 							s.sentencePreview(c, family, size, ct)
 						}
-						popup := ui.Column(c).Padding(8, 10).Radius(panelRadius).Background(popupBg).Border(1, popupBorder).
+						popup := ui.Column(c).Padding(8, 10).Radius(previewWindowRadius).Background(popupBg).Border(1, popupBorder).
 							Label("候选预览窗口").AlignSelf(ui.Start).Shrink(0).Gap(4)
 						if s.config.Horizontal && !s.config.CandidateSingleLine {
 							popup.MaxWidth(460).Shrink(1)
@@ -773,7 +762,7 @@ func (s *settings) candidatePreview(c *ui.Context) {
 									})
 								}()
 								for i, w := range words {
-									item := ui.Row(c).Gap(4).Padding(4, 8).Radius(controlRadius).AlignItems(ui.Center).Shrink(0)
+									item := ui.Row(c).Gap(4).Padding(4, 8).Radius(previewItemRadius).AlignItems(ui.Center).Shrink(0)
 									label, text := mutedText, normalText
 									if i == 0 {
 										if ct.block {
@@ -802,9 +791,16 @@ func (s *settings) candidatePreview(c *ui.Context) {
 	})
 }
 
+// 候选窗预览模仿真实候选窗（windows/tsf/src/ui），不套用设置页的间距和圆角令牌：
+// 窗口圆角对应 Windows 11 的 DWMWCP_ROUND（8 像素），选中底色块对应 paint.rs 的 4 像素。
+const (
+	previewWindowRadius float32 = 8
+	previewItemRadius   float32 = 4
+)
+
 // 与独立编辑区保持相同的内容层级：词块、原始字母、低强调提示；不画投影。
 func (s *settings) sentencePreview(c *ui.Context, family string, size float32, ct candidateTheme) {
-	ui.Column(c).AlignSelf(ui.Start).Padding(8).Gap(4).Radius(controlRadius).
+	ui.Column(c).AlignSelf(ui.Start).Padding(8).Gap(4).Radius(previewWindowRadius).
 		Background(ct.background).Border(1, ct.border).Label("整句编辑区预览").Children(func() {
 		ui.Row(c).Gap(3).Children(func() {
 			for _, word := range []string{"你", "好"} {
@@ -1056,13 +1052,13 @@ func (s *settings) shortcutsPage(c *ui.Context) {
 				{"v + 空格", "启用工具栏后，在全拼状态下打开剪贴板、常用语、符号和表情"},
 				{"Esc", "清空当前输入，或关闭工具栏、表情面板和上屏联想"},
 			} {
-				ui.Row(c).Padding(10, 0).Gap(16).Wrap().AlignItems(ui.Center).Children(func() {
-					ui.Row(c).Width(172).MaxWidthPercent(100).Wrap().Gap(6).Children(func() {
+				ui.Row(c).Padding(space3, 0).Gap(space4).Wrap().AlignItems(ui.Center).Children(func() {
+					ui.Row(c).Width(172).MaxWidthPercent(100).Wrap().Gap(space2).Children(func() {
 						for _, part := range strings.Split(k[0], "  ") {
 							keyCap(c, part)
 						}
 					})
-					ui.Text(c, k[1]).FontSize(textSize(c, 13)).TextColor(colors(c).muted).Grow(1).Basis(200).MinWidth(160).LineHeight(1.45).Wrap()
+					caption(c, k[1]).Grow(1).Basis(200).MinWidth(160)
 				})
 			}
 		})
@@ -1076,16 +1072,16 @@ func (s *settings) reportView(c *ui.Context) {
 	if s.report == "" {
 		return
 	}
-	ui.Column(c).Gap(4).Margin(10, 0, 0, 0).Children(func() {
+	ui.Column(c).Gap(space1).Padding(0, rowInset).Children(func() {
 		ui.Text(c, s.report).FontWeight(600).Wrap()
 		for _, e := range s.reportErrors {
-			ui.Text(c, e).FontSize(textSize(c, 13)).TextColor(c.Theme().Danger).LineHeight(1.4).Wrap()
+			ui.Text(c, e).FontSize(textSize(c, fontCaption)).TextColor(c.Theme().Danger).LineHeight(1.5).Wrap()
 		}
 	})
 }
 
 func (s *settings) dictsPage(c *ui.Context) {
-	pageHeader(c, "词库", "导入词库参与组词和排序；与学习记录分开保存")
+	pageHeader(c, "词库", "")
 	section(c, "主词库", func() {
 		current := "默认；白霜＋万象＋项目热词"
 		if s.config.Lexicon != "" {
@@ -1167,15 +1163,15 @@ func (s *settings) phrasesPage(c *ui.Context) {
 	pageHeader(c, "快捷短语", "启用实用功能中的快捷短语候选后，输入完整编码即可选用；编码仅含英文字母")
 	section(c, "添加", func() {
 		s.settingBlock(c, "phrases/添加快捷短语", func() {
-			ui.Column(c).Padding(12, 0, 14, 0).Gap(14).Children(func() {
-				ui.Row(c).Gap(12).Wrap().AlignItems(ui.Start).Children(func() {
+			ui.Column(c).Padding(space4, 0).Gap(space4).Children(func() {
+				ui.Row(c).Gap(space3).Wrap().AlignItems(ui.Start).Children(func() {
 					ui.Field(c, "编码", func() { ui.TextInput(c, &s.newCode).Placeholder("例如 dz").FillWidth() }).
 						Grow(1).Basis(220).MinWidth(160)
 					ui.Field(c, "权重", func() { ui.TextInput(c, &s.newWeight).Placeholder("10").FillWidth() }).
 						Description("同一编码有多条时，权重大的在前").Grow(1).Basis(220).MinWidth(160)
 				})
 				ui.Field(c, "短语", func() { ui.TextArea(c, &s.newText).Height(72) }).Error(s.formError)
-				ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+				ui.Row(c).Gap(space3).AlignItems(ui.Center).Children(func() {
 					if ui.PrimaryButton(c, "添加").Disabled(s.phrasesBusy).Clicked() {
 						s.addPhrase()
 					}
@@ -1195,8 +1191,7 @@ func (s *settings) phrasesPage(c *ui.Context) {
 		})
 	})
 	s.reportView(c)
-	ui.Row(c).Margin(18, 0, 0, 0).Padding(0, 4).Gap(12).Wrap().AlignItems(ui.Center).Children(func() {
-		ui.Text(c, fmt.Sprintf("快捷短语 %d 条", len(s.phrases))).FontSize(textSize(c, 13)).FontWeight(600).TextColor(colors(c).muted).Grow(1).Basis(180).Wrap()
+	listHeader(c, fmt.Sprintf("快捷短语 %d 条", len(s.phrases)), func() {
 		ui.SearchField(c, &s.phraseQuery).Label("搜索编码或短语").Placeholder("搜索编码或短语").Width(240).MaxWidthPercent(100).Shrink(1)
 	})
 	section(c, "", func() {
@@ -1210,7 +1205,7 @@ func (s *settings) phrasesPage(c *ui.Context) {
 				row(c, title, "在上方添加短语，或导入已有文件", nil)
 				return
 			}
-			ui.Row(c).Gap(12).Children(func() {
+			ui.Row(c).Gap(space3).Padding(space3, 0).Children(func() {
 				if ui.Button(c, "选择当前结果").Label("全选当前短语").Clicked() {
 					for _, i := range shown {
 						s.selectedPhrases[s.phrases[i].Code+"\t"+s.phrases[i].Text] = true
@@ -1225,10 +1220,7 @@ func (s *settings) phrasesPage(c *ui.Context) {
 			ui.List(c, nil, len(shown), func(k int) {
 				i := shown[k]
 				ph := s.phrases[i]
-				item := ui.Row(c).Height(phraseRow).Padding(0, 0).Gap(12).AlignItems(ui.Center)
-				if item.Hovered() {
-					item.Background(colors(c).cardHover)
-				}
+				item := ui.Row(c).Height(phraseRow).Gap(space3).AlignItems(ui.Center)
 				item.Children(func() {
 					selectedKey := ph.Code + "\t" + ph.Text
 					checked := s.selectedPhrases[selectedKey]
@@ -1241,10 +1233,12 @@ func (s *settings) phrasesPage(c *ui.Context) {
 					}
 					ui.Row(c).Width(96).Shrink(0).Children(func() { keyCap(c, ph.Code).Tooltip(ph.Code) })
 					ui.Text(c, preview(ph.Text)).Grow(1).Basis(0).MinWidth(0).Shrink(1).SingleLine().Tooltip(ph.Text)
-					ui.Textf(c, "%d", ph.Weight).Width(56).TextAlign(ui.End).FontFeatures("tnum").TextColor(colors(c).muted).FontSize(textSize(c, 13))
-					if ui.Button(c, "删除").Label(fmt.Sprintf("删除 %s %d", ph.Code, i+1)).Disabled(s.phrasesBusy).Clicked() {
-						remove = i
-					}
+					ui.Textf(c, "%d", ph.Weight).Width(56).TextAlign(ui.End).FontFeatures("tnum").TextColor(colors(c).muted).FontSize(textSize(c, fontCaption))
+					onIntent(c, item, func() {
+						if ui.Button(c, "删除").Label(fmt.Sprintf("删除 %s %d", ph.Code, i+1)).Disabled(s.phrasesBusy).Clicked() {
+							remove = i
+						}
+					})
 				})
 			}).MaxHeight(phraseRow * maxPhraseRows)
 			if remove >= 0 {
@@ -1286,9 +1280,9 @@ func (s *settings) learnedPage(c *ui.Context) {
 	s.unlockDialog(c)
 	section(c, "添加词", func() {
 		s.settingBlock(c, "learned/添加词", func() {
-			ui.Column(c).Padding(12, 0, 14, 0).Gap(14).Children(func() {
-				ui.Text(c, "中文词可留空拼音，由 FreeType 自动补充；多音字请填写拼音；英文词默认用小写单词作为输入码；中英混输词需填写输入码，例如 datag → 打 tag").FontSize(textSize(c, 13)).TextColor(colors(c).muted).LineHeight(1.45).Wrap()
-				ui.Row(c).Gap(12).Wrap().AlignItems(ui.End).Children(func() {
+			ui.Column(c).Padding(space4, 0).Gap(space4).Children(func() {
+				caption(c, "中文词可留空拼音，由 FreeType 自动补充；多音字请填写拼音；英文词默认用小写单词作为输入码；中英混输词需填写输入码，例如 datag → 打 tag")
+				ui.Row(c).Gap(space3).Wrap().AlignItems(ui.End).Children(func() {
 					ui.Field(c, "词语", func() {
 						ui.TextInput(c, &s.newWord).Placeholder("词语，例如 霜频阁").Label("词语").FillWidth()
 					}).Width(200).MaxWidthPercent(100)
@@ -1300,7 +1294,7 @@ func (s *settings) learnedPage(c *ui.Context) {
 					}
 				})
 				if s.wordError != "" {
-					ui.Text(c, s.wordError).FontSize(textSize(c, 13)).TextColor(c.Theme().Danger).LineHeight(1.4).Wrap()
+					ui.Text(c, s.wordError).FontSize(textSize(c, fontCaption)).TextColor(c.Theme().Danger).LineHeight(1.5).Wrap()
 				}
 			})
 		})
@@ -1310,16 +1304,6 @@ func (s *settings) learnedPage(c *ui.Context) {
 		s.clearLearned()
 	}
 	words := s.filteredWords()
-	ui.Row(c).Gap(12).Children(func() {
-		if ui.Button(c, "选择当前结果").Label("全选当前学习词").Clicked() {
-			for _, word := range words {
-				s.selectedWords[word.Word] = true
-			}
-		}
-		if ui.Button(c, "删除选中").Label("删除选中学习词").Disabled(len(s.selectedWords) == 0).Clicked() {
-			s.confirmWordBatch = true
-		}
-	})
 	if ui.AlertDialog(c, &s.confirmWordBatch, "删除选中学习词", "删除所选词的学习记录和搭配；可用学习备份恢复", "取消", "确认删除学习词") == 1 {
 		var selected []string
 		for _, word := range s.words {
@@ -1330,8 +1314,7 @@ func (s *settings) learnedPage(c *ui.Context) {
 		s.forgetWords(selected)
 		s.selectedWords = map[string]bool{}
 	}
-	ui.Row(c).Margin(18, 0, 0, 0).Padding(0, 4).Gap(12).Wrap().AlignItems(ui.Center).Children(func() {
-		ui.Text(c, fmt.Sprintf("学到的词 %d 条", len(s.words))).FontSize(textSize(c, 13)).FontWeight(600).TextColor(colors(c).muted).Grow(1).Basis(180).Wrap()
+	listHeader(c, fmt.Sprintf("学到的词 %d 条", len(s.words)), func() {
 		if ui.Button(c, "刷新").Clicked() {
 			s.loadWords()
 		}
@@ -1352,12 +1335,19 @@ func (s *settings) learnedPage(c *ui.Context) {
 				row(c, title, "", nil)
 				return
 			}
+			ui.Row(c).Gap(space3).Padding(space3, 0).Children(func() {
+				if ui.Button(c, "选择当前结果").Label("全选当前学习词").Clicked() {
+					for _, word := range words {
+						s.selectedWords[word.Word] = true
+					}
+				}
+				if ui.Button(c, "删除选中").Label("删除选中学习词").Disabled(len(s.selectedWords) == 0).Clicked() {
+					s.confirmWordBatch = true
+				}
+			})
 			ui.List(c, nil, len(words), func(i int) {
 				w := words[i]
-				item := ui.Row(c).Padding(10, 0).MinHeight(54).Gap(12).AlignItems(ui.Center)
-				if item.Hovered() {
-					item.Background(p.cardHover)
-				}
+				item := ui.Row(c).Padding(space3, 0).MinHeight(56).Gap(space3).AlignItems(ui.Center)
 				item.Children(func() {
 					checked := s.selectedWords[w.Word]
 					if checkbox(c, &checked, "").Label("选择学习词 " + w.text()).Changed() {
@@ -1369,10 +1359,12 @@ func (s *settings) learnedPage(c *ui.Context) {
 					}
 					ui.Text(c, w.text()).FontWeight(500).Width(140).SingleLine().Tooltip(w.text())
 					ui.Text(c, w.Pinyin).Grow(1).Basis(0).MinWidth(0).SingleLine().TextColor(p.muted).Tooltip(w.Pinyin)
-					ui.Textf(c, "%.0f", w.Freq).FontSize(textSize(c, 13)).TextColor(p.muted).Width(64).TextAlign(ui.End).FontFeatures("tnum")
-					if ui.Button(c, "删除").Label("删除 " + w.text()).Clicked() {
-						s.forgetWords([]string{w.Word})
-					}
+					ui.Textf(c, "%.0f", w.Freq).FontSize(textSize(c, fontCaption)).TextColor(p.muted).Width(64).TextAlign(ui.End).FontFeatures("tnum")
+					onIntent(c, item, func() {
+						if ui.Button(c, "删除").Label("删除 " + w.text()).Clicked() {
+							s.forgetWords([]string{w.Word})
+						}
+					})
 				})
 			}).MaxHeight(460)
 		})

@@ -10,9 +10,9 @@ type settingItem struct{ ID, Title, Description, Section, Keywords string }
 
 var settingsItems = []settingItem{
 	{"general/默认输入法", "默认输入法", "", "常规", "Windows 系统设置 语言"},
-	{"general/中文 / 英文", "中文 / 英文", "选择当前输入状态；切换键可在下方设置", "现在的状态", ""},
-	{"general/标点", "标点", "中文状态下输入的标点", "现在的状态", ""},
-	{"general/简体 / 繁体", "简体 / 繁体", "输出的字形", "现在的状态", ""},
+	{"general/中文 / 英文", "中文 / 英文", "", "现在的状态", "当前输入状态 切换键"},
+	{"general/标点", "标点", "", "现在的状态", "中文标点 英文标点"},
+	{"general/简体 / 繁体", "简体 / 繁体", "", "现在的状态", "字形 繁體"},
 	{"general/切换键", "切换键", "选择左 Shift 或右 Shift 切换中英文；也可关闭 Shift 切换", "中英文切换", "Shift 左 Shift 右 Shift"},
 	{"general/默认状态", "默认状态", "选择初始中英文状态；全局沿用上次状态，重启后保留", "中英文切换", "中文 英文 全局"},
 	{"general/中英文状态", "中英文状态", "选择所有应用共用状态，或按应用分别保留", "中英文切换", "全局统一 每个应用分别记住"},
@@ -24,7 +24,7 @@ var settingsItems = []settingItem{
 	{"general/自动隐藏", "自动隐藏", "空闲时隐藏悬浮状态栏，状态改变时重新显示", "状态提示", ""},
 	{"general/切换状态时提示", "切换状态时提示", "切换中英文、标点、简繁时，在光标旁短暂显示新的状态", "状态提示", ""},
 	{"general/切换输入框时提示", "切换输入框时提示", "进入其他输入框时显示当前中英文状态", "状态提示", ""},
-	{"general/提示位置", "提示位置", "提示显示在光标的哪一边", "状态提示", "左上 正上 右上 左下 正下 右下 光标"},
+	{"general/提示位置", "提示位置", "", "状态提示", "左上 正上 右上 左下 正下 右下 光标"},
 	{"candidates/品牌图标", "品牌图标", "窗口和托盘立即换图；系统图标更新需管理员授权；自定义支持 PNG、JPEG、WebP，原文件移动后仍可显示", "品牌外观", "icon logo 品牌 白色 默认 自定义 图标 外观 语言栏 重启 资源管理器"},
 	{"candidates/字体", "字体", "设置候选窗和提示的字体；默认使用微软雅黑", "外观", "微软雅黑 Microsoft YaHei SimSun 宋体 KaiTi 楷体"},
 	{"candidates/字号", "字号", "设置字号，范围为 12–36 像素；以 100% 显示缩放为准", "外观", ""},
@@ -40,9 +40,9 @@ var settingsItems = []settingItem{
 	{"features/英文拼写建议", "英文拼写建议", "独立英文候选模式下查不到单词时给出纠错建议；原始输入仍可直接上屏", "英文候选与拆字查字", "英文 纠错 拼写"},
 	{"features/英文上屏补空格", "英文上屏补空格", "英文模式用空格、数字或鼠标选词后补一个空格；回车与标点不补", "英文候选与拆字查字", "英文 空格 路径 代码"},
 	{"features/英文音标与释义", "英文音标与释义", "显示本地英文词典的音标和中文释义；不联网", "英文候选与拆字查字", "音标 释义 词典"},
-	{"shortcuts/英文候选", "英文候选", "打开或退出独立英文候选模式", "快捷键", "英文 补全 纠错"},
+	{"shortcuts/英文候选", "英文候选", "", "快捷键", "英文 补全 纠错 独立英文候选模式"},
 	{"shortcuts/拆字查字", "拆字查字", "按部件拼音查字并显示读音；双拼按当前方案解码，也可直接打全拼", "快捷键", "拆字 部件 查字 读音"},
-	{"candidates/候选窗预编辑", "候选窗预编辑", "在候选窗显示正在输入的拼音", "预编辑与位置", "隐藏 拼音"},
+	{"candidates/候选窗预编辑", "候选窗预编辑", "", "预编辑与位置", "隐藏 拼音 正在输入"},
 	{"candidates/整句编辑区", "整句编辑区", "默认关闭；点词块替换错词或调整切分；空间不足时收起，不改变候选窗位置与尺寸", "预编辑与位置", "句中 改错 词块 Tab 切分 独立"},
 	{"candidates/整句编辑区位置", "整句编辑区位置", "默认在候选窗下方；也可放在上方", "预编辑与位置", "上下 词块"},
 	{"candidates/预编辑字号", "预编辑字号", "", "预编辑与位置", "大小"},
@@ -107,7 +107,7 @@ var settingsItems = []settingItem{
 	{"about/检查更新", "检查更新", "检查已发布的 Windows 安装器，并可立即下载和更新", "软件更新", "版本 下载 安装 手动 立即更新"},
 	{"about/自动更新", "自动更新", "默认关闭；启动时和每隔 24 小时检查更新；后台下载新版本，下次启动时安装", "软件更新", "后台 下载 自动 重启 升级"},
 	{"about/更新安装后显示设置页", "更新安装后显示设置页", "默认关闭；开启后，安装或更新完成时自动打开设置页", "软件更新", "窗口 启动 弹出 升级 安装完成"},
-	{"about/开源信息", "开源信息", "查看项目的第三方来源、许可和使用范围", "来源与许可", "来源 授权"},
+	{"about/开源信息", "开源信息", "", "来源与许可", "来源 授权 第三方 许可 使用范围"},
 	{"about/词库", "词库许可", "词库和语言模型的来源与许可保存在安装目录的 data 文件夹中", "来源与许可", "LICENSE SOURCE.txt 白霜 万象"},
 	{"common/导入或导出", "导入或导出", "导出为 JSON，保留多行内容；也能导入 UTF-8 文本，一行一条；重复内容只保留一条", "批量导入、导出", ""},
 	{"sync/全部设置和数据", "全部设置", "导出所选设置、词库和学习记录，可用密码加密；同步账号和计划可随备份保存，账号密码和密钥需在导入后重新填写", "一键导入导出", "数据 输入习惯 备份 账号 密码 加密 选择 部分 导出内容"},
@@ -207,49 +207,52 @@ func (s *settings) searchField(c *ui.Context) {
 }
 
 func (s *settings) searchPage(c *ui.Context) {
-	pageHeader(c, "搜索设置", "选择结果后跳转并定位对应设置")
+	pageHeader(c, "搜索设置", "")
 	found := findSettings(s.settingQuery)
 	if len(found) == 0 {
-		ui.Text(c, "没有找到相关设置").Margin(16, 0, 0, 0)
+		ui.Text(c, "没有找到相关设置").Padding(space4, rowInset, 0, rowInset)
 		hint(c, "试试更短的关键词，或从侧边栏选择设置页面")
 		return
 	}
-	ui.Textf(c, "找到 %d 项", len(found)).TextColor(colors(c).muted).Margin(8, 0)
-	for _, item := range found {
-		page, _, _ := strings.Cut(item.ID, "/")
-		// 使用原生按钮的 Tab、Enter、Space 和焦点环，而不是仅响应鼠标的容器。
-		result := ui.ButtonBase(c).Key(item.ID).Padding(14, rowInset).Margin(4, 0).Radius(panelRadius).
-			FillWidth().AlignItems(ui.Start).Background(colors(c).card).Border(1, colors(c).border).Cursor(ui.CursorPointer).
-			Label("定位 " + pageName(page) + " / " + item.Title)
-		if !c.Preferences().HighContrast {
-			alpha := float32(0.03)
-			if c.Theme().Dark {
-				alpha = 0.18
-			}
-			result.Shadow(0, 1, 3, 0, ui.RGBA(0, 0, 0, alpha))
-		}
-		if result.Hovered() {
-			result.Background(colors(c).cardHover)
-		}
-		result.Children(func() {
-			ui.Column(c).FillWidth().Gap(4).Children(func() {
-				ui.Row(c).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
-					ui.Text(c, item.Title).FontWeight(600).Wrap()
-					breadcrumb := pageName(page)
-					if item.Section != "" {
-						breadcrumb += " · " + item.Section
-					}
-					ui.Text(c, breadcrumb).FontSize(textSize(c, 12)).TextColor(colors(c).muted).
-						Padding(2, 8).Radius(controlRadius).Background(colors(c).subtle).SingleLine()
-				})
-				if item.Description != "" {
-					ui.Text(c, item.Description).FontSize(textSize(c, 13)).TextColor(colors(c).muted).LineHeight(1.45).Wrap()
+	// 全部结果放在一块面板里，用细线分隔，不给每条结果单独画卡片。
+	ui.Column(c).Gap(space3).Margin(space4, 0, 0, 0).Children(func() {
+		ui.Textf(c, "找到 %d 项", len(found)).TextColor(colors(c).muted).Padding(0, rowInset)
+		panel(c).Padding(space1, 0).Children(func() {
+			ui.Column(c).FillWidth().Gap(1).Dividers(1, colors(c).border).Children(func() {
+				for _, item := range found {
+					s.searchResult(c, item)
 				}
 			})
 		})
-		if result.Clicked() {
-			s.locateSetting(item)
-		}
+	})
+}
+
+// searchResult 是一条搜索结果：标题后跟所在页面与分组，下面是说明。
+// 使用原生按钮的 Tab、Enter、Space 和焦点环，而不是仅响应鼠标的容器。
+func (s *settings) searchResult(c *ui.Context, item settingItem) {
+	page, _, _ := strings.Cut(item.ID, "/")
+	result := ui.ButtonBase(c).Key(item.ID).Padding(space4, rowInset).FillWidth().AlignItems(ui.Start).
+		Cursor(ui.CursorPointer).Label("定位 " + pageName(page) + " / " + item.Title)
+	if result.Hovered() {
+		result.Background(colors(c).cardHover)
+	}
+	result.Children(func() {
+		ui.Column(c).FillWidth().Gap(space1).Children(func() {
+			ui.Row(c).Gap(space2).Wrap().AlignItems(ui.Center).Children(func() {
+				ui.Text(c, item.Title).FontWeight(600).Wrap()
+				breadcrumb := pageName(page)
+				if item.Section != "" {
+					breadcrumb += " · " + item.Section
+				}
+				ui.Text(c, breadcrumb).FontSize(textSize(c, fontCaption)).TextColor(colors(c).muted).SingleLine()
+			})
+			if item.Description != "" {
+				caption(c, item.Description)
+			}
+		})
+	})
+	if result.Clicked() {
+		s.locateSetting(item)
 	}
 }
 
@@ -354,7 +357,7 @@ func (s *settings) settingBlock(c *ui.Context, id string, content func()) {
 			ui.Column(c).FillWidth().Disabled(true).Children(content)
 		}
 		if chosen && reason != "" {
-			ui.Text(c, reason).FontSize(textSize(c, 13)).TextColor(colors(c).muted).LineHeight(1.4).Wrap().Padding(0, 0, 14, 0)
+			caption(c, reason).Padding(0, 0, space3, 0)
 		}
 	})
 	if chosen && s.revealSetting {

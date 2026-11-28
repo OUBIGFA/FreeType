@@ -13,7 +13,7 @@ var presetModes = []choice{{"english", "英文"}, {"chinese", "中文"}}
 func (s *settings) vimSection(c *ui.Context) {
 	section(c, "Vim 模式", func() {
 		s.settingBlock(c, "features/Vim 程序", func() {
-			ui.Row(c).FillWidth().Padding(12, 0).Gap(12).Wrap().AlignItems(ui.Center).Children(func() {
+			ui.Row(c).FillWidth().Padding(space3, 0).Gap(space3).Wrap().AlignItems(ui.Center).Children(func() {
 				ui.TextInput(c, &s.newVimApp).Label("Vim 程序名").Placeholder("输入程序名，例如 code.exe 或 gvim.exe").
 					Grow(1).Basis(240).MinWidth(180).MaxWidthPercent(100).Shrink(1)
 				if ui.PrimaryButton(c, "添加程序").Label("添加 Vim 程序").Clicked() {
@@ -123,11 +123,9 @@ func (s *settings) appPresetSection(c *ui.Context) {
 			}
 		}, showSub, func() {
 			s.settingBlock(c, "features/指定软件规则", func() {
-				p := colors(c)
 				subContent(c, func() {
-					ui.Text(c, "进入指定程序时应用一次预设；可手动切换；离开后恢复原状态；其他程序和全局状态不受影响；重启后保留规则").
-						FontSize(textSize(c, 12.5)).LineHeight(1.45).TextColor(p.muted).Wrap()
-					ui.Row(c).Gap(12).Wrap().AlignItems(ui.Center).Children(func() {
+					caption(c, "进入指定程序时应用一次预设；可手动切换；离开后恢复原状态；其他程序和全局状态不受影响；重启后保留规则")
+					ui.Row(c).Gap(space3).Wrap().AlignItems(ui.Center).Children(func() {
 						if len(s.apps) > 0 {
 							options := []string{"手动输入"}
 							selected := "手动输入"
@@ -150,7 +148,7 @@ func (s *settings) appPresetSection(c *ui.Context) {
 							s.refreshApps()
 						}
 					})
-					ui.Row(c).Gap(12).Wrap().AlignItems(ui.Center).Children(func() {
+					ui.Row(c).Gap(space3).Wrap().AlignItems(ui.Center).Children(func() {
 						ui.TextInput(c, &s.newPresetApp).Label("指定程序").Placeholder("程序名或完整路径，例如 code.exe").Grow(1).Basis(240).MinWidth(180).MaxWidthPercent(100).Shrink(1)
 						mode := 0
 						if s.newPresetMode == "chinese" {
@@ -168,7 +166,7 @@ func (s *settings) appPresetSection(c *ui.Context) {
 						}
 					})
 					if s.presetError != "" {
-						ui.Text(c, s.presetError).FontSize(textSize(c, 12.5)).TextColor(c.Theme().Danger).Wrap()
+						ui.Text(c, s.presetError).FontSize(textSize(c, fontCaption)).TextColor(c.Theme().Danger).Wrap()
 					}
 				})
 			})
@@ -177,27 +175,26 @@ func (s *settings) appPresetSection(c *ui.Context) {
 				change := -1
 				changeMode := ""
 				if len(s.config.AppPresetRules) == 0 {
-					ui.Text(c, "还没有指定软件规则").FontSize(textSize(c, 12.5)).TextColor(colors(c).muted).Padding(10, 0)
+					caption(c, "还没有指定软件规则").Padding(space3, 0)
 					return
 				}
 				ui.List(c, nil, len(s.config.AppPresetRules), func(i int) {
 					rule := s.config.AppPresetRules[i]
 					mode := rule.Mode
-					item := ui.Row(c).Padding(8, 0).MinHeight(50).Gap(12).AlignItems(ui.Center)
-					if item.Hovered() {
-						item.Background(colors(c).cardHover)
-					}
+					item := ui.Row(c).Padding(space2, 0).MinHeight(subRowMin).Gap(space3).AlignItems(ui.Center)
 					item.Children(func() {
-						ui.Column(c).Grow(1).Basis(0).MinWidth(0).Shrink(1).Gap(2).Children(func() {
-							ui.Text(c, rule.App).FontSize(textSize(c, 13.5)).FontWeight(500).SingleLine()
-							ui.Text(c, "切入时："+nameOf(presetModes, mode)).FontSize(textSize(c, 12.5)).TextColor(colors(c).muted).Wrap()
+						ui.Column(c).Grow(1).Basis(0).MinWidth(0).Shrink(1).Gap(space1).Children(func() {
+							ui.Text(c, rule.App).SingleLine()
+							caption(c, "切入时："+nameOf(presetModes, mode))
 						})
 						if choose(c, "模式", presetModes, &mode, 130) {
 							change, changeMode = i, mode
 						}
-						if ui.Button(c, "删除").Label("删除 " + rule.App).Clicked() {
-							remove = i
-						}
+						onIntent(c, item, func() {
+							if ui.Button(c, "删除").Label("删除 " + rule.App).Clicked() {
+								remove = i
+							}
+						})
 					})
 				})
 				if change >= 0 {

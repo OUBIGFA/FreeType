@@ -2,60 +2,90 @@ package main
 
 import (
 	"embed"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 )
 
-// 设置窗口采用分层卡片设计：
-// 1. 同组一级设置之间用浅色细线分隔，左右与正文对齐；
-// 2. 父项展开后的次级项统一收纳在柔和底色分组内，三级嵌套通过进一步缩进表达从属关系；
-// 3. 只有真正放不下的操作组换行，不缩小文字或截掉操作。
+// 设置窗口的设计令牌。取值和用法以 docs/UI-DESIGN.md 为准，改这里须同步改文档：
+//  1. 间距只取 4 的倍数；分组面板左右各留 rowInset（项目约定 20 像素），面板内的行、
+//     分组标题和面板下的说明都与这条边对齐；
+//  2. 同组设置之间只画一条浅色细线；子项靠缩进表达从属，不再套底色框；
+//  3. 分组面板无阴影；只有弹窗、菜单等浮层使用 mygo 默认的一层淡阴影；
+//  4. 中性色占绝大部分面积，品牌粉 brandPink 是唯一强调色。
 const (
-	controlRadius float32 = 6
-	panelRadius   float32 = 10
-	rowInset      float32 = 20
+	space1  float32 = 4
+	space2  float32 = 8
+	space3  float32 = 12
+	space4  float32 = 16
+	space5  float32 = 20
+	space6  float32 = 24
+	space8  float32 = 32
+	space10 float32 = 40
+	space12 float32 = 48
+
+	// 小控件（按钮、输入框、导航项、键帽）与分组面板的圆角。
+	controlRadius float32 = 8
+	panelRadius   float32 = 16
+	rowInset      float32 = space5
+	// subIndent 是每深一级子项的缩进。
+	subIndent float32 = space6
+
+	// 字阶：页面标题、弹窗与状态标题、分组标题、正文、说明。说明是最小字号，不再用更小的字。
+	fontTitle   float32 = 28
+	fontHeading float32 = 17
+	fontSection float32 = 15
+	fontBody    float32 = 14
+	fontCaption float32 = 13
+
+	// 次要操作淡入淡出的时长，取 150–250ms 区间。
+	revealDuration = 160 * time.Millisecond
 )
 
 // 显式字号也跟随 Windows 的文字大小；Theme.Rem 已包含系统文字缩放。
 func textSize(c *ui.Context, size float32) float32 { return c.Theme().Rem(size / 14) }
 
-// brandPink 是 logo 的粉色。
-var brandPink = ui.Hex("#ffb3fa")
+// brandPink 是 logo 的粉色，也是界面唯一的强调色：勾选、开关、主按钮和关键数据。
+// 它偏浅，上面的字固定用深色 inkOnPink。
+var (
+	brandPink = ui.Hex("#ffb3fa")
+	inkOnPink = ui.Hex("#18181b")
+)
 
-// settingsTheme 让输入、选择、按钮和焦点提示共用中性深浅灰，避免局部主题遗漏控件。
-// 输入框与下拉框使用更干净的底色，配合卡片表面形成清晰的立体对比。
+// settingsTheme 统一控件底色、边框、文字和强调色，避免局部主题遗漏控件。
+// 焦点环保持中性深灰，与粉色的“已选中”区分开。
 func settingsTheme(c *ui.Context) *ui.Theme {
 	theme := *c.Theme()
 	theme.Radius = controlRadius
 	if c.Preferences().HighContrast {
 		return &theme
 	}
-	gray := ui.Hex("#27272a")
+	p := colors(c)
+	result := theme.WithAccent(brandPink)
+	result.AccentText = inkOnPink
+	result.Text, result.TextMuted = p.text, p.muted
 	if theme.Dark {
-		gray = ui.Hex("#d4d4d8")
-	}
-	result := theme.WithAccent(gray)
-	result.Focus = gray
-	if theme.Dark {
-		result.Surface = ui.Hex("#1f1f22")
-		result.SurfaceHover = ui.Hex("#2c2c30")
-		result.SurfacePressed = ui.Hex("#36363b")
-		result.Border = ui.Hex("#3d3d43")
+		result.Focus = ui.Hex("#d4d4d8")
+		result.Surface = ui.Hex("#2c2c30")
+		result.SurfaceHover = ui.Hex("#36363b")
+		result.SurfacePressed = ui.Hex("#404046")
+		result.Border = ui.Hex("#4a4a50")
 	} else {
-		result.Surface = ui.Hex("#f4f4f6")
-		result.SurfaceHover = ui.Hex("#ebebef")
-		result.SurfacePressed = ui.Hex("#e0e0e6")
-		result.Border = ui.Hex("#dcdce2")
+		result.Focus = ui.Hex("#3f3f46")
+		result.Surface = ui.Hex("#f2f2f4")
+		result.SurfaceHover = ui.Hex("#e8e8eb")
+		result.SurfacePressed = ui.Hex("#dedee2")
+		result.Border = ui.Hex("#cfcfd4")
 	}
 	return result
 }
 
-// checkbox 保留原生勾选、键盘和无障碍行为，只统一选中与悬停的颜色。
-// 原生控件仅未勾选时有悬停边框，该边框沿用基础主题的灰色；选中后始终维持粉色。
+// checkbox 保留原生勾选、键盘和无障碍行为。未勾选时的悬停边框用中性灰，
+// 勾选后才用强调色，避免鼠标划过一排复选框时到处闪粉色。
 func checkbox(c *ui.Context, checked *bool, label string) ui.Element {
 	theme := *c.Theme()
-	if *checked && !c.Preferences().HighContrast {
-		theme.Accent, theme.AccentText = brandPink, ui.Hex("#18181b")
+	if !*checked && !c.Preferences().HighContrast {
+		theme.Accent = theme.Focus
 	}
 	var control ui.Element
 	ui.Themed(c, &theme).Background(ui.Transparent).Children(func() {
@@ -64,28 +94,30 @@ func checkbox(c *ui.Context, checked *bool, label string) ui.Element {
 	return control
 }
 
-// palette 是界面用的几种颜色，跟随系统浅色 / 深色。
+// palette 是界面用的中性色，跟随系统浅色 / 深色。
+// pageHover 是页面底色上的悬停色（侧边栏），cardHover 是面板上的悬停色；
+// border 是分隔线和小框的边，subtle 是键帽、标签这类小块的底色。
 type palette struct {
-	page, card, cardHover, border, subBorder, muted, subtle, chosen ui.Color
+	page, pageHover, card, cardHover, border, text, muted, subtle, chosen ui.Color
 }
 
 func colors(c *ui.Context) palette {
 	if c.Preferences().HighContrast {
 		theme := c.Theme()
-		return palette{page: theme.Background, card: theme.Background, cardHover: theme.SurfaceHover,
-			border: theme.Text, subBorder: theme.Text, muted: theme.TextMuted, subtle: theme.Background, chosen: theme.SurfacePressed}
+		return palette{page: theme.Background, pageHover: theme.SurfaceHover, card: theme.Background, cardHover: theme.SurfaceHover,
+			border: theme.Text, text: theme.Text, muted: theme.TextMuted, subtle: theme.Background, chosen: theme.SurfacePressed}
 	}
 	if c.Theme().Dark {
 		return palette{
-			page: ui.Hex("#161618"), card: ui.Hex("#222225"), cardHover: ui.Hex("#2a2a2e"),
-			border: ui.Hex("#323237"), subBorder: ui.Hex("#2b2b30"),
-			muted: ui.Hex("#a1a1aa"), subtle: ui.Hex("#1b1b1e"), chosen: ui.Hex("#303036"),
+			page: ui.Hex("#161618"), pageHover: ui.Hex("#222226"), card: ui.Hex("#222225"), cardHover: ui.Hex("#2a2a2e"),
+			border: ui.Hex("#36363b"), text: ui.Hex("#f2f2f2"), muted: ui.Hex("#a3a3a3"),
+			subtle: ui.Hex("#2c2c30"), chosen: ui.Hex("#2e2e33"),
 		}
 	}
 	return palette{
-		page: ui.Hex("#f4f4f6"), card: ui.Hex("#ffffff"), cardHover: ui.Hex("#f8f8fa"),
-		border: ui.Hex("#e6e6eb"), subBorder: ui.Hex("#e8e8ee"),
-		muted: ui.Hex("#65656f"), subtle: ui.Hex("#f5f6f8"), chosen: ui.Hex("#e7e7ec"),
+		page: ui.Hex("#f5f5f7"), pageHover: ui.Hex("#ececf0"), card: ui.Hex("#ffffff"), cardHover: ui.Hex("#f5f5f7"),
+		border: ui.Hex("#dedee2"), text: ui.Hex("#181818"), muted: ui.Hex("#6a6a6a"),
+		subtle: ui.Hex("#f2f2f4"), chosen: ui.Hex("#e6e6ea"),
 	}
 }
 
@@ -125,17 +157,17 @@ var icons = struct {
 
 var statusCheck = solar("check")
 
-// navItem 是左边导航的一项：图标和名字；选中时浅灰底。点了返回 true。
+// navItem 是左边导航的一项：图标和名字；选中时浅灰底、字加粗。点了返回 true。
 func navItem(c *ui.Context, icon *ui.SVG, name string, chosen bool) bool {
 	p := colors(c)
-	item := ui.ButtonBase(c).MinHeight(max(36, textSize(c, 36))).Padding(8, 12).Gap(12).
+	item := ui.ButtonBase(c).MinHeight(max(space10, textSize(c, space10))).Padding(space2, space3).Gap(space3).
 		Radius(controlRadius).Justify(ui.Start).AlignItems(ui.Center).Cursor(ui.CursorPointer).Label(name)
 	iconColor := p.muted
 	if chosen {
 		item.Background(p.chosen)
-		iconColor = c.Theme().Text
+		iconColor = p.text
 	} else if item.Hovered() {
-		item.Background(p.cardHover)
+		item.Background(p.pageHover)
 	}
 	item.Children(func() {
 		ui.Icon(c, icon).FontSize(textSize(c, 16)).TextColor(iconColor)
@@ -147,54 +179,73 @@ func navItem(c *ui.Context, icon *ui.SVG, name string, chosen bool) bool {
 	return item.Clicked()
 }
 
-// pageHeader 是页面顶上的标题和一句说明。
-func pageHeader(c *ui.Context, title, subtitle string) {
-	ui.Column(c).Gap(6).Margin(0, 0, 12, 0).Children(func() {
-		ui.Text(c, title).FontSize(textSize(c, 24)).FontWeight(600).Wrap()
-		if subtitle != "" {
-			ui.Text(c, subtitle).TextColor(colors(c).muted).LineHeight(1.45).Wrap()
+// pageHeader 是页面标题；note 只写使用前提、限制或隐私范围，没有就留空。
+func pageHeader(c *ui.Context, title, note string) {
+	ui.Column(c).Gap(space2).Children(func() {
+		ui.Text(c, title).FontSize(textSize(c, fontTitle)).FontWeight(600).Wrap()
+		if note != "" {
+			ui.Text(c, note).TextColor(colors(c).muted).LineHeight(1.5).Wrap()
 		}
 	})
 }
 
+// panel 是一块分组面板：白底（深色为浅一级的灰）、大圆角、无边框无阴影；
+// 高对比度主题下补一圈边框，保证面板轮廓可见。面板里不再嵌套面板。
+func panel(c *ui.Context) ui.Element {
+	p := colors(c)
+	box := ui.Column(c).FillWidth().Radius(panelRadius).Background(p.card).Clip()
+	if c.Preferences().HighContrast {
+		box.Border(1, p.border)
+	}
+	return box
+}
+
+// sectionTitle 是分组标题，与面板内的文字左对齐。
+func sectionTitle(c *ui.Context, title string) ui.Element {
+	return ui.Text(c, title).FontSize(textSize(c, fontSection)).FontWeight(600).Margin(0, rowInset).Wrap()
+}
+
 // section 是一组设置：只在相邻项目之间画浅色细线，首尾不增加分隔线。
+// 有标题的分组与上方内容拉开 32 像素（含页面列的 8 像素间隙），无标题的拉开 16 像素。
 func section(c *ui.Context, title string, fn func()) {
 	p := colors(c)
-	before := float32(18)
+	before := space6
 	if title == "" {
-		before = 6
+		before = space2
 	}
-	ui.Column(c).Gap(8).Margin(before, 0, 0, 0).Children(func() {
+	ui.Column(c).Gap(space3).Margin(before, 0, 0, 0).Children(func() {
 		if title != "" {
-			ui.Text(c, title).FontSize(textSize(c, 13)).FontWeight(600).TextColor(p.muted).Padding(0, 4).Wrap()
+			sectionTitle(c, title)
 		}
-		card := ui.Column(c).Padding(6, rowInset).
-			Radius(panelRadius).Background(p.card).Border(1, p.border).Clip()
-		if !c.Preferences().HighContrast {
-			alpha := float32(0.03)
-			if c.Theme().Dark {
-				alpha = 0.18
-			}
-			card.Shadow(0, 1, 3, 0, ui.RGBA(0, 0, 0, alpha))
-		}
-		card.Children(func() { ui.Column(c).FillWidth().Gap(1).Dividers(1, p.border).Children(fn) })
+		panel(c).Padding(space1, rowInset).Children(func() {
+			ui.Column(c).FillWidth().Gap(1).Dividers(1, p.border).Children(fn)
+		})
+	})
+}
+
+// listHeader 是面板外、列表上方的一行：左边标题（常带条数），右边搜索框或按钮。
+func listHeader(c *ui.Context, title string, controls func()) {
+	ui.Row(c).Margin(space6, 0, 0, 0).Padding(0, 0, 0, rowInset).Gap(space3).Wrap().AlignItems(ui.Center).Children(func() {
+		ui.Text(c, title).FontSize(textSize(c, fontSection)).FontWeight(600).Grow(1).Basis(180).Wrap()
+		controls()
 	})
 }
 
 // texts 是一行左边的名字和说明。
 func texts(c *ui.Context, title, desc string) ui.Element {
-	return textsWithSize(c, title, desc, 14, 13)
+	return textsWithWeight(c, title, desc, 500)
 }
 
+// subTexts 是子项的名字和说明：字号相同，标题改用常规字重，层级靠缩进表达。
 func subTexts(c *ui.Context, title, desc string) ui.Element {
-	return textsWithSize(c, title, desc, 13.5, 12.5)
+	return textsWithWeight(c, title, desc, 400)
 }
 
-func textsWithSize(c *ui.Context, title, desc string, titleSize, descSize float32) ui.Element {
-	return ui.Column(c).Grow(1).Basis(200).MinWidth(160).Shrink(1).Gap(2).Children(func() {
-		ui.Text(c, title).FontSize(textSize(c, titleSize)).FontWeight(500).LineHeight(1.4).Wrap()
+func textsWithWeight(c *ui.Context, title, desc string, weight int) ui.Element {
+	return ui.Column(c).Grow(1).Basis(200).MinWidth(160).Shrink(1).Gap(space1).Children(func() {
+		ui.Text(c, title).FontSize(textSize(c, fontBody)).FontWeight(weight).LineHeight(1.4).Wrap()
 		if desc != "" {
-			ui.Text(c, desc).FontSize(textSize(c, descSize)).TextColor(colors(c).muted).LineHeight(1.45).Wrap()
+			ui.Text(c, desc).FontSize(textSize(c, fontCaption)).TextColor(colors(c).muted).LineHeight(1.5).Wrap()
 		}
 	})
 }
@@ -210,54 +261,63 @@ func settingGroup(c *ui.Context, parent func(), hasSub bool, sub func()) {
 	})
 }
 
-// subGroup 用统一柔和底色与缩进承接父级开关展开后的所有二级项，
-// 子项之间仅使用浅色细线分隔，不加侧边强调条，也不把每个子项画成孤立小卡片。
-func subGroup(c *ui.Context, fn func()) {
+// subLevel 是缩进一级的子项区：顶部和子项之间各一条细线，细线从缩进处开始，
+// 不画底色框、侧边条或独立小卡片（docs/UI-DESIGN.md「层级」）。
+func subLevel(c *ui.Context, fn func()) {
 	p := colors(c)
-	border := p.subBorder
-	if c.Preferences().HighContrast {
-		border = p.border
-	}
-	ui.Column(c).FillWidth().Padding(0, 0, 12, 0).Children(func() {
-		ui.Column(c).FillWidth().Padding(4, 14, 4, 16).Radius(controlRadius).Background(p.subtle).
-			Border(1, border).Clip().Children(func() {
-			ui.Column(c).FillWidth().Gap(1).Dividers(1, p.subBorder).Children(fn)
+	ui.Column(c).FillWidth().Padding(0, 0, 0, subIndent).Children(func() {
+		ui.Column(c).FillWidth().BorderWidth(1, 0, 0, 0).BorderColor(p.border).Children(func() {
+			ui.Column(c).FillWidth().Gap(1).Dividers(1, p.border).Children(fn)
 		})
 	})
 }
 
-// nestedSubGroup 在二级分组内部呈现第三级从属关系：只用更深的左侧缩进与顶部细线，不加侧边条，也不叠加嵌套卡片。
-func nestedSubGroup(c *ui.Context, fn func()) {
-	p := colors(c)
-	ui.Column(c).FillWidth().Padding(0, 0, 6, 20).Children(func() {
-		ui.Column(c).FillWidth().Padding(2, 0, 0, 0).BorderWidth(1, 0, 0, 0).BorderColor(p.subBorder).Children(func() {
-			ui.Column(c).FillWidth().Gap(1).Dividers(1, p.subBorder).Children(fn)
-		})
-	})
-}
+// subGroup 承接父级开关展开后的所有二级项。
+func subGroup(c *ui.Context, fn func()) { subLevel(c, fn) }
+
+// nestedSubGroup 在二级子项内部呈现第三级从属关系，再缩进一级。
+func nestedSubGroup(c *ui.Context, fn func()) { subLevel(c, fn) }
 
 // subContent 用于次级分组内的表单、勾选网格等非单行内容，保持统一上下留白。
 func subContent(c *ui.Context, fn func()) {
-	ui.Column(c).FillWidth().Padding(10, 0).Gap(12).Children(fn)
+	ui.Column(c).FillWidth().Padding(space3, 0).Gap(space3).Children(fn)
 }
 
-// row 是卡片里的一行：左边名字和说明，右边 control 画的控件。
+// 一级设置行和子项行的上下内边距与最小高度。
+const (
+	rowPadding    = space4
+	rowMinHeight  = 64
+	subRowPadding = space3
+	subRowMin     = 52
+)
+
+// line 是设置行的外框：左边文字，右边控件；放不下时控件整组换到下一行。
+func line(c *ui.Context, sub bool) ui.Element {
+	if sub {
+		return ui.Row(c).FillWidth().Padding(subRowPadding, 0).Gap(space4).Wrap().AlignItems(ui.Center).MinHeight(subRowMin)
+	}
+	return ui.Row(c).FillWidth().Padding(rowPadding, 0).Gap(space4).Wrap().AlignItems(ui.Center).MinHeight(rowMinHeight)
+}
+
+func controls(c *ui.Context, control func()) {
+	if control != nil {
+		ui.Row(c).Gap(space2).Wrap().AlignItems(ui.Center).MinWidth(0).MaxWidthPercent(100).Shrink(1).Children(control)
+	}
+}
+
+// row 是面板里的一行：左边名字和说明，右边 control 画的控件。
 func row(c *ui.Context, title, desc string, control func()) {
-	ui.Row(c).Padding(11, 0).Gap(16).Wrap().AlignItems(ui.Center).MinHeight(58).Children(func() {
+	line(c, false).Children(func() {
 		texts(c, title, desc)
-		if control != nil {
-			ui.Row(c).Gap(8).Wrap().AlignItems(ui.Center).MinWidth(0).MaxWidthPercent(100).Shrink(1).Children(control)
-		}
+		controls(c, control)
 	})
 }
 
-// subRow 是次级分组里的一行：行高和字阶略轻于一级设置项，不重复套独立卡片。
+// subRow 是子项区里的一行。
 func subRow(c *ui.Context, title, desc string, control func()) {
-	ui.Row(c).FillWidth().Padding(8, 0).Gap(16).Wrap().MinHeight(46).AlignItems(ui.Center).Children(func() {
+	line(c, true).Children(func() {
 		subTexts(c, title, desc)
-		if control != nil {
-			ui.Row(c).Gap(8).Wrap().AlignItems(ui.Center).MinWidth(0).MaxWidthPercent(100).Shrink(1).Children(control)
-		}
+		controls(c, control)
 	})
 }
 
@@ -266,32 +326,22 @@ func switchRow(c *ui.Context, title, desc string, value *bool) bool {
 	return switchLine(c, title, desc, value, false)
 }
 
+// switchLine 不在开关旁另写「开 / 关」：开关本身的位置和强调色已经表示状态。
 func switchLine(c *ui.Context, title, desc string, value *bool, sub bool) bool {
 	changed := false
-	build := func(line ui.Element, labelFn func(*ui.Context, string, string) ui.Element) {
-		line.Children(func() {
-			left := labelFn(c, title, desc).Cursor(ui.CursorPointer)
-			if left.Clicked() {
-				*value = !*value
-				changed = true
-			}
-			ui.Row(c).Gap(10).AlignItems(ui.Center).Shrink(0).Children(func() {
-				state := "关"
-				if *value {
-					state = "开"
-				}
-				ui.Text(c, state).TextColor(colors(c).muted).FontSize(textSize(c, 13)).Width(textSize(c, 14)).TextAlign(ui.Center)
-				if ui.Switch(c, value).Label(title).Changed() {
-					changed = true
-				}
-			})
-		})
-	}
+	labelFn := texts
 	if sub {
-		build(ui.Row(c).FillWidth().Padding(8, 0).Gap(16).Wrap().AlignItems(ui.Center).MinHeight(46), subTexts)
-		return changed
+		labelFn = subTexts
 	}
-	build(ui.Row(c).FillWidth().Padding(11, 0).Gap(16).Wrap().AlignItems(ui.Center).MinHeight(58), texts)
+	line(c, sub).Children(func() {
+		if labelFn(c, title, desc).Cursor(ui.CursorPointer).Clicked() {
+			*value = !*value
+			changed = true
+		}
+		if ui.Switch(c, value).Label(title).Shrink(0).Changed() {
+			changed = true
+		}
+	})
 	return changed
 }
 
@@ -305,14 +355,29 @@ func choose(c *ui.Context, label string, list []choice, value *string, width flo
 	return false
 }
 
-// hint 是卡片下面一行小字说明。
+// hint 是面板下面的一行说明，只写前提、限制和后果，与面板内文字左对齐。
 func hint(c *ui.Context, text string) {
-	ui.Text(c, text).FontSize(textSize(c, 13)).TextColor(colors(c).muted).LineHeight(1.45).Padding(0, 4).Wrap().Margin(6, 0, 0, 0)
+	ui.Text(c, text).FontSize(textSize(c, fontCaption)).TextColor(colors(c).muted).LineHeight(1.5).Margin(0, rowInset).Wrap()
+}
+
+// caption 是面板内的一段说明或空状态文字。
+func caption(c *ui.Context, text string) ui.Element {
+	return ui.Text(c, text).FontSize(textSize(c, fontCaption)).TextColor(colors(c).muted).LineHeight(1.5).Wrap()
 }
 
 // keyCap 画一个按键的样子（快捷键页和短语编码用）。
 func keyCap(c *ui.Context, text string) ui.Element {
 	p := colors(c)
-	return ui.Text(c, text).FontSize(textSize(c, 12)).FontWeight(500).Padding(4, 8).Radius(controlRadius).
+	return ui.Text(c, text).FontSize(textSize(c, fontCaption)).FontWeight(500).Padding(space1, space2).Radius(controlRadius).
 		Border(1, p.border).Background(p.subtle).SingleLine().MaxWidthPercent(100)
+}
+
+// onIntent 让列表行里的次要操作（如单条删除）平时隐藏，指针悬停或键盘焦点进入该行时淡入。
+// 控件始终留在布局和 Tab 顺序里，键盘聚焦后行的 FocusWithin 为真，随即显示。
+func onIntent(c *ui.Context, item ui.Element, fn func()) {
+	target := float32(0)
+	if item.Hovered() || item.FocusWithin() {
+		target = 1
+	}
+	ui.Row(c).Shrink(0).Opacity(item.Animate("intent", target, revealDuration)).Children(fn)
 }

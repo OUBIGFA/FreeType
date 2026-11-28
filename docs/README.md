@@ -5,6 +5,7 @@
 这些文档说明 FreeType 使用的 WowType 核心、C ABI 和 Windows 外壳。Linux/macOS 的原始安装流程和功能状态只用于技术对照，不代表 FreeType 的平台支持承诺。
 
 - [Windows 版说明](WINDOWS.md)：Windows 结构、输入行为、词库导入、数据目录、构建和验证范围。
+- [界面设计规范](UI-DESIGN.md)：设置窗口的颜色、间距、字号、组件和截图验收；候选窗等锁定界面的现有取值。
 - [Windows 本地测试指南](WINDOWS-ACCEPTANCE.md)：按需执行的安装、升级、卸载与应用输入测试，不作为交付或发布前置条件。
 - [C ABI](ABI.md)：平台外壳调用 Rust 核心的接口。
 - [移植边界](PORTING.md)：输入会话和平台集成的职责。

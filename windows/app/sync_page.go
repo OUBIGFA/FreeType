@@ -10,7 +10,7 @@ import (
 
 // syncPage 是「数据与同步」页：整份数据的导入导出，以及上传到自己的网盘、在别的电脑上合并恢复。
 func (s *settings) syncPage(c *ui.Context) {
-	pageHeader(c, "数据与同步", "备份全部设置和数据，或通过你自己的网盘在几台电脑之间同步")
+	pageHeader(c, "数据与同步", "")
 	s.backupSection(c)
 	if !s.loaded {
 		return
@@ -35,7 +35,7 @@ func (s *settings) syncPage(c *ui.Context) {
 					if ui.Segmented(c, &provider, "WebDAV", "S3 兼容").AlignSelf(ui.Start).Label("同步服务").Changed() {
 						s.sync.Provider = []string{"webdav", "s3"}[provider]
 					}
-					ui.Column(c).FillWidth().Gap(14).Children(func() {
+					ui.Column(c).FillWidth().Gap(16).Children(func() {
 						if s.sync.Provider == "s3" {
 							ui.Field(c, "服务地址", func() {
 								ui.TextInput(c, &s.sync.S3Endpoint).Placeholder("https://s3.amazonaws.com").FillWidth()
@@ -95,7 +95,7 @@ func (s *settings) syncPage(c *ui.Context) {
 		}, true, func() {
 			s.settingBlock(c, "sync/同步计划", func() {
 				showPlan := s.sync.Automatic || s.showSetting("sync/同步计划")
-				ui.Column(c).FillWidth().Gap(1).Dividers(1, colors(c).subBorder).Children(func() {
+				ui.Column(c).FillWidth().Gap(4).Dividers(1, colors(c).border).Children(func() {
 					s.syncStatusSummary(c)
 					if showPlan {
 						ui.Column(c).FillWidth().Children(func() {
@@ -116,7 +116,7 @@ func (s *settings) syncPage(c *ui.Context) {
 								} else {
 									subRow(c, "同步间隔 / 分钟", "", func() {
 										value := float64(s.sync.IntervalMinutes)
-										if ui.NumberInput(c, &value, 1, 1440, 1).Label("同步间隔").Width(160).MaxWidthPercent(100).Changed() {
+										if ui.NumberInput(c, &value, 1, 1440, 1).Label("同步间隔").Width(120).Changed() {
 											s.sync.IntervalMinutes = int(value)
 										}
 									})
@@ -126,19 +126,19 @@ func (s *settings) syncPage(c *ui.Context) {
 						switchLine(c, "启动时同步", "启动 FreeType 后同步一次", &s.sync.SyncOnStart, true)
 						subRow(c, "每日最多次数", "0 表示不限；手动同步不受限", func() {
 							value := float64(s.sync.DailyLimit)
-							if ui.NumberInput(c, &value, 0, 1440, 1).Label("每日最多次数").Width(160).MaxWidthPercent(100).Changed() {
+							if ui.NumberInput(c, &value, 0, 1440, 1).Label("每日最多次数").Width(120).Changed() {
 								s.sync.DailyLimit = int(value)
 							}
 						})
 						subRow(c, "失败重试次数", "0 表示不重试", func() {
 							value := float64(s.sync.RetryLimit)
-							if ui.NumberInput(c, &value, 0, 10, 1).Label("失败重试次数").Width(160).MaxWidthPercent(100).Changed() {
+							if ui.NumberInput(c, &value, 0, 10, 1).Label("失败重试次数").Width(120).Changed() {
 								s.sync.RetryLimit = int(value)
 							}
 						})
 						subRow(c, "每台电脑保留备份", "超出时自动清理较早的云端备份", func() {
 							value := float64(s.sync.KeepSnapshots)
-							if ui.NumberInput(c, &value, 1, 100, 1).Label("保留备份数").Width(160).MaxWidthPercent(100).Changed() {
+							if ui.NumberInput(c, &value, 1, 100, 1).Label("保留备份数").Width(120).Changed() {
 								s.sync.KeepSnapshots = int(value)
 							}
 						})
@@ -188,7 +188,7 @@ func (s *settings) syncPage(c *ui.Context) {
 				})
 			}, hasDevices, func() {
 				if s.syncListed && len(s.syncDevices) == 0 {
-					ui.Text(c, "云端还没有备份").FontSize(textSize(c, 12.5)).TextColor(colors(c).muted).Wrap().Padding(8, 0)
+					ui.Text(c, "云端还没有备份").FontSize(textSize(c, fontCaption)).TextColor(colors(c).muted).Wrap().Padding(8, 0)
 					return
 				}
 				for _, device := range s.syncDevices {
@@ -229,7 +229,7 @@ func (s *settings) syncPage(c *ui.Context) {
 			hint(c, fmt.Sprintf("新增 %d 项；更新 %d 项；删除 %d 项；冲突 %d 项", preview.Added, preview.Updated, preview.Deleted, preview.Conflicts))
 			hint(c, "冲突按较新的记录处理；同一时间删除优先；下方最多显示 100 条影响项")
 			for _, detail := range preview.Details {
-				ui.Text(c, detail).Wrap().FontSize(textSize(c, 13))
+				ui.Text(c, detail).Wrap().FontSize(textSize(c, fontCaption))
 			}
 			checkbox(c, &s.syncReplace, "整份替换本机数据").Disabled(busy)
 			if s.syncReplace {
@@ -315,8 +315,8 @@ func (s *settings) syncStatusSummary(c *ui.Context) {
 		color = c.Theme().Danger
 	}
 	p := colors(c)
-	ui.Column(c).FillWidth().Gap(10).Padding(10, 0, 12, 0).Children(func() {
-		ui.Text(c, message).FontSize(textSize(c, 14)).FontWeight(600).TextColor(color).LineHeight(1.4).Wrap()
+	ui.Column(c).FillWidth().Gap(12).Padding(12, 0, 12, 0).Children(func() {
+		ui.Text(c, message).FontSize(textSize(c, fontBody)).FontWeight(600).TextColor(color).LineHeight(1.4).Wrap()
 		if status.Failed {
 			s.syncRecoveryActions(c, "plan", message, s.syncBusy != "" || status.Busy)
 		}
@@ -328,21 +328,21 @@ func (s *settings) syncStatusSummary(c *ui.Context) {
 			}{
 				{"最近同步", status.Last, "尚未同步"}, {"下次同步", status.Next, "等待安排"},
 			} {
-				ui.Column(c).Grow(1).Basis(textSize(c, 132)).MinWidth(textSize(c, 118)).Gap(3).Children(func() {
-					ui.Text(c, item.label).FontSize(textSize(c, 12)).TextColor(p.muted).Wrap()
+				ui.Column(c).Grow(1).Basis(textSize(c, 132)).MinWidth(textSize(c, 118)).Gap(4).Children(func() {
+					ui.Text(c, item.label).FontSize(textSize(c, fontCaption)).TextColor(p.muted).Wrap()
 					if item.label == "下次同步" && !s.sync.Automatic {
-						ui.Text(c, "未启用").FontSize(textSize(c, 17)).FontWeight(600).Wrap()
+						ui.Text(c, "未启用").FontSize(textSize(c, fontHeading)).FontWeight(600).Wrap()
 					} else if item.at.IsZero() {
-						ui.Text(c, item.empty).FontSize(textSize(c, 17)).FontWeight(600).Wrap()
+						ui.Text(c, item.empty).FontSize(textSize(c, fontHeading)).FontWeight(600).Wrap()
 					} else {
-						ui.Text(c, item.at.Local().Format("15:04:05")).FontSize(textSize(c, 18)).FontWeight(600).FontFeatures("tnum")
-						ui.Text(c, item.at.Local().Format("2006-01-02")).FontSize(textSize(c, 12)).TextColor(p.muted).FontFeatures("tnum")
+						ui.Text(c, item.at.Local().Format("15:04:05")).FontSize(textSize(c, fontHeading)).FontWeight(600).FontFeatures("tnum")
+						ui.Text(c, item.at.Local().Format("2006-01-02")).FontSize(textSize(c, fontCaption)).TextColor(p.muted).FontFeatures("tnum")
 					}
 				})
 			}
-			ui.Column(c).Grow(1).Basis(textSize(c, 132)).MinWidth(textSize(c, 118)).Gap(3).Children(func() {
-				ui.Text(c, "今日自动尝试").FontSize(textSize(c, 12)).TextColor(p.muted).Wrap()
-				ui.Text(c, fmt.Sprintf("%d 次", status.Count)).FontSize(textSize(c, 18)).FontWeight(600).FontFeatures("tnum")
+			ui.Column(c).Grow(1).Basis(textSize(c, 132)).MinWidth(textSize(c, 118)).Gap(4).Children(func() {
+				ui.Text(c, "今日自动尝试").FontSize(textSize(c, fontCaption)).TextColor(p.muted).Wrap()
+				ui.Text(c, fmt.Sprintf("%d 次", status.Count)).FontSize(textSize(c, fontHeading)).FontWeight(600).FontFeatures("tnum")
 			})
 		})
 	})
@@ -366,9 +366,10 @@ func (s *settings) syncRecoveryActions(c *ui.Context, area, message string, busy
 	default:
 		guidance = "同步未能完成；可先重试一次，仍失败时可重建本机同步记录或以本机数据重置云端"
 	}
-	ui.Column(c).Key("sync-recovery-"+area).FillWidth().Padding(10, 12).Radius(controlRadius).
-		Background(p.card).Border(1, p.subBorder).Gap(8).Children(func() {
-		ui.Text(c, guidance).FontSize(textSize(c, 12.5)).TextColor(p.muted).LineHeight(1.45).Wrap()
+	// 故障说明只用一块浅底色标出，确认步骤用细线隔开，不再在里面套框。
+	ui.Column(c).Key("sync-recovery-"+area).FillWidth().Padding(space3, space4).Radius(controlRadius).
+		Background(p.subtle).Gap(space3).Children(func() {
+		ui.Text(c, guidance).FontSize(textSize(c, fontCaption)).TextColor(p.muted).LineHeight(1.45).Wrap()
 		ui.Row(c).FillWidth().Wrap().GapX(8).GapY(8).AlignItems(ui.Center).Children(func() {
 			switch kind {
 			case syncProblemRecordsMismatch:
@@ -441,9 +442,9 @@ func (s *settings) syncRecoveryActions(c *ui.Context, area, message string, busy
 			}
 		})
 		if s.confirmSyncResetCloud {
-			ui.Column(c).FillWidth().Padding(8, 10).Radius(controlRadius).Background(p.subtle).Border(1, p.subBorder).Gap(8).Children(func() {
+			ui.Column(c).FillWidth().Padding(space3, 0, 0, 0).BorderWidth(1, 0, 0, 0).BorderColor(p.border).Gap(space2).Children(func() {
 				ui.Text(c, "将先在本机保存恢复前备份，再删除云端旧同步文件并上传当前数据；其他电脑的旧备份将被清理，请确认本机数据完整后再继续").
-					FontSize(textSize(c, 12.5)).LineHeight(1.45).Wrap()
+					FontSize(textSize(c, fontCaption)).LineHeight(1.45).Wrap()
 				ui.Row(c).FillWidth().Wrap().Gap(8).Children(func() {
 					if ui.Button(c, "取消").Disabled(busy).Clicked() {
 						s.confirmSyncResetCloud = false
@@ -455,9 +456,9 @@ func (s *settings) syncRecoveryActions(c *ui.Context, area, message string, busy
 			})
 		}
 		if s.confirmForceRestore && s.syncFailedDevice != nil && area == "transfer" {
-			ui.Column(c).FillWidth().Padding(8, 10).Radius(controlRadius).Background(p.subtle).Border(1, p.subBorder).Gap(8).Children(func() {
+			ui.Column(c).FillWidth().Padding(space3, 0, 0, 0).BorderWidth(1, 0, 0, 0).BorderColor(p.border).Gap(space2).Children(func() {
 				ui.Text(c, "将先保存本机恢复前备份，再忽略该备份的同步记录并按正文整份替换本机数据，同时重建同步记录").
-					FontSize(textSize(c, 12.5)).LineHeight(1.45).Wrap()
+					FontSize(textSize(c, fontCaption)).LineHeight(1.45).Wrap()
 				ui.Row(c).FillWidth().Wrap().Gap(8).Children(func() {
 					if ui.Button(c, "取消").Disabled(busy).Clicked() {
 						s.confirmForceRestore = false

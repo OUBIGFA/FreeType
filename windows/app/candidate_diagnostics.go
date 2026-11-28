@@ -48,7 +48,7 @@ func (s *settings) candidateDiagnosticsSection(c *ui.Context) {
 	})
 	ui.Modal(c, &s.confirmDiagnostics, func() {
 		ui.Column(c).Gap(16).Width(440).MaxWidthPercent(100).Children(func() {
-			ui.Text(c, "开启候选诊断").FontSize(textSize(c, 17)).FontWeight(600)
+			ui.Text(c, "开启候选诊断").FontSize(textSize(c, fontHeading)).FontWeight(600)
 			ui.Text(c, "会记录正文、拼音、上下文、候选和应用名称；仅保存在本机，普通诊断导出不包含这些内容").Wrap()
 			ui.Text(c, "未标记为密码框的输入区也可能被记录；排查后请关闭并清空").Wrap().TextColor(colors(c).muted)
 			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {

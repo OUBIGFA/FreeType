@@ -12,7 +12,7 @@ func (s *settings) commonPage(c *ui.Context) {
 	pageHeader(c, "常用语", "常用语无需编码；启用工具栏后，在全拼下按 v + 空格打开工具栏，再选常用语")
 	section(c, "添加", func() {
 		s.settingBlock(c, "common/添加常用语", func() {
-			ui.Column(c).Padding(12, 0, 14, 0).Gap(14).Children(func() {
+			ui.Column(c).Padding(space4, 0).Gap(space4).Children(func() {
 				ui.Column(c).Children(func() {
 					ui.TextArea(c, &s.newCommon).Label("常用语内容").Placeholder("输入常用语，支持多行").Height(80)
 				})
@@ -37,8 +37,7 @@ func (s *settings) commonPage(c *ui.Context) {
 		})
 	})
 	s.reportView(c)
-	ui.Row(c).Margin(18, 0, 0, 0).Padding(0, 4).Gap(12).Wrap().AlignItems(ui.Center).Children(func() {
-		ui.Textf(c, "常用语 %d 条", len(s.common)).FontSize(textSize(c, 13)).FontWeight(600).TextColor(colors(c).muted).Grow(1).Basis(180).Wrap()
+	listHeader(c, fmt.Sprintf("常用语 %d 条", len(s.common)), func() {
 		ui.SearchField(c, &s.commonQuery).Label("搜索常用语").Placeholder("搜索常用语").Width(240).MaxWidthPercent(100).Shrink(1)
 	})
 	section(c, "", func() {
@@ -61,15 +60,14 @@ func (s *settings) commonPage(c *ui.Context) {
 			remove := -1
 			ui.List(c, nil, len(shown), func(k int) {
 				i := shown[k]
-				item := ui.Row(c).Height(phraseRow).Padding(0, 0).Gap(12).AlignItems(ui.Center)
-				if item.Hovered() {
-					item.Background(colors(c).cardHover)
-				}
+				item := ui.Row(c).Height(phraseRow).Gap(space3).AlignItems(ui.Center)
 				item.Children(func() {
 					ui.Text(c, preview(s.common[i])).Grow(1).Basis(0).MinWidth(0).Shrink(1).SingleLine().Tooltip(s.common[i])
-					if ui.Button(c, "删除").Label(fmt.Sprintf("删除常用语 %d", i+1)).Disabled(s.commonBusy).Clicked() {
-						remove = i
-					}
+					onIntent(c, item, func() {
+						if ui.Button(c, "删除").Label(fmt.Sprintf("删除常用语 %d", i+1)).Disabled(s.commonBusy).Clicked() {
+							remove = i
+						}
+					})
 				})
 			}).MaxHeight(phraseRow * maxPhraseRows)
 			if remove >= 0 {

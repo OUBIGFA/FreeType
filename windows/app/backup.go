@@ -99,8 +99,8 @@ func (s *settings) backupSection(c *ui.Context) {
 func (s *settings) factoryResetDialog(c *ui.Context) {
 	ui.Modal(c, &s.confirmFactoryReset, func() {
 		ui.Column(c).Gap(16).Width(440).MaxWidthPercent(100).Children(func() {
-			ui.Column(c).Gap(6).Children(func() {
-				ui.Text(c, "恢复出厂设置").FontSize(textSize(c, 17)).FontWeight(600)
+			ui.Column(c).Gap(8).Children(func() {
+				ui.Text(c, "恢复出厂设置").FontSize(textSize(c, fontHeading)).FontWeight(600)
 				ui.Text(c, "恢复后无法撤销；如需留存当前设置，请先导出全部设置").Wrap().TextColor(colors(c).muted)
 			})
 			factoryResetScope(c, "恢复为默认", []string{
@@ -125,16 +125,15 @@ func (s *settings) factoryResetDialog(c *ui.Context) {
 	})
 }
 
-// factoryResetScope 是确认框里的一组条目：小标题加圆点列表，放在浅色底块里。
+// factoryResetScope 是确认框里的一组条目：小标题加圆点列表；弹窗里不再套底色框，组间靠留白区分。
 func factoryResetScope(c *ui.Context, title string, items []string) {
 	p := colors(c)
-	ui.Column(c).Key("reset-"+title).Gap(8).Padding(12, 14).Radius(controlRadius+2).
-		Background(p.subtle).Border(1, p.subBorder).Children(func() {
-		ui.Text(c, title).FontSize(textSize(c, 13)).FontWeight(600)
+	ui.Column(c).Key("reset-" + title).Gap(space2).Children(func() {
+		ui.Text(c, title).FontSize(textSize(c, fontCaption)).FontWeight(600)
 		for _, item := range items {
 			ui.Row(c).Key(item).Gap(8).AlignItems(ui.Start).Children(func() {
 				ui.Row(c).Width(4).Height(4).Radius(2).Background(p.muted).Margin(textSize(c, 8), 0, 0, 0)
-				ui.Text(c, item).FontSize(textSize(c, 13)).TextColor(p.muted).Wrap().Shrink(1)
+				ui.Text(c, item).FontSize(textSize(c, fontCaption)).TextColor(p.muted).Wrap().Shrink(1)
 			})
 		}
 	})
@@ -143,15 +142,15 @@ func factoryResetScope(c *ui.Context, title string, items []string) {
 // exportDialog 让用户勾选要导出的数据（并可选设置加密密码），再选保存位置。
 func (s *settings) exportDialog(c *ui.Context) {
 	ui.Modal(c, &s.exportChoosing, func() {
-		ui.Column(c).Gap(14).Width(420).MaxWidthPercent(100).Children(func() {
-			ui.Text(c, "选择要导出的数据").FontSize(textSize(c, 17)).FontWeight(600)
+		ui.Column(c).Gap(16).Width(420).MaxWidthPercent(100).Children(func() {
+			ui.Text(c, "选择要导出的数据").FontSize(textSize(c, fontHeading)).FontWeight(600)
 			ui.Text(c, "只备份所选数据；导入时只替换备份中的数据").Wrap().TextColor(colors(c).muted)
-			ui.Column(c).Gap(10).Children(func() {
+			ui.Column(c).Gap(12).Children(func() {
 				for i, part := range backupParts {
-					ui.Column(c).Key("export-" + part.ID).Gap(2).Children(func() {
+					ui.Column(c).Key("export-" + part.ID).Gap(4).Children(func() {
 						checkbox(c, &s.exportParts[i], part.Title).Label("导出" + part.Title)
 						if part.Detail != "" {
-							ui.Text(c, part.Detail).FontSize(textSize(c, 12.5)).TextColor(colors(c).muted).Wrap().Padding(0, 0, 0, 26)
+							ui.Text(c, part.Detail).FontSize(textSize(c, fontCaption)).TextColor(colors(c).muted).Wrap().Padding(0, 0, 0, 28)
 						}
 					})
 				}
@@ -179,8 +178,8 @@ func (s *settings) exportDialog(c *ui.Context) {
 // unlockDialog 在导入已加密的备份文件时提示用户输入密码。
 func (s *settings) unlockDialog(c *ui.Context) {
 	ui.Modal(c, &s.unlockingRestore, func() {
-		ui.Column(c).Gap(14).Width(400).MaxWidthPercent(100).Children(func() {
-			ui.Text(c, "输入备份密码").FontSize(textSize(c, 17)).FontWeight(600)
+		ui.Column(c).Gap(16).Width(400).MaxWidthPercent(100).Children(func() {
+			ui.Text(c, "输入备份密码").FontSize(textSize(c, fontHeading)).FontWeight(600)
 			ui.Text(c, "备份文件 "+filepath.Base(s.lockedBackupPath)+" 已加密；请输入导出时设置的备份密码").Wrap().TextColor(colors(c).muted)
 			ui.Field(c, "备份密码", func() {
 				ui.TextInput(c, &s.restorePassword).Password().Placeholder("备份密码").Label("导入备份密码").FillWidth()

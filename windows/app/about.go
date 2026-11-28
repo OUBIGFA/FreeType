@@ -33,7 +33,7 @@ func (s *settings) openLink(url string) {
 func (s *settings) aboutPage(c *ui.Context) {
 	pageHeader(c, "关于", "")
 	section(c, "", func() {
-		row(c, "FreeType "+s.version, "支持全拼、双拼和中英混输；根据选词记录调整候选顺序", nil)
+		row(c, "FreeType "+s.version, "", nil)
 		s.settingBlock(c, "about/GitHub", func() {
 			row(c, "GitHub", repositoryURL, func() {
 				ui.Icon(c, githubIcon).FontSize(textSize(c, 20))

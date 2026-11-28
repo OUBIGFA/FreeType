@@ -181,7 +181,8 @@ func newTestSettings() (*settings, *fakeBackend) {
 
 func open(t *testing.T, s *settings, page string) *ui.Tester {
 	t.Helper()
-	tt := ui.NewTester(s.view, 1000, 1800)
+	// 窗口足够高，整页设置无需滚动即可点到；设计改动让行变高时同步调这里。
+	tt := ui.NewTester(s.view, 1000, 2400)
 	if page != "" {
 		if err := tt.Click(page); err != nil {
 			t.Fatalf("打不开「%s」：%v", page, err)

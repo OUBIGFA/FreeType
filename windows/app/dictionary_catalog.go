@@ -101,8 +101,8 @@ func (s *settings) dictionaryBrowser(c *ui.Context) {
 			page := s.dictionaryPage
 			ui.Column(c).FillWidth().Gap(1).Dividers(1, p.border).Children(func() {
 				// 词库名称与说明编辑区
-				ui.Column(c).FillWidth().Padding(12, 0, 14, 0).Gap(10).Children(func() {
-					ui.Row(c).FillWidth().Gap(12).Wrap().AlignItems(ui.End).Children(func() {
+				ui.Column(c).FillWidth().Padding(space4, 0).Gap(space3).Children(func() {
+					ui.Row(c).FillWidth().Gap(space3).Wrap().AlignItems(ui.End).Children(func() {
 						ui.Field(c, "词库名称", func() {
 							ui.TextInput(c, &s.dictionaryRename).Label("词库名称").FillWidth()
 						}).Width(200).MaxWidthPercent(100)
@@ -114,12 +114,12 @@ func (s *settings) dictionaryBrowser(c *ui.Context) {
 						}
 					})
 					if page != nil && page.Dictionary.Source != "" {
-						ui.Text(c, "导入来源："+page.Dictionary.Source).FontSize(textSize(c, 12.5)).TextColor(p.muted).LineHeight(1.4).Wrap()
+						caption(c, "导入来源："+page.Dictionary.Source)
 					}
 				})
 				// 搜索、翻页与批量操作区
-				ui.Column(c).FillWidth().Padding(12, 0).Gap(10).Children(func() {
-					ui.Row(c).FillWidth().Gap(12).Wrap().AlignItems(ui.Center).Children(func() {
+				ui.Column(c).FillWidth().Padding(space4, 0).Gap(space3).Children(func() {
+					ui.Row(c).FillWidth().Gap(space3).Wrap().AlignItems(ui.Center).Children(func() {
 						if ui.SearchField(c, &s.dictionaryQuery).Label("搜索词库词条").Placeholder("搜索词语或拼音").
 							Grow(1).Basis(220).MinWidth(180).MaxWidthPercent(100).Changed() {
 							s.queryDictionary(0)
@@ -127,9 +127,9 @@ func (s *settings) dictionaryBrowser(c *ui.Context) {
 						if page != nil {
 							totalPages := max(1, (page.Total+dictionaryPageSize-1)/dictionaryPageSize)
 							currentPage := page.Offset/dictionaryPageSize + 1
-							ui.Row(c).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
+							ui.Row(c).Gap(space2).Wrap().AlignItems(ui.Center).Children(func() {
 								ui.Text(c, fmt.Sprintf("共 %d 条 · 第 %d / %d 页", page.Total, currentPage, totalPages)).
-									FontSize(textSize(c, 13)).TextColor(p.muted).FontFeatures("tnum")
+									FontSize(textSize(c, fontCaption)).TextColor(p.muted).FontFeatures("tnum")
 								if ui.Button(c, "上一页").Label("词库上一页").Disabled(s.dictionaryBusy || page.Offset == 0).Clicked() {
 									s.queryDictionary(max(0, page.Offset-dictionaryPageSize))
 								}
@@ -148,15 +148,15 @@ func (s *settings) dictionaryBrowser(c *ui.Context) {
 								count++
 							}
 						}
-						ui.Row(c).FillWidth().Gap(12).Wrap().AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
-							ui.Row(c).Gap(12).Wrap().AlignItems(ui.Center).Children(func() {
+						ui.Row(c).FillWidth().Gap(space3).Wrap().AlignItems(ui.Center).Justify(ui.SpaceBetween).Children(func() {
+							ui.Row(c).Gap(space3).Wrap().AlignItems(ui.Center).Children(func() {
 								if checkbox(c, &all, "本页全选").Disabled(s.dictionaryBusy).Changed() {
 									for _, entry := range page.Entries {
 										s.dictionarySelected[dictionaryEntryKey(entry)] = all
 									}
 								}
 								if count > 0 {
-									ui.Text(c, fmt.Sprintf("已选 %d 条", count)).FontSize(textSize(c, 13)).TextColor(p.muted).FontFeatures("tnum")
+									ui.Text(c, fmt.Sprintf("已选 %d 条", count)).FontSize(textSize(c, fontCaption)).TextColor(p.muted).FontFeatures("tnum")
 								}
 							})
 							if ui.Button(c, "删除选中").Label("删除选中词库词条").Disabled(s.dictionaryBusy || count == 0).Clicked() {
@@ -190,17 +190,14 @@ func (s *settings) dictionaryBrowser(c *ui.Context) {
 					entry := page.Entries[i]
 					key := dictionaryEntryKey(entry)
 					checked := s.dictionarySelected[key]
-					item := ui.Row(c).Padding(8, 0).MinHeight(46).Gap(12).AlignItems(ui.Center)
-					if item.Hovered() {
-						item.Background(p.cardHover)
-					}
+					item := ui.Row(c).Padding(space2, 0).MinHeight(48).Gap(space3).AlignItems(ui.Center)
 					item.Children(func() {
 						if checkbox(c, &checked, "").Label("选择 " + entry.Word + " " + entry.Pinyin).Disabled(s.dictionaryBusy).Changed() {
 							s.dictionarySelected[key] = checked
 						}
 						ui.Text(c, entry.Word).FontWeight(500).Width(132).SingleLine().Tooltip(entry.Word)
 						ui.Text(c, entry.Pinyin).Grow(1).Basis(0).MinWidth(0).SingleLine().TextColor(p.muted).Tooltip(entry.Pinyin)
-						ui.Textf(c, "权重 %d", entry.Weight).FontSize(textSize(c, 13)).TextColor(p.muted).MinWidth(textSize(c, 84)).SingleLine().Shrink(0).TextAlign(ui.End).FontFeatures("tnum")
+						ui.Textf(c, "权重 %d", entry.Weight).FontSize(textSize(c, fontCaption)).TextColor(p.muted).MinWidth(textSize(c, 84)).SingleLine().Shrink(0).TextAlign(ui.End).FontFeatures("tnum")
 					})
 				}).MaxHeight(380)
 			})

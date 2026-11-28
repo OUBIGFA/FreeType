@@ -54,10 +54,10 @@ func (s *settings) statsPage(c *ui.Context) {
 	}
 	if !s.config.TypingStats {
 		section(c, "输入统计已关闭", func() {
-			ui.Column(c).FillWidth().Padding(14, 0).Gap(6).Children(func() {
+			ui.Column(c).FillWidth().Padding(16, 0).Gap(8).Children(func() {
 				ui.Text(c, "关闭时不新增计数；开启后在本机按天记录字符、按键、活跃时长和候选位置").LineHeight(1.45).Wrap()
 				if len(s.stats) > 0 {
-					ui.Text(c, fmt.Sprintf("已有 %d 天的记录保留；可在上方清空", len(s.stats))).FontSize(textSize(c, 13)).TextColor(colors(c).muted).LineHeight(1.45).Wrap()
+					ui.Text(c, fmt.Sprintf("已有 %d 天的记录保留；可在上方清空", len(s.stats))).FontSize(textSize(c, fontCaption)).TextColor(colors(c).muted).LineHeight(1.45).Wrap()
 				}
 			})
 		})
@@ -66,7 +66,7 @@ func (s *settings) statsPage(c *ui.Context) {
 	now := time.Now()
 	s.statsOverview(c, statsMetrics(s.stats, now), now)
 	hint(c, "速度只统计汉字与字母；两次上屏间隔超过 10 秒视为休息，不计入活跃时长")
-	ui.Row(c).FillWidth().Justify(ui.SpaceBetween).AlignItems(ui.Center).Wrap().Gap(10).Margin(18, 0, 0, 0).Children(func() {
+	ui.Row(c).FillWidth().Justify(ui.SpaceBetween).AlignItems(ui.Center).Wrap().Gap(12).Margin(20, 0, 0, 0).Children(func() {
 		ui.Segmented(c, &s.statsTab, "按键", "趋势", "类型", "候选").Label("统计分类")
 		if s.statsTab == 0 {
 			ui.Segmented(c, &s.statsScope, "今日", "累计").Label("按键统计范围")
@@ -101,16 +101,16 @@ func (s *settings) statsPage(c *ui.Context) {
 			slices.Sort(dates)
 			slices.Reverse(dates)
 			if len(dates) == 0 {
-				ui.Text(c, "这 30 天还没有输入记录").FontSize(textSize(c, 13)).TextColor(colors(c).muted).Padding(14, 0)
+				ui.Text(c, "这 30 天还没有输入记录").FontSize(textSize(c, fontCaption)).TextColor(colors(c).muted).Padding(16, 0)
 			}
 			for _, date := range dates {
 				day := s.stats[date]
-				ui.Row(c).FillWidth().Padding(10, 0).MinHeight(46).Gap(16).AlignItems(ui.Center).Children(func() {
+				ui.Row(c).FillWidth().Padding(12, 0).MinHeight(48).Gap(16).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, date).FontWeight(500).FontFeatures("tnum").Grow(1)
-					ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+					ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 						ui.Text(c, fmt.Sprintf("%d 字符", sumCounters(day.Characters[:]))).FontWeight(500).FontFeatures("tnum")
 						ui.Text(c, "·").TextColor(colors(c).muted)
-						ui.Text(c, statsActive(day.ActiveMS)).FontSize(textSize(c, 13)).TextColor(colors(c).muted).FontFeatures("tnum")
+						ui.Text(c, statsActive(day.ActiveMS)).FontSize(textSize(c, fontCaption)).TextColor(colors(c).muted).FontFeatures("tnum")
 					})
 				})
 			}
@@ -212,16 +212,16 @@ func (s *settings) statsOverview(c *ui.Context, m typingMetrics, now time.Time) 
 	}
 	section(c, "概览", func() {
 		for rowIndex, items := range rows {
-			rowBox := ui.Row(c).FillWidth().AlignItems(ui.Stretch).Gap(25).Dividers(1, p.subBorder)
+			rowBox := ui.Row(c).FillWidth().AlignItems(ui.Stretch).Gap(24).Dividers(1, p.border)
 			if rowIndex == 0 {
-				rowBox.Padding(14, 0, 16, 0)
+				rowBox.Padding(16, 0, 16, 0)
 			} else {
-				rowBox.Padding(16, 0, 14, 0)
+				rowBox.Padding(16, 0, 16, 0)
 			}
 			rowBox.Children(func() {
 				for _, item := range items {
-					ui.Column(c).Grow(1).Basis(0).MinWidth(0).Gap(6).Children(func() {
-						ui.Text(c, item.title).FontSize(textSize(c, 13)).FontWeight(500).TextColor(p.muted)
+					ui.Column(c).Grow(1).Basis(0).MinWidth(0).Gap(8).Children(func() {
+						ui.Text(c, item.title).FontSize(textSize(c, fontCaption)).FontWeight(500).TextColor(p.muted)
 						valueRow := ui.Row(c).Wrap().Gap(4).AlignItems(ui.End)
 						if item.valueLabel != "" {
 							valueRow.Label(item.valueLabel)
@@ -230,14 +230,14 @@ func (s *settings) statsOverview(c *ui.Context, m typingMetrics, now time.Time) 
 							for _, part := range item.parts {
 								ui.Text(c, part[0]).FontSize(textSize(c, 26)).FontWeight(600).FontFeatures("tnum").Wrap()
 								if part[1] != "" {
-									ui.Text(c, part[1]).FontSize(textSize(c, 13)).TextColor(p.muted).Padding(0, 0, 3, 0)
+									ui.Text(c, part[1]).FontSize(textSize(c, fontCaption)).TextColor(p.muted).Padding(0, 0, 4, 0)
 								}
 							}
 						})
 						if len(item.notes) > 0 {
 							ui.Row(c).FillWidth().Wrap().Gap(8).AlignItems(ui.Center).Children(func() {
 								for _, note := range item.notes {
-									ui.Text(c, note).FontSize(textSize(c, 12.5)).TextColor(p.muted).FontFeatures("tnum").LineHeight(1.35).Wrap()
+									ui.Text(c, note).FontSize(textSize(c, fontCaption)).TextColor(p.muted).FontFeatures("tnum").LineHeight(1.35).Wrap()
 								}
 							})
 						}
@@ -248,32 +248,47 @@ func (s *settings) statsOverview(c *ui.Context, m typingMetrics, now time.Time) 
 	})
 }
 
+// 图表只用强调色的一组深浅：最重要的数据用最深的一级，其余依次变浅，再接中性灰。
+// 色阶取自键盘热度图（keyboardHeatColors），保证同一页的图表颜色一致。
+func statsAccent(c *ui.Context) ui.Color {
+	color, _ := keyboardHeatColors(c, 3)
+	return color
+}
+
+func statsShades(c *ui.Context) []ui.Color {
+	deep, _ := keyboardHeatColors(c, 4)
+	mid, _ := keyboardHeatColors(c, 3)
+	light, _ := keyboardHeatColors(c, 2)
+	p := colors(c)
+	return []ui.Color{deep, mid, light, p.muted, p.border}
+}
+
 // Upstream bar proportions and sparse end labels, rendered by the native chart library.
 func statsTrend(c *ui.Context, labels []string, values []uint64, unit string) {
 	p := colors(c)
 	peak := slices.Max(values)
-	ui.Column(c).Padding(14, 0).Gap(10).Children(func() {
+	ui.Column(c).Padding(16, 0).Gap(12).Children(func() {
 		ui.Row(c).FillWidth().Justify(ui.SpaceBetween).AlignItems(ui.Center).Wrap().Gap(8).Children(func() {
 			ui.Text(c, fmt.Sprintf("共 %d %s · 最高 %d %s", sumCounters(values), unit, peak, unit)).
-				FontSize(textSize(c, 13)).TextColor(p.muted).FontFeatures("tnum").Wrap()
+				FontSize(textSize(c, fontCaption)).TextColor(p.muted).FontFeatures("tnum").Wrap()
 			if peak == 0 {
-				ui.Text(c, "此时段暂无输入记录").FontSize(textSize(c, 12.5)).TextColor(p.muted)
+				ui.Text(c, "此时段暂无输入记录").FontSize(textSize(c, fontCaption)).TextColor(p.muted)
 			}
 		})
-		x := chart.NewBand(labels...).Padding(.15, 0)
+		x := chart.NewBand(labels...).Padding(4, 0)
 		y := chart.NewLinear(0, float64(max(peak, 1)))
 		chart.Plot(c, chart.Axes{}, func(area ui.Element) {
 			area.BorderWidth(0, 0, 1, 0).BorderColor(p.border)
 			for i, value := range values {
 				if value > 0 {
-					chart.Rect(c, x.Band(i), y.Span(0, float64(value))).Background(ui.Hex("#0eaf76")).Radius(3, 3, 0, 0).
+					chart.Rect(c, x.Band(i), y.Span(0, float64(value))).Background(statsAccent(c)).Radius(4, 4, 0, 0).
 						Tooltip(fmt.Sprintf("%s：%d %s", labels[i], value, unit)).Label(labels[i])
 				}
 			}
 		}).Height(150).FillWidth().Label("输入趋势图")
 		ui.Row(c).FillWidth().Justify(ui.SpaceBetween).Children(func() {
-			ui.Text(c, labels[0]).FontSize(textSize(c, 12)).TextColor(p.muted).FontFeatures("tnum")
-			ui.Text(c, labels[len(labels)-1]).FontSize(textSize(c, 12)).TextColor(p.muted).FontFeatures("tnum")
+			ui.Text(c, labels[0]).FontSize(textSize(c, fontCaption)).TextColor(p.muted).FontFeatures("tnum")
+			ui.Text(c, labels[len(labels)-1]).FontSize(textSize(c, fontCaption)).TextColor(p.muted).FontFeatures("tnum")
 		})
 	})
 }
@@ -281,14 +296,14 @@ func statsTrend(c *ui.Context, labels []string, values []uint64, unit string) {
 func statsKinds(c *ui.Context, values [5]uint64) {
 	p := colors(c)
 	names := []string{"汉字", "字母", "数字", "标点", "其他（含表情）"}
-	shades := []ui.Color{ui.Hex("#0eaf76"), ui.Hex("#4c9aff"), ui.Hex("#f5a623"), ui.Hex("#8a93a6"), ui.Hex("#c4c9c7")}
+	shades := statsShades(c)
 	total := sumCounters(values[:])
-	ui.Column(c).Padding(14, 0).Gap(14).Children(func() {
+	ui.Column(c).Padding(16, 0).Gap(16).Children(func() {
 		if total == 0 {
-			ui.Text(c, "还没有字符记录").FontSize(textSize(c, 13)).TextColor(p.muted)
+			ui.Text(c, "还没有字符记录").FontSize(textSize(c, fontCaption)).TextColor(p.muted)
 			return
 		}
-		ui.Column(c).FillWidth().Radius(6).Clip().Children(func() {
+		ui.Column(c).FillWidth().Radius(controlRadius).Clip().Children(func() {
 			chart.Plot(c, chart.Axes{}, func(_ ui.Element) {
 				var offset float32
 				for i, value := range values {
@@ -298,15 +313,15 @@ func statsKinds(c *ui.Context, values [5]uint64) {
 				}
 			}).Height(12).FillWidth().Label("字符类型占比")
 		})
-		ui.Column(c).FillWidth().Gap(1).Dividers(1, p.subBorder).Children(func() {
+		ui.Column(c).FillWidth().Gap(4).Dividers(1, p.border).Children(func() {
 			for i, value := range values {
 				if value == 0 {
 					continue
 				}
-				ui.Row(c).FillWidth().Padding(8, 0).Gap(10).AlignItems(ui.Center).Children(func() {
+				ui.Row(c).FillWidth().Padding(8, 0).Gap(12).AlignItems(ui.Center).Children(func() {
 					ui.Box(c).Size(10, 10).Radius(3).Background(shades[i])
 					ui.Text(c, names[i]).FontWeight(500).Grow(1)
-					ui.Text(c, fmt.Sprintf("%d", value)).FontSize(textSize(c, 13)).TextColor(p.muted).FontFeatures("tnum")
+					ui.Text(c, fmt.Sprintf("%d", value)).FontSize(textSize(c, fontCaption)).TextColor(p.muted).FontFeatures("tnum")
 					ui.Text(c, fmt.Sprintf("%.0f%%", 100*float64(value)/float64(total))).FontWeight(500).FontFeatures("tnum").
 						Width(textSize(c, 44)).TextAlign(ui.End)
 				})
@@ -319,16 +334,16 @@ func statsRanks(c *ui.Context, values [11]uint64) {
 	p := colors(c)
 	total := sumCounters(values[:])
 	peak := slices.Max(values[:])
-	ui.Column(c).Padding(14, 0).Gap(10).Children(func() {
+	ui.Column(c).Padding(16, 0).Gap(12).Children(func() {
 		if total == 0 {
-			ui.Text(c, "还没有候选记录；选词后可查看命中位置").FontSize(textSize(c, 13)).Wrap().TextColor(p.muted)
+			ui.Text(c, "还没有候选记录；选词后可查看命中位置").FontSize(textSize(c, fontCaption)).Wrap().TextColor(p.muted)
 			return
 		}
 		ui.Row(c).FillWidth().Justify(ui.SpaceBetween).AlignItems(ui.Center).Wrap().Gap(8).Padding(0, 0, 4, 0).Children(func() {
 			ui.Text(c, fmt.Sprintf("首选命中 %.0f%%", 100*float64(values[0])/float64(total))).
-				FontSize(textSize(c, 15)).FontWeight(600).FontFeatures("tnum")
+				FontSize(textSize(c, fontSection)).FontWeight(600).FontFeatures("tnum")
 			ui.Text(c, fmt.Sprintf("共 %d 次上屏", total)).
-				FontSize(textSize(c, 13)).TextColor(p.muted).FontFeatures("tnum")
+				FontSize(textSize(c, fontCaption)).TextColor(p.muted).FontFeatures("tnum")
 		})
 		for i, value := range values {
 			if i == 10 && value == 0 {
@@ -338,13 +353,13 @@ func statsRanks(c *ui.Context, values [11]uint64) {
 			if i == 10 {
 				label = "第 11 个及以后"
 			}
-			ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-				nameText := ui.Text(c, label).FontSize(textSize(c, 13)).Width(textSize(c, 96)).Wrap()
+			ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+				nameText := ui.Text(c, label).FontSize(textSize(c, fontCaption)).Width(textSize(c, 96)).Wrap()
 				if value == 0 {
 					nameText.TextColor(p.muted)
 				}
 				ui.Progress(c, float64(value)/float64(peak)).Grow(1).MinWidth(0).Label(label + "命中占比")
-				countText := ui.Text(c, fmt.Sprintf("%d 次", value)).FontSize(textSize(c, 13)).FontFeatures("tnum").
+				countText := ui.Text(c, fmt.Sprintf("%d 次", value)).FontSize(textSize(c, fontCaption)).FontFeatures("tnum").
 					Width(textSize(c, 60)).TextAlign(ui.End)
 				if value == 0 {
 					countText.TextColor(p.muted)
@@ -365,7 +380,7 @@ func (s *settings) statsCalendar(c *ui.Context, now time.Time) {
 	for _, day := range s.stats {
 		peak = max(peak, sumCounters(day.Characters[:]))
 	}
-	ui.Column(c).FillWidth().Padding(14, 0).Gap(10).Children(func() {
+	ui.Column(c).FillWidth().Padding(16, 0).Gap(12).Children(func() {
 		ui.ScrollHorizontal(c).FillWidth().Children(func() {
 			chart.Plot(c, chart.Axes{}, func(_ ui.Element) {
 				for week, date := 0, start; !date.After(now); week, date = week+1, date.AddDate(0, 0, 7) {
@@ -384,14 +399,14 @@ func (s *settings) statsCalendar(c *ui.Context, now time.Time) {
 			}).Size(650, 90).Shrink(0).Label("年度输入记录")
 		})
 		ui.Row(c).FillWidth().Justify(ui.SpaceBetween).AlignItems(ui.Center).Wrap().Gap(8).Children(func() {
-			ui.Text(c, start.Format("2006-01")+" 至 "+now.Format("2006-01")).FontSize(textSize(c, 12)).TextColor(p.muted).FontFeatures("tnum")
+			ui.Text(c, start.Format("2006-01")+" 至 "+now.Format("2006-01")).FontSize(textSize(c, fontCaption)).TextColor(p.muted).FontFeatures("tnum")
 			ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "少").FontSize(textSize(c, 12)).TextColor(p.muted)
+				ui.Text(c, "少").FontSize(textSize(c, fontCaption)).TextColor(p.muted)
 				for level := 0; level < 5; level++ {
 					bg, _ := keyboardHeatColors(c, level)
 					ui.Box(c).Size(12, 12).Radius(2).Background(bg)
 				}
-				ui.Text(c, "多").FontSize(textSize(c, 12)).TextColor(p.muted)
+				ui.Text(c, "多").FontSize(textSize(c, fontCaption)).TextColor(p.muted)
 			})
 		})
 	})
