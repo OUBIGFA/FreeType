@@ -476,7 +476,8 @@ enum Hover {
 
 /// 一段摆好位置的文字。
 struct Piece {
-    /// 墨迹占的地方（窗口坐标）。
+    /// 墨迹占的地方（窗口坐标）。只有渲染测试用它核对文字没有越出窗口。
+    #[cfg_attr(not(test), allow(dead_code))]
     ink: RECT,
     part: Part,
     text: Text,
@@ -1545,6 +1546,17 @@ impl CandidateWindow {
     }
 
     /// 按应答更新；`caret` 是编辑区（或光标）在屏幕上的位置。
+    /// 增强模型还在算当前输入时，每 100 毫秒问一次结果；结果到了或输入变了就停。
+    pub fn poll_enhancement(&self, pending: bool) {
+        unsafe {
+            if pending {
+                SetTimer(Some(self.hwnd), ENHANCEMENT_TIMER, 100, None);
+            } else {
+                let _ = KillTimer(Some(self.hwnd), ENHANCEMENT_TIMER);
+            }
+        }
+    }
+
     pub fn update(&self, frame: &Frame, caret: Option<RECT>) {
         if !self.alive.get() {
             return;
@@ -1553,13 +1565,7 @@ impl CandidateWindow {
         if frame.sentence.is_none() || frame.hint.is_some() || frame.predict {
             self.update_editor(None);
         }
-        unsafe {
-            if frame.enhancement_pending {
-                SetTimer(Some(self.hwnd), ENHANCEMENT_TIMER, 100, None);
-            } else {
-                let _ = KillTimer(Some(self.hwnd), ENHANCEMENT_TIMER);
-            }
-        }
+        self.poll_enhancement(frame.enhancement_pending);
         let view = View {
             sentence: None,
             editor_above: frame.sentence_editor_above,

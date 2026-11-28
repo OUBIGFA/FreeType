@@ -1731,7 +1731,21 @@ fn on_click(state: &Weak<RefCell<State>>, click: Click) {
         return;
     };
     let request = match click {
-        Click::RefreshEnhancement(revision) => Request::RefreshEnhancement { revision },
+        Click::RefreshEnhancement(revision) => {
+            let Some(frame) = call(&state, &Request::RefreshEnhancement { revision }) else {
+                return;
+            };
+            // 多数轮询还没有新结果：服务进程原样返回这一页（未处理、页码不变）。
+            // 这时不重写编辑区、不重画候选窗，免得应用每 100 毫秒重排一次文字。
+            if !frame.handled && frame.page_revision == revision {
+                if let Some(window) = state.borrow().window.as_ref() {
+                    window.poll_enhancement(frame.enhancement_pending);
+                }
+                return;
+            }
+            let context = state.borrow().context.clone();
+            return apply(&state, context.as_ref(), frame, false);
+        }
         Click::LanguageMenu(x, y) => {
             let (context, generation) = {
                 let mut s = state.borrow_mut();

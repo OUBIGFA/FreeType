@@ -13,6 +13,12 @@ use std::{
 use wowtype_core::enhancement::{Answer, Backend, Query};
 
 const SHA: &str = "b72e0c8728e05454677373c700aba7860c8595c589d73b39683e3de2671708e3";
+/// Node slots in the native KV cache (`capacity` in gpt2.cpp).
+const CAPACITY: usize = 2048;
+/// Upper bounds for one beam layer and for all scored beam paths; they cap
+/// inference time independently of the cache budget.
+const MAX_BEAM: usize = 20;
+const MAX_BEAM_PATHS: usize = 1600;
 type Load = unsafe extern "C" fn(*const u16, i32) -> *mut c_void;
 type Free = unsafe extern "C" fn(*mut c_void);
 type Token = unsafe extern "C" fn(*mut c_void, i32) -> *const i8;
@@ -164,7 +170,7 @@ impl Native {
                 }
             }
             for batch in missing.chunks(128) {
-                if self.count + batch.len() as i32 > 2048 {
+                if self.count as usize + batch.len() > CAPACITY {
                     return Err("模型候选缓存已满".into());
                 }
                 let tokens: Vec<_> = batch.iter().map(|s| *s.last().unwrap()).collect();
@@ -280,7 +286,19 @@ impl Native {
                 .rev()
                 .filter_map(|c| self.tokens.get(&c).copied()),
         );
-        if self.context != prefix || self.count + q.letters.len() as i32 * 28 > 2000 {
+        let len = q.letters.len().max(1);
+        // Reserve worst-case cache paths before searching: the context, every
+        // dictionary candidate, the block-preserving sentence and each beam
+        // layer. Long input narrows the beam instead of overflowing the cache;
+        // overflow would otherwise disable the model for all later queries.
+        let reserved = prefix.len() + len * (q.candidates.len() + 1);
+        let width = (CAPACITY.saturating_sub(reserved) / len)
+            .min(MAX_BEAM_PATHS / len)
+            .min(MAX_BEAM);
+        if width == 0 {
+            return Ok(None);
+        }
+        if self.context != prefix || self.count as usize + reserved + len * width > CAPACITY {
             self.reset()?;
             self.context = prefix.clone();
         }
@@ -308,7 +326,7 @@ impl Native {
                 }
             }
             next.sort_by(|a, b| b.2.total_cmp(&a.2));
-            next.truncate((1600 / q.letters.len().max(1)).min(20));
+            next.truncate(width);
             if next.is_empty() {
                 return Ok(None);
             }
@@ -318,7 +336,10 @@ impl Native {
         let mut all: Vec<_> = beam.into_iter().map(|(t, s, _)| (t, s)).collect();
         for text in &q.candidates {
             let ids: Option<Vec<_>> = text.chars().map(|c| self.tokens.get(&c).copied()).collect();
-            if let Some(ids) = ids {
+            // Results are split into words by syllable index, so a candidate
+            // whose characters cannot align one-to-one with the readings
+            // (e.g. a name with a middle dot) cannot become the model answer.
+            if let Some(ids) = ids.filter(|ids| ids.len() == q.letters.len()) {
                 let mut seq = prefix.clone();
                 seq.extend(ids);
                 if !all.iter().any(|(t, _)| t == text) {
@@ -443,7 +464,9 @@ struct Control {
     enabled: bool,
     model_generation: u64,
     query: Option<Query>,
-    running: Option<String>,
+    /// Key and revision of the query being computed. Its result is kept only
+    /// while no newer query has been submitted since it started.
+    running: Option<(String, u64)>,
     shutdown: bool,
     answers: VecDeque<Answer>,
     status: EnhancementStatus,
@@ -504,7 +527,9 @@ impl Backend for Worker {
             || c.status.state == "error"
             || c.answers.iter().any(|a| a.key == q.key)
             || c.query.as_ref().is_some_and(|v| v.key == q.key)
-            || c.running.as_ref() == Some(&q.key)
+            || c.running.as_ref().is_some_and(|(key, revision)| {
+                *key == q.key && *revision == self.shared.latest.load(Ordering::Relaxed)
+            })
         {
             return;
         }
@@ -588,9 +613,14 @@ fn run_worker(s: Arc<Shared>, dir: PathBuf) {
         if c.enabled && c.status.state == "ready" {
             if let (Some(m), Some(q)) = (model.as_mut(), c.query.take()) {
                 let revision = s.latest.load(Ordering::Relaxed);
-                c.running = Some(q.key.clone());
+                c.running = Some((q.key.clone(), revision));
                 drop(c);
-                let result = m.run(&q, revision, &s.latest);
+                // A panic must not end this thread silently: sessions would keep
+                // polling for an answer that never arrives. Report it as a model error.
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    m.run(&q, revision, &s.latest)
+                }))
+                .unwrap_or_else(|_| Err("增强模型计算异常；请关闭后重新启用".into()));
                 c = s.control.lock().unwrap();
                 c.running = None;
                 match result {
@@ -670,6 +700,110 @@ mod tests {
                 .collect::<String>(),
             result.text
         );
+    }
+    fn query(pinyin: &str, letters: &[&str], candidates: &[&str]) -> Query {
+        Query {
+            key: "test".into(),
+            context: String::new(),
+            pinyin: pinyin.into(),
+            candidates: candidates.iter().map(|s| s.to_string()).collect(),
+            letters: letters.iter().map(|s| s.chars().collect()).collect(),
+            variants: Vec::new(),
+            blocks: Vec::new(),
+        }
+    }
+    /// 词库候选的字数可以与音节数不同（如带间隔号的人名）；这类候选无法逐字对齐读音，
+    /// 不能参与模型结果，否则切分读音时越界会让增强线程退出。
+    #[test]
+    fn actual_model_skips_candidates_that_cannot_align_with_syllables() {
+        let Some(path) = std::env::var_os("FREETYPE_TEST_NOVA") else {
+            return;
+        };
+        let mut native = Native::load(Path::new(&path)).unwrap();
+        let q = query("ma ke tu wen", &["吗", "可", "土", "问"], &["马克·吐温"]);
+        let result = native.run(&q, 1, &AtomicU64::new(1)).unwrap().unwrap();
+        assert_eq!(result.text.chars().count(), 4);
+        assert_eq!(
+            result
+                .words
+                .iter()
+                .map(|(_, p)| p.split_whitespace().count())
+                .sum::<usize>(),
+            4
+        );
+    }
+    /// 长句的束搜索与词库候选必须一起放进固定的模型缓存；容量不足是单次查询的
+    /// 限制，不能把增强模型置为错误状态。
+    #[test]
+    fn actual_model_keeps_long_queries_within_cache_capacity() {
+        let Some(path) = std::env::var_os("FREETYPE_TEST_NOVA") else {
+            return;
+        };
+        let mut native = Native::load(Path::new(&path)).unwrap();
+        let pool: Vec<char> = "的一是在不了有和人这中大为上个国我以要他时来用们生到作地于出就分对成会可主发年动同工也能下过子说产种面而方后多定行学法所民得经十三之进着等部度家电力里如水化高自二理起小物现实加量都两体制机当使点从业本去把性好应开它合还因由其些然前外天政四日那社义事平形相全表间样与关各重新线内数正心反你明看原又么利比或但质气第向道命此变条只没结解问意建月公无系军很情者最立代想已通并提直题党程展五果料象员革位入常文总次品式活设及管特件长求老头基资边流路级少图山统接知较将组见计别她手角期根论运农指几九区强放决西被干做必战先回则任取据处府王队".chars().collect();
+        let letters: Vec<String> = (0..96)
+            .map(|i| pool[i * 3 % pool.len()..].iter().take(24).collect())
+            .collect();
+        let letters: Vec<&str> = letters.iter().map(String::as_str).collect();
+        let pinyin = vec!["de"; 96].join(" ");
+        let candidates: Vec<String> = (0..8)
+            .map(|k| {
+                (0..96)
+                    .map(|i| pool[(i * 7 + k * 31) % pool.len()])
+                    .collect()
+            })
+            .collect();
+        let candidates: Vec<&str> = candidates.iter().map(String::as_str).collect();
+        let q = query(&pinyin, &letters, &candidates);
+        for _ in 0..3 {
+            let result = native.run(&q, 1, &AtomicU64::new(1)).unwrap().unwrap();
+            assert_eq!(result.text.chars().count(), 96);
+        }
+    }
+    /// 输入一个键再退格会重新提交正在计算的查询；中间那次提交已让本轮计算作废，
+    /// 所以必须重新排队，否则当前输入永远拿不到结果，候选窗也会一直轮询。
+    #[test]
+    fn actual_worker_answers_query_resubmitted_after_a_newer_one() {
+        let Some(path) = std::env::var_os("FREETYPE_TEST_NOVA") else {
+            return;
+        };
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../_temp/enhancement-tests")
+            .join(format!("freetype-worker-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("enhancement")).unwrap();
+        let model = dir.join("enhancement/nova-v1.gguf");
+        if !model.exists() {
+            std::fs::hard_link(&path, &model)
+                .or_else(|_| std::fs::copy(&path, &model).map(|_| ()))
+                .unwrap();
+        }
+        let worker = Worker::new(dir.clone());
+        worker.enable(true);
+        let wait = |done: &dyn Fn() -> bool| {
+            let start = std::time::Instant::now();
+            while !done() {
+                assert!(
+                    start.elapsed() < std::time::Duration::from_secs(120),
+                    "{:?}",
+                    worker.status()
+                );
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        };
+        wait(&|| worker.status().state == "ready");
+        let pool = "这个接口返回太慢了我们需要重新设计一下缓存策略然后再测试";
+        let long = |key: &str| {
+            let mut q = query(&vec!["de"; 24].join(" "), &vec![pool; 24], &[]);
+            q.key = key.into();
+            q
+        };
+        worker.submit(long("current"));
+        wait(&|| worker.shared.control.lock().unwrap().running.is_some());
+        worker.submit(long("typed"));
+        worker.submit(long("current"));
+        wait(&|| worker.answer("current").is_some());
+        drop(worker);
+        let _ = std::fs::remove_dir_all(&dir);
     }
     #[test]
     fn actual_dictionary_supplies_model_generation_candidates() {

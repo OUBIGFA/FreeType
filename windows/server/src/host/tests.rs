@@ -4986,3 +4986,48 @@ fn accepted_key_preview_exposes_new_model_job_to_the_candidate_window() {
     }
     cleanup(&host);
 }
+
+/// 增强结果没到时，轮询应答保持原页（未处理、页码不变），DLL 据此跳过重写编辑区和重画候选窗；
+/// 结果到了才换新页码。
+#[test]
+fn enhancement_poll_keeps_the_page_until_a_result_arrives() {
+    use wowtype_core::enhancement::{Answer, Backend, Query};
+    #[derive(Default)]
+    struct Slow(std::sync::Mutex<Option<Answer>>);
+    impl Backend for Slow {
+        fn submit(&self, _: Query) {}
+        fn answer(&self, _: &str) -> Option<Answer> {
+            self.0.lock().unwrap().clone()
+        }
+    }
+    let mut host = host("model-poll");
+    let backend = Arc::new(Slow::default());
+    host.engine
+        .as_ref()
+        .unwrap()
+        .set_enhancement(Some(backend.clone()));
+    let typed = typing(&mut host, "nihao");
+    assert!(typed.enhancement_pending);
+    let poll = |host: &mut Host, revision| {
+        host.handle(1, Request::RefreshEnhancement { revision })
+            .frame
+            .unwrap()
+    };
+    let idle = poll(&mut host, typed.page_revision);
+    assert!(!idle.handled);
+    assert_eq!(idle.page_revision, typed.page_revision);
+    assert!(idle.enhancement_pending, "还没有结果时继续轮询");
+    *backend.0.lock().unwrap() = Some(Answer {
+        key: String::new(),
+        text: "拟好".into(),
+        pinyin: "ni hao".into(),
+        words: vec![("拟好".into(), "ni hao".into())],
+        uncertain: vec![false; 2],
+    });
+    let ready = poll(&mut host, typed.page_revision);
+    assert!(ready.handled);
+    assert_ne!(ready.page_revision, typed.page_revision);
+    assert_eq!(ready.candidates.first().map(String::as_str), Some("拟好"));
+    assert!(!ready.enhancement_pending);
+    cleanup(&host);
+}
