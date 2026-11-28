@@ -1,0 +1,167 @@
+name: FreeType dictionary data
+
+# 每周聚合已批准来源的最新词库，生成独立的词库更新包 Release（不占用程序的 Latest）。
+# 输入与上一版相同、或生成的文件与上一版相同时正常结束，不发布。
+on:
+  schedule:
+    # 北京时间每周一 04:17（UTC 周日 20:17）；GitHub 定时任务可能延后。
+    - cron: '17 20 * * 0'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Rebuild even if the upstream inputs are unchanged
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dictionary-data
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-2025
+    timeout-minutes: 120
+    env:
+      PYTHONUTF8: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+    defaults:
+      run:
+        shell: pwsh
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      publish: ${{ steps.compare.outputs.publish }}
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.11.9'
+      - name: Set up pinned Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.4'
+          cache: false
+      - name: Prepare project-local tools
+        run: ./windows/prepare-ci.ps1
+      - name: Choose the next data version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $Date = [DateTime]::UtcNow.AddHours(8).ToString('yyyy.MM.dd')
+          $Tags = @(gh api "repos/$env:GITHUB_REPOSITORY/git/matching-refs/tags/freetype-data-$Date." --jq '.[].ref')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "version=$Date.$($Tags.Count + 1)" >> $env:GITHUB_OUTPUT
+      - name: Pin the newest approved upstream revisions
+        run: |
+          python -X utf8 tools/make_dictionary_package.py resolve --version '${{ steps.version.outputs.version }}' --work _temp/dictionary-package
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Compare inputs with the last data release
+        id: inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          $Resolved = Get-Content -Raw _temp/dictionary-package/resolved.json | ConvertFrom-Json
+          $Last = gh api "repos/$env:GITHUB_REPOSITORY/releases?per_page=50" --jq '[.[] | select(.draft == false and (.tag_name | startswith("freetype-data-")))] | first | .tag_name // ""'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $Build = 'true'
+          if ($Last) {
+            $Previous = $Last -replace '^freetype-data-', ''
+            gh release download $Last --repo $env:GITHUB_REPOSITORY --pattern "FreeType-Dictionaries-$Previous.json" --dir _temp/previous
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $Record = Get-Content -Raw "_temp/previous/FreeType-Dictionaries-$Previous.json" | ConvertFrom-Json
+            if ($Record.inputsDigest -eq $Resolved.inputsDigest -and $env:FORCE -ne 'true') {
+              Write-Host "Inputs are unchanged since $Last; nothing to publish."
+              $Build = 'false'
+            }
+            Copy-Item "_temp/previous/FreeType-Dictionaries-$Previous.json" _temp/previous.json
+          }
+          "build=$Build" >> $env:GITHUB_OUTPUT
+      - name: Build the service used to compile and check the package
+        if: steps.inputs.outputs.build == 'true'
+        run: |
+          cargo build --locked --release -p freetype-server
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build and load-check the dictionary package
+        if: steps.inputs.outputs.build == 'true'
+        run: |
+          python -X utf8 tools/make_dictionary_package.py build --version '${{ steps.version.outputs.version }}' --work _temp/dictionary-package --output _temp/dictionary-release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Skip a package identical to the last release
+        id: compare
+        if: steps.inputs.outputs.build == 'true'
+        run: |
+          $Version = '${{ steps.version.outputs.version }}'
+          $Current = Get-Content -Raw "_temp/dictionary-release/FreeType-Dictionaries-$Version.json" | ConvertFrom-Json
+          $Publish = 'true'
+          if (Test-Path _temp/previous.json) {
+            $Previous = Get-Content -Raw _temp/previous.json | ConvertFrom-Json
+            if (($Previous.files | ConvertTo-Json -Compress) -eq ($Current.files | ConvertTo-Json -Compress)) {
+              Write-Host 'Generated files are identical to the last release; nothing to publish.'
+              $Publish = 'false'
+            }
+          }
+          "publish=$Publish" >> $env:GITHUB_OUTPUT
+      - name: Keep the release assets for the publishing job
+        if: steps.compare.outputs.publish == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: dictionary-${{ steps.version.outputs.version }}
+          path: _temp/dictionary-release/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  publish:
+    needs: build
+    if: needs.build.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # 只有发布步骤拿到写权限；它只上传构建任务生成的白名单附件。
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - name: Download the built assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: dictionary-${{ needs.build.outputs.version }}
+          path: dist
+      - name: Verify the archive against its manifest
+        run: |
+          set -euo pipefail
+          ls dist
+          test "$(ls dist | sort | tr '\n' ' ')" = "FreeType-Dictionaries-$VERSION.json FreeType-Dictionaries-$VERSION.zip notes.md "
+          expected=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['archive']['sha256'])" "dist/FreeType-Dictionaries-$VERSION.json")
+          test "$(sha256sum "dist/FreeType-Dictionaries-$VERSION.zip" | cut -d' ' -f1)" = "$expected"
+      - name: Create a draft release
+        id: draft
+        run: |
+          set -euo pipefail
+          gh release create "freetype-data-$VERSION" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --draft --latest=false --title "FreeType 词库 $VERSION" --notes-file dist/notes.md \
+            "dist/FreeType-Dictionaries-$VERSION.zip" "dist/FreeType-Dictionaries-$VERSION.json"
+      - name: Read back every asset before publishing
+        run: |
+          set -euo pipefail
+          gh release download "freetype-data-$VERSION" --repo "$GITHUB_REPOSITORY" --dir readback
+          for name in "FreeType-Dictionaries-$VERSION.zip" "FreeType-Dictionaries-$VERSION.json"; do
+            cmp "dist/$name" "readback/$name"
+          done
+          test "$(ls readback | wc -l)" -eq 2
+      - name: Publish without taking the program's Latest
+        run: gh release edit "freetype-data-$VERSION" --repo "$GITHUB_REPOSITORY" --draft=false --latest=false
+      - name: Remove the unpublished draft after a failure
+        if: failure() && steps.draft.outcome == 'success'
+        run: gh release delete "freetype-data-$VERSION" --repo "$GITHUB_REPOSITORY" --yes

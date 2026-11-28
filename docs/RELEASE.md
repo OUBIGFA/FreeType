@@ -17,6 +17,14 @@
 - 正式发布默认在本地通过 `-Version X.Y.Z -ReleaseTag <已批准标签>` 直接构建与验证，核对通过后上传本地安装器到 GitHub Release，不再等待或下载线上构建产物。
 - 保留 `.github/workflows/windows-build.yml`（FreeType Windows installer）的手动 `workflow_dispatch` 入口作可选参考构建，推送标签不再自动触发线上安装器构建；工作流只读仓库、不创建 Release。
 
+## 词库更新包渠道
+
+- 用户于 2026-11-28 批准：`.github/workflows/dictionary-data.yml` 每周自动生成并发布词库更新包，不需要逐次提供草稿。这项授权只覆盖词库渠道，程序安装器仍按本文其余步骤逐版审阅。
+- 标签为 `freetype-data-YYYY.MM.DD.N`，标题为 `FreeType 词库 YYYY.MM.DD.N`，附件只有 `FreeType-Dictionaries-<版本>.zip` 和同版本 JSON 清单。发布设为非 Latest，不覆盖已发布版本；同一日期再次发布时序号加一。
+- 只使用 `third_party/manifests/dictionary-channel.json` 列出的来源，按 `tools/make_dictionary_package.py` 固定本次上游提交、文件摘要和转换器修订。来源、许可文本或包格式变化时工作流停止发布，需要人工核对后修改白名单或格式。
+- 工作流先建草稿，读回全部附件核对一致后才公开；失败时删除本次草稿，不发布部分附件。
+- 不执行上游仓库的脚本；写权限只给发布任务。完整来源重建归档不上传；公开包保留许可文件、固定修订来源链接和重建入口。
+
 ## 1. 先提供对话中的 Release 草稿
 
 收到“打 tag 发布”“发布”或“打 tag”等请求后，先进行与草稿有关的只读调查。核对当前源码、用户指定的版本、上一份 FreeType Release 和本次变化，再在对话中展示草稿。不要按上游 WowType 的版本说明比较。

@@ -1,0 +1,23 @@
+{
+  "channel": "freetype-data",
+  "packageFormat": 1,
+  "tagPrefix": "freetype-data-",
+  "files": ["lexicon.ftd", "english.txt"],
+  "extraFiles": ["LICENSE", "SOURCE.txt", "WANXIANG-LICENSE-SCOPE.md", "WANXIANG-NOTICE.md"],
+  "sources": {
+    "rime-frost": {
+      "ref": "HEAD",
+      "licenses": {
+        "LICENSE": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+      }
+    },
+    "rime-wanxiang-data": {
+      "ref": "HEAD",
+      "licenses": {
+        "LICENSE": "9e5f1b3c610b9c2da5c313bf81d577a7d1acec686bdb0384edefa6df0f90cd94",
+        "LICENSE-SCOPE.md": "41ba4ac41b6a28a117c172dd22fc8cf31ff3902f79737cc22e22b9412af624f4",
+        "NOTICE.md": "6c624b06a54d95ad2a33a3200481107f9f8d029dd3e7a224988653daa04bca13"
+      }
+    }
+  }
+}
