@@ -1,30 +1,30 @@
 //! FreeType 服务进程：常驻拼音引擎，经命名管道服务输入法 DLL 和设置程序。
 
-pub mod dictfmt;
 mod backup;
+mod candidate_diagnostics;
+pub mod dictfmt;
+mod dictionary_catalog;
+#[cfg(windows)]
+mod enhancement;
 pub mod host;
 pub mod input;
+mod lookup_mode;
 pub mod raw;
 mod saver;
 mod stats;
-mod candidate_diagnostics;
 pub mod store;
-mod dictionary_catalog;
-mod lookup_mode;
 mod sync_merge;
 pub mod tasks;
-#[cfg(windows)]
-mod enhancement;
 pub mod tools;
 
+#[cfg(windows)]
+pub mod brand_icon;
 #[cfg(windows)]
 pub mod desktop;
 #[cfg(windows)]
 pub mod pipe;
 #[cfg(windows)]
 pub mod setup;
-#[cfg(windows)]
-pub mod brand_icon;
 
 use std::path::PathBuf;
 
@@ -68,7 +68,9 @@ pub fn resource_dir() -> PathBuf {
     }
     let exe = std::env::current_exe().unwrap_or_default();
     let bin = exe.parent().map(PathBuf::from).unwrap_or_default();
-    bin.parent().map(|root| root.join("data")).unwrap_or_else(|| bin.join("data"))
+    bin.parent()
+        .map(|root| root.join("data"))
+        .unwrap_or_else(|| bin.join("data"))
 }
 
 /// 输入路径优先：服务进程高于普通应用一级，并退出 Windows 的节能降速。
@@ -79,8 +81,9 @@ pub fn resource_dir() -> PathBuf {
 #[cfg(windows)]
 pub fn prioritize_input() {
     use windows::Win32::System::Threading::{
-        GetCurrentProcess, SetPriorityClass, SetProcessInformation, ProcessPowerThrottling, ABOVE_NORMAL_PRIORITY_CLASS,
-        PROCESS_POWER_THROTTLING_CURRENT_VERSION, PROCESS_POWER_THROTTLING_EXECUTION_SPEED, PROCESS_POWER_THROTTLING_STATE,
+        GetCurrentProcess, ProcessPowerThrottling, SetPriorityClass, SetProcessInformation,
+        ABOVE_NORMAL_PRIORITY_CLASS, PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+        PROCESS_POWER_THROTTLING_EXECUTION_SPEED, PROCESS_POWER_THROTTLING_STATE,
     };
     // ControlMask 含 EXECUTION_SPEED、StateMask 不含：明确要求高 QoS，不交给系统猜测。
     let state = PROCESS_POWER_THROTTLING_STATE {
@@ -92,8 +95,12 @@ pub fn prioritize_input() {
         if let Err(error) = SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS) {
             log(&format!("提高服务进程优先级失败：{error}"));
         }
-        if let Err(error) = SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling,
-            (&state as *const PROCESS_POWER_THROTTLING_STATE).cast(), std::mem::size_of_val(&state) as u32) {
+        if let Err(error) = SetProcessInformation(
+            GetCurrentProcess(),
+            ProcessPowerThrottling,
+            (&state as *const PROCESS_POWER_THROTTLING_STATE).cast(),
+            std::mem::size_of_val(&state) as u32,
+        ) {
             log(&format!("关闭服务进程节能降速失败：{error}"));
         }
     }
@@ -105,8 +112,9 @@ pub fn background_thread() {
     #[cfg(windows)]
     unsafe {
         use windows::Win32::System::Threading::{
-            GetCurrentThread, SetThreadInformation, SetThreadPriority, ThreadPowerThrottling, THREAD_POWER_THROTTLING_CURRENT_VERSION,
-            THREAD_POWER_THROTTLING_EXECUTION_SPEED, THREAD_POWER_THROTTLING_STATE, THREAD_PRIORITY_LOWEST,
+            GetCurrentThread, SetThreadInformation, SetThreadPriority, ThreadPowerThrottling,
+            THREAD_POWER_THROTTLING_CURRENT_VERSION, THREAD_POWER_THROTTLING_EXECUTION_SPEED,
+            THREAD_POWER_THROTTLING_STATE, THREAD_PRIORITY_LOWEST,
         };
         let state = THREAD_POWER_THROTTLING_STATE {
             Version: THREAD_POWER_THROTTLING_CURRENT_VERSION,
@@ -115,8 +123,12 @@ pub fn background_thread() {
         };
         // 进程是高于普通一级，LOWEST（-2）正好落回普通应用的基础优先级。失败只影响调度，不影响结果。
         let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);
-        let _ = SetThreadInformation(GetCurrentThread(), ThreadPowerThrottling,
-            (&state as *const THREAD_POWER_THROTTLING_STATE).cast(), std::mem::size_of_val(&state) as u32);
+        let _ = SetThreadInformation(
+            GetCurrentThread(),
+            ThreadPowerThrottling,
+            (&state as *const THREAD_POWER_THROTTLING_STATE).cast(),
+            std::mem::size_of_val(&state) as u32,
+        );
     }
 }
 
@@ -126,7 +138,9 @@ pub fn log(message: &str) {
     let dir = local_dir().join("logs");
     let _ = std::fs::create_dir_all(&dir);
     let path = dir.join("server.log");
-    let append = std::fs::metadata(&path).map(|m| m.len() < 1 << 20).unwrap_or(true);
+    let append = std::fs::metadata(&path)
+        .map(|m| m.len() < 1 << 20)
+        .unwrap_or(true);
     let file = std::fs::OpenOptions::new()
         .create(true)
         .write(true)

@@ -344,21 +344,36 @@ pub type ManualPins = std::collections::BTreeMap<String, std::collections::BTree
 
 impl Engine {
     /// 拷贝一份手动排位供 Windows 宿主原子保存。
-    pub fn manual_pins(&self) -> ManualPins { self.manual_pins.read().unwrap().clone() }
-    pub fn set_manual_pins(&self, pins: ManualPins) { *self.manual_pins.write().unwrap() = pins; }
+    pub fn manual_pins(&self) -> ManualPins {
+        self.manual_pins.read().unwrap().clone()
+    }
+    pub fn set_manual_pins(&self, pins: ManualPins) {
+        *self.manual_pins.write().unwrap() = pins;
+    }
 
     fn pin_scope(&self, input: &str) -> String {
-        let scheme = if self.config().shuangpin { self.config().shuangpin_scheme.name() } else { "quanpin" };
+        let scheme = if self.config().shuangpin {
+            self.config().shuangpin_scheme.name()
+        } else {
+            "quanpin"
+        };
         format!("{scheme}:{}", input.to_ascii_lowercase())
     }
 
     fn apply_pins(&self, input: &str, candidates: &mut Vec<Candidate>) {
         let pins = self.manual_pins.read().unwrap();
-        if pins.is_empty() { return; }
-        let Some(slots) = pins.get(&self.pin_scope(input)) else { return; };
+        if pins.is_empty() {
+            return;
+        }
+        let Some(slots) = pins.get(&self.pin_scope(input)) else {
+            return;
+        };
         let mut fixed = Vec::with_capacity(slots.len());
         for (&position, key) in slots {
-            if let Some(index) = candidates.iter().position(|item| item.pin_key.as_ref() == Some(key)) {
+            if let Some(index) = candidates
+                .iter()
+                .position(|item| item.pin_key.as_ref() == Some(key))
+            {
                 let mut item = candidates.remove(index);
                 item.pin_position = position;
                 fixed.push(item);
@@ -517,8 +532,10 @@ impl<'e> Session<'e> {
 
     /// 没有触及学习数据的预判可以直接接纳，省去重复算候选；否则调用方要对原会话重放按键。
     pub fn accept_preview(&mut self) -> bool {
-        let accepted=self.preview.take() == Some(false);
-        if accepted {self.queue_enhancement();}
+        let accepted = self.preview.take() == Some(false);
+        if accepted {
+            self.queue_enhancement();
+        }
         accepted
     }
 
@@ -533,8 +550,9 @@ impl<'e> Session<'e> {
 
     /// 上屏联想（FreeType）：光标前的字后面最可能接的词，见 [`crate::predict`]。没有引擎时是空的。
     pub fn predictions(&self, limit: usize) -> Vec<crate::predict::Prediction> {
-        self.engine
-            .map_or_else(Vec::new, |engine| engine.predict_after(&self.context, limit))
+        self.engine.map_or_else(Vec::new, |engine| {
+            engine.predict_after(&self.context, limit)
+        })
     }
 
     /// 用户选了联想词 `word`（词库里的写法）：记下它和上一个词的搭配。
@@ -559,13 +577,20 @@ impl<'e> Session<'e> {
 
     /// 独立英文候选共用学习日志和 TSF 预判规则；存完整词/短语编码，不存截短前缀。
     pub fn learn_external_word(&mut self, word: &str, code: &str) {
-        let Some(engine) = self.engine else { return; };
-        if self.no_learn || self.defer_learning() { return; }
+        let Some(engine) = self.engine else {
+            return;
+        };
+        if self.no_learn || self.defer_learning() {
+            return;
+        }
         self.committed_learning.clear();
         let mark = engine.learn_mark();
         engine.record_selection_with_pinyin(word, Some(code));
         let end = engine.learn_mark();
-        if end > mark { self.committed_learning.push((mark, end)); self.learning_changed = true; }
+        if end > mark {
+            self.committed_learning.push((mark, end));
+            self.learning_changed = true;
+        }
     }
 
     /// 带引擎建会话。
@@ -584,7 +609,8 @@ impl<'e> Session<'e> {
             _ => false,
         };
         if !same {
-            self.sentence=crate::sentence::State::default();self.enhancement_key=None;
+            self.sentence = crate::sentence::State::default();
+            self.enhancement_key = None;
             // A mark from the old engine cannot be interpreted by its replacement.
             self.selection_learning.fill(None);
             self.committed_learning.clear();
@@ -637,30 +663,46 @@ impl<'e> Session<'e> {
         self.no_learn = value;
     }
 
-    pub fn learning_disabled(&self) -> bool { self.no_learn }
+    pub fn learning_disabled(&self) -> bool {
+        self.no_learn
+    }
 
-    pub fn has_commit_learning(&self) -> bool { !self.committed_learning.is_empty() }
+    pub fn has_commit_learning(&self) -> bool {
+        !self.committed_learning.is_empty()
+    }
 
     /// 只有外壳确认刚上屏的文字已被紧接的退格修改时才调用。
     pub fn undo_commit_learning(&mut self) -> bool {
         self.trace_commit_backspace();
         let marks = std::mem::take(&mut self.committed_learning);
-        for (start, end) in marks.into_iter().rev() { self.undo_range(start, end); }
+        for (start, end) in marks.into_iter().rev() {
+            self.undo_range(start, end);
+        }
         self.take_learning_change()
     }
 
-    pub fn take_learning_change(&mut self) -> bool { std::mem::take(&mut self.learning_changed) }
+    pub fn take_learning_change(&mut self) -> bool {
+        std::mem::take(&mut self.learning_changed)
+    }
 
     fn undo_range(&mut self, start: u64, end: u64) {
-        if !self.defer_learning() && self.engine.is_some_and(|engine| engine.undo_learning(start, end)) {
+        if !self.defer_learning()
+            && self
+                .engine
+                .is_some_and(|engine| engine.undo_learning(start, end))
+        {
             self.learning_changed = true;
         }
     }
 
     fn pop_selection(&mut self) -> Option<Selection> {
-        if let Some(Some((start, end))) = self.selection_learning.pop() { self.undo_range(start, end); }
+        if let Some(Some((start, end))) = self.selection_learning.pop() {
+            self.undo_range(start, end);
+        }
         let selection = self.selections.pop();
-        if selection.is_some() { self.trace_undo_selection(); }
+        if selection.is_some() {
+            self.trace_undo_selection();
+        }
         selection
     }
 
@@ -714,33 +756,71 @@ impl<'e> Session<'e> {
         let sym = key.keysym;
         // 先把候选算好：候选重算时候选框回到开头，别在读页和光标以后才重算
         let n = self.candidates().len();
-        if self.config.sentence_editor && !self.calc_active() && !self.expanded && !self.sentence.view.blocks.is_empty() {
-            if matches!(sym, keysym::TAB | keysym::ISO_LEFT_TAB) && self.sentence.view.blocks.len()>1 && self.config.page_keys & page_keys::TAB==0 {
-                self.sentence_action(crate::sentence::Action::Move { backward: sym == keysym::ISO_LEFT_TAB || key.modifiers & modifier::SHIFT != 0 });
+        if self.config.sentence_editor
+            && !self.calc_active()
+            && !self.expanded
+            && !self.sentence.view.blocks.is_empty()
+        {
+            if matches!(sym, keysym::TAB | keysym::ISO_LEFT_TAB)
+                && self.sentence.view.blocks.len() > 1
+                && self.config.page_keys & page_keys::TAB == 0
+            {
+                self.sentence_action(crate::sentence::Action::Move {
+                    backward: sym == keysym::ISO_LEFT_TAB || key.modifiers & modifier::SHIFT != 0,
+                });
                 return Some(true);
             }
             if self.sentence.view.cursor.is_some() {
-                if sym==u32::from(b'0'){return Some(true);}
-                if sym==keysym::SEMICOLON&&!self.semicolon_is_key(){
-                    let index=9*self.sentence.view.page;self.sentence_action(crate::sentence::Action::Choose{index});return Some(true);
+                if sym == u32::from(b'0') {
+                    return Some(true);
                 }
-                if let Some(index) = (u32::from(b'1')..=u32::from(b'9')).contains(&sym).then_some(sym.saturating_sub(u32::from(b'1')) as usize) {
-                    let index=index+9*self.sentence.view.page;
-                    self.sentence_action(crate::sentence::Action::Choose { index }); return Some(true);
+                if sym == keysym::SEMICOLON && !self.semicolon_is_key() {
+                    let index = 9 * self.sentence.view.page;
+                    self.sentence_action(crate::sentence::Action::Choose { index });
+                    return Some(true);
+                }
+                if let Some(index) = (u32::from(b'1')..=u32::from(b'9'))
+                    .contains(&sym)
+                    .then_some(sym.saturating_sub(u32::from(b'1')) as usize)
+                {
+                    let index = index + 9 * self.sentence.view.page;
+                    self.sentence_action(crate::sentence::Action::Choose { index });
+                    return Some(true);
                 }
                 if matches!(sym, keysym::BRACKET_LEFT | keysym::BRACKET_RIGHT) {
-                    self.sentence_action(crate::sentence::Action::Resize { expand: sym == keysym::BRACKET_RIGHT }); return Some(true);
+                    self.sentence_action(crate::sentence::Action::Resize {
+                        expand: sym == keysym::BRACKET_RIGHT,
+                    });
+                    return Some(true);
                 }
-                if sym == keysym::END { self.sentence_action(crate::sentence::Action::Leave); return Some(true); }
-                if matches!(sym,keysym::PAGE_UP|keysym::PAGE_DOWN|keysym::MINUS|keysym::EQUAL){self.sentence_action(crate::sentence::Action::Page{next:matches!(sym,keysym::PAGE_DOWN|keysym::EQUAL)});return Some(true);}
-                if matches!(sym,keysym::UP|keysym::DOWN){self.sentence_action(crate::sentence::Action::Cycle{backward:sym==keysym::UP});return Some(true);}
+                if sym == keysym::END {
+                    self.sentence_action(crate::sentence::Action::Leave);
+                    return Some(true);
+                }
+                if matches!(
+                    sym,
+                    keysym::PAGE_UP | keysym::PAGE_DOWN | keysym::MINUS | keysym::EQUAL
+                ) {
+                    self.sentence_action(crate::sentence::Action::Page {
+                        next: matches!(sym, keysym::PAGE_DOWN | keysym::EQUAL),
+                    });
+                    return Some(true);
+                }
+                if matches!(sym, keysym::UP | keysym::DOWN) {
+                    self.sentence_action(crate::sentence::Action::Cycle {
+                        backward: sym == keysym::UP,
+                    });
+                    return Some(true);
+                }
             }
             // 空格沿用普通候选的提交路径；辅助区不能把简拼尾音拆成两次上屏。
         }
         if self.calc_active() && self.input.len() > 1 {
             let expr = &self.input[1..];
             if matches!(sym, 0x24 | 0xa5 | 0xffe5) {
-                if let Some(money) = crate::calc::money_text(expr) { self.finish(money); }
+                if let Some(money) = crate::calc::money_text(expr) {
+                    self.finish(money);
+                }
                 // 算式不完整或不能转金额时保留输入，不能落入普通标点上屏。
                 return Some(true);
             }
@@ -752,7 +832,9 @@ impl<'e> Session<'e> {
                 if let Some(letter) = char::from_u32(sym).filter(char::is_ascii_alphabetic) {
                     let index = usize::from(letter.to_ascii_lowercase() as u8 - b'a');
                     let (start, len) = self.page_range(n);
-                    if index < len { self.choose_now(start + index); }
+                    if index < len {
+                        self.choose_now(start + index);
+                    }
                     return Some(true);
                 }
             }
@@ -772,7 +854,10 @@ impl<'e> Session<'e> {
                 if at < self.input.len() {
                     // 光标在拼音中间（#129）：删光标前一个；光标在最前面时撤销选词，没有就不动
                     if at > self.rest_start() {
-                        let prev = self.input[..at].chars().next_back().map_or(1, char::len_utf8);
+                        let prev = self.input[..at]
+                            .chars()
+                            .next_back()
+                            .map_or(1, char::len_utf8);
                         self.sentence.edit(at - prev, prev, 0);
                         self.input.replace_range(at - prev..at, "");
                         self.caret = Some(at - prev);
@@ -780,7 +865,9 @@ impl<'e> Session<'e> {
                         self.pop_selection();
                     }
                 } else if self.pop_selection().is_none() {
-                    if !self.input.is_empty() { self.sentence.edit(self.input.len()-1,1,0); }
+                    if !self.input.is_empty() {
+                        self.sentence.edit(self.input.len() - 1, 1, 0);
+                    }
                     self.input.pop();
                 }
                 self.fresh = false;
@@ -1087,9 +1174,22 @@ impl<'e> Session<'e> {
         let Some(engine) = self.engine else {
             return;
         };
-        if let Some(word)=self.sentence.view.blocks.iter().find(|b|editor_shortcut && b.focused).map(|b|b.text.clone()) {
-            if self.defer_learning(){return;}
-            let changed=engine.forget_word(&word);self.sentence.forget(&word);self.fresh=false;self.forgot|=changed;return;
+        if let Some(word) = self
+            .sentence
+            .view
+            .blocks
+            .iter()
+            .find(|b| editor_shortcut && b.focused)
+            .map(|b| b.text.clone())
+        {
+            if self.defer_learning() {
+                return;
+            }
+            let changed = engine.forget_word(&word);
+            self.sentence.forget(&word);
+            self.fresh = false;
+            self.forgot |= changed;
+            return;
         }
         let Some(index) = self.current_index() else {
             return;
@@ -1166,18 +1266,32 @@ impl<'e> Session<'e> {
             return false;
         }
         self.trace_character_selection(index, &chosen, last);
-        let pick = if last { chars[chars.len() - 1] } else { chars[0] };
+        let pick = if last {
+            chars[chars.len() - 1]
+        } else {
+            chars[0]
+        };
         // 开着繁体时也取词库写法里的同一个字（字数对不上就不知道是哪个，留空）
         let plain: Vec<char> = self.plain_of(&chosen.text).chars().collect();
         let plain = if plain.len() == chars.len() {
-            (if last { plain[plain.len() - 1] } else { plain[0] }).to_string()
+            (if last {
+                plain[plain.len() - 1]
+            } else {
+                plain[0]
+            })
+            .to_string()
         } else {
             String::new()
         };
         // 拼音按音节对上字数时带上这个字的读音（以后拼成词能学），对不上就不带
         let syllables: Vec<&str> = chosen.pinyin.split_whitespace().collect();
         let pinyin = if syllables.len() == chars.len() {
-            (if last { syllables[syllables.len() - 1] } else { syllables[0] }).to_string()
+            (if last {
+                syllables[syllables.len() - 1]
+            } else {
+                syllables[0]
+            })
+            .to_string()
         } else {
             String::new()
         };
@@ -1317,74 +1431,152 @@ impl<'e> Session<'e> {
         Some((scope, key))
     }
 
-    pub fn refresh_candidates(&mut self) { self.fresh = false; }
-    pub fn enhancement_pending(&self)->bool {
+    pub fn refresh_candidates(&mut self) {
+        self.fresh = false;
+    }
+    pub fn enhancement_pending(&self) -> bool {
         // Pending means the current visible frame has not consumed the result;
         // a cache hit still requires one refresh. Pause while the user navigates.
-        self.sentence.view.cursor.is_none()&&self.cursor==0&&self.page==0&&!self.expanded
-            &&self.enhancement_key.is_some()&&self.engine.and_then(|e|e.enhancement_backend()).is_some_and(|b|b.available())
+        self.sentence.view.cursor.is_none()
+            && self.cursor == 0
+            && self.page == 0
+            && !self.expanded
+            && self.enhancement_key.is_some()
+            && self
+                .engine
+                .and_then(|e| e.enhancement_backend())
+                .is_some_and(|b| b.available())
     }
 
     /// Apply only a ready result for the still-current input; explicit user
     /// confirmation and navigation always take precedence over delayed output.
-    pub fn refresh_enhancement(&mut self)->bool {
-        if self.sentence.view.cursor.is_some()||!self.selections.is_empty()||self.cursor!=0||self.page!=0||self.expanded{return false;}
-        let Some((engine,key))=self.engine.zip(self.enhancement_key.as_ref())else{return false;};
-        let Some(answer)=engine.enhancement_backend().and_then(|b|b.answer(key))else{return false;};
-        self.enhancement_key=None;
-        let Some(first)=self.candidates.first()else{return false;};
+    pub fn refresh_enhancement(&mut self) -> bool {
+        if self.sentence.view.cursor.is_some()
+            || !self.selections.is_empty()
+            || self.cursor != 0
+            || self.page != 0
+            || self.expanded
+        {
+            return false;
+        }
+        let Some((engine, key)) = self.engine.zip(self.enhancement_key.as_ref()) else {
+            return false;
+        };
+        let Some(answer) = engine.enhancement_backend().and_then(|b| b.answer(key)) else {
+            return false;
+        };
+        self.enhancement_key = None;
+        let Some(first) = self.candidates.first() else {
+            return false;
+        };
         // 用户固定的首选优先于模型，不能在异步刷新时改掉明确排位。
-        if first.pin_position > 0 { return false; }
-        if first.text==answer.text&&first.words==answer.words{return false;}
-        let previous:Vec<_>=first.text.chars().collect();
-        let text=engine.shown_text(&answer.text);
+        if first.pin_position > 0 {
+            return false;
+        }
+        if first.text == answer.text && first.words == answer.words {
+            return false;
+        }
+        let previous: Vec<_> = first.text.chars().collect();
+        let text = engine.shown_text(&answer.text);
         // 模型只能提升已有建议或加入新建议；原首选仍必须可选。按消费长度区分
         // 完整候选与同文本句首候选，避免替换上屏语义；复用已有词的读音与固定排位资格。
-        let existing=self.candidates.iter().position(|c| c.text==text && c.consumed==self.input.len()
-            && c.kind==CandidateKind::Word && !c.long_completion);
-        let mut suggestion=existing.map(|i|self.candidates.remove(i)).unwrap_or_else(|| Candidate {
-            text:text.clone(),commit:text,consumed:self.input.len(),kind:CandidateKind::Word,
-            ..Candidate::default()
+        let existing = self.candidates.iter().position(|c| {
+            c.text == text
+                && c.consumed == self.input.len()
+                && c.kind == CandidateKind::Word
+                && !c.long_completion
         });
-        suggestion.pinyin=answer.pinyin;
-        suggestion.words=answer.words.into_iter().map(|(w,p)|(engine.shown_text(&w),p)).collect();
-        self.candidates.insert(0,suggestion);
-        engine.apply_pins(&self.input,&mut self.candidates);
-        let first=&self.candidates[0];
-        self.sentence.accept_model(&self.input,&first.text,&first.pinyin,&first.words,engine);
-        let mut at=0;
+        let mut suggestion = existing
+            .map(|i| self.candidates.remove(i))
+            .unwrap_or_else(|| Candidate {
+                text: text.clone(),
+                commit: text,
+                consumed: self.input.len(),
+                kind: CandidateKind::Word,
+                ..Candidate::default()
+            });
+        suggestion.pinyin = answer.pinyin;
+        suggestion.words = answer
+            .words
+            .into_iter()
+            .map(|(w, p)| (engine.shown_text(&w), p))
+            .collect();
+        self.candidates.insert(0, suggestion);
+        engine.apply_pins(&self.input, &mut self.candidates);
+        let first = &self.candidates[0];
+        self.sentence.accept_model(
+            &self.input,
+            &first.text,
+            &first.pinyin,
+            &first.words,
+            engine,
+        );
+        let mut at = 0;
         for b in &mut self.sentence.view.blocks {
-            let chars:Vec<_>=b.text.chars().collect();let end=at+chars.len();
-            b.corrected=previous.get(at..end)!=Some(chars.as_slice());
-            b.uncertain=answer.uncertain.get(at..end).is_some_and(|v|v.iter().any(|x|*x));at=end;
+            let chars: Vec<_> = b.text.chars().collect();
+            let end = at + chars.len();
+            b.corrected = previous.get(at..end) != Some(chars.as_slice());
+            b.uncertain = answer
+                .uncertain
+                .get(at..end)
+                .is_some_and(|v| v.iter().any(|x| *x));
+            at = end;
         }
-        self.generation+=1;true
+        self.generation += 1;
+        true
     }
 
     /// Sentence metadata is independent of the optional enhancement model.
     pub fn sentence_view(&mut self) -> Option<&crate::sentence::View> {
-        if !self.config.sentence_editor { return None; }
+        if !self.config.sentence_editor {
+            return None;
+        }
         self.candidates();
-        (!self.sentence.view.blocks.is_empty() && self.selections.is_empty()).then_some(&self.sentence.view)
+        (!self.sentence.view.blocks.is_empty() && self.selections.is_empty())
+            .then_some(&self.sentence.view)
     }
 
     /// Keyboard and pointer commands share one state transition. Picking a block
     /// keeps composing; only the ordinary commit path writes the final sentence.
     pub fn sentence_action(&mut self, action: crate::sentence::Action) -> Frame {
-        if !self.config.sentence_editor { return self.frame(false); }
+        if !self.config.sentence_editor {
+            return self.frame(false);
+        }
         self.candidates();
-        if let crate::sentence::Action::Caret{at}=action {self.caret=Some(at.min(self.input.len()));}
-        if matches!(action,crate::sentence::Action::Leave){self.caret=None;}
-        let handled=self.engine.is_some_and(|engine|self.sentence.action(action,engine));
+        if let crate::sentence::Action::Caret { at } = action {
+            self.caret = Some(at.min(self.input.len()));
+        }
+        if matches!(action, crate::sentence::Action::Leave) {
+            self.caret = None;
+        }
+        let handled = self
+            .engine
+            .is_some_and(|engine| self.sentence.action(action, engine));
         if handled && !self.sentence.view.text.is_empty() {
-            if let Some(first)=self.candidates.first_mut() {
-                first.text=self.sentence.view.text.clone();first.commit=first.text.clone();
-                first.pinyin=self.sentence.view.blocks.iter().map(|b|b.pinyin.as_str()).collect::<Vec<_>>().join(" ");
-                first.words=self.sentence.view.blocks.iter().map(|b|(b.text.clone(),b.pinyin.clone())).collect();
-                first.pin_key=None;
+            if let Some(first) = self.candidates.first_mut() {
+                first.text = self.sentence.view.text.clone();
+                first.commit = first.text.clone();
+                first.pinyin = self
+                    .sentence
+                    .view
+                    .blocks
+                    .iter()
+                    .map(|b| b.pinyin.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                first.words = self
+                    .sentence
+                    .view
+                    .blocks
+                    .iter()
+                    .map(|b| (b.text.clone(), b.pinyin.clone()))
+                    .collect();
+                first.pin_key = None;
             }
         }
-        if handled {self.queue_enhancement();}
+        if handled {
+            self.queue_enhancement();
+        }
         self.frame(handled)
     }
 
@@ -1394,12 +1586,14 @@ impl<'e> Session<'e> {
     }
 
     fn clear(&mut self) {
-        self.enhancement_key=None;
+        self.enhancement_key = None;
         self.sentence = crate::sentence::State::default();
         self.trace_abandon();
         self.committed_learning.clear();
         let picks = std::mem::take(&mut self.selection_learning);
-        for (start, end) in picks.into_iter().rev().flatten() { self.undo_range(start, end); }
+        for (start, end) in picks.into_iter().rev().flatten() {
+            self.undo_range(start, end);
+        }
         self.input.clear();
         self.selections.clear();
         self.caret = None;
@@ -1413,24 +1607,33 @@ impl<'e> Session<'e> {
 
     /// 编辑区光标在 input 里的字节位置：在还没选词的那段里，没移动过时在末尾。
     fn caret(&self) -> usize {
-        self.caret
-            .map_or(self.input.len(), |at| at.clamp(self.rest_start(), self.input.len()))
+        self.caret.map_or(self.input.len(), |at| {
+            at.clamp(self.rest_start(), self.input.len())
+        })
     }
 
     /// 左右键移动拼音里的光标（[`ArrowKeys::Caret`]），Home、End、Delete 也管光标；到了两头照样吃掉。
     /// Some：处理完了；None：不是这几个键。
     fn caret_key(&mut self, sym: u32) -> Option<bool> {
-        let sentence_focus=self.sentence.view.cursor.is_some();
+        let sentence_focus = self.sentence.view.cursor.is_some();
         if !matches!(
             sym,
-            keysym::LEFT | keysym::RIGHT | keysym::HOME | keysym::END | keysym::DELETE | keysym::KP_DELETE
+            keysym::LEFT
+                | keysym::RIGHT
+                | keysym::HOME
+                | keysym::END
+                | keysym::DELETE
+                | keysym::KP_DELETE
         ) {
             return None;
         }
         let start = self.rest_start();
         let at = self.caret();
         let len = self.input.len();
-        let prev = self.input[..at].chars().next_back().map_or(0, char::len_utf8);
+        let prev = self.input[..at]
+            .chars()
+            .next_back()
+            .map_or(0, char::len_utf8);
         let next = self.input[at..].chars().next().map_or(0, char::len_utf8);
         match sym {
             keysym::LEFT if at > start => self.caret = Some(at - prev),
@@ -1438,7 +1641,7 @@ impl<'e> Session<'e> {
             keysym::HOME => self.caret = Some(start),
             keysym::END => self.caret = None,
             keysym::DELETE | keysym::KP_DELETE if at < len => {
-                self.sentence.edit(at,next,0);
+                self.sentence.edit(at, next, 0);
                 self.input.replace_range(at..at + next, "");
                 self.caret = (at < self.input.len()).then_some(at);
                 self.fresh = false;
@@ -1448,10 +1651,12 @@ impl<'e> Session<'e> {
             }
             _ => {} // 到了两头
         }
-        if sentence_focus && !matches!(sym,keysym::DELETE|keysym::KP_DELETE) {
-            if let Some(engine)=self.engine {
-                let action=self.caret.map_or(crate::sentence::Action::Leave,|at|crate::sentence::Action::Focus{at});
-                self.sentence.action(action,engine);
+        if sentence_focus && !matches!(sym, keysym::DELETE | keysym::KP_DELETE) {
+            if let Some(engine) = self.engine {
+                let action = self.caret.map_or(crate::sentence::Action::Leave, |at| {
+                    crate::sentence::Action::Focus { at }
+                });
+                self.sentence.action(action, engine);
             }
         }
         Some(true)
@@ -1480,23 +1685,67 @@ impl<'e> Session<'e> {
     pub fn candidates(&mut self) -> &[Candidate] {
         if !self.fresh {
             self.candidates = self.compute_candidates();
-            let editable=self.selections.is_empty()&&self.candidates.first().is_some_and(|c|c.kind==CandidateKind::Word&&c.consumed==self.input.len()&&!c.long_completion);
+            let editable = self.selections.is_empty()
+                && self.candidates.first().is_some_and(|c| {
+                    c.kind == CandidateKind::Word
+                        && c.consumed == self.input.len()
+                        && !c.long_completion
+                });
             if !editable {
-                if !self.sentence.view.blocks.is_empty()&&self.input.starts_with(&self.sentence.view.raw)&&self.selections.is_empty()
-                    &&!self.candidates.first().is_some_and(|c|c.kind==CandidateKind::Plain||c.long_completion){
-                    let from=self.sentence.view.pending_from.unwrap_or(self.sentence.view.raw.len());
-                    self.sentence.view.raw=self.input.clone();self.sentence.view.pending_from=Some(from);
-                }else{self.sentence.view=crate::sentence::View::default();}
+                if !self.sentence.view.blocks.is_empty()
+                    && self.input.starts_with(&self.sentence.view.raw)
+                    && self.selections.is_empty()
+                    && !self
+                        .candidates
+                        .first()
+                        .is_some_and(|c| c.kind == CandidateKind::Plain || c.long_completion)
+                {
+                    let from = self
+                        .sentence
+                        .view
+                        .pending_from
+                        .unwrap_or(self.sentence.view.raw.len());
+                    self.sentence.view.raw = self.input.clone();
+                    self.sentence.view.pending_from = Some(from);
+                } else {
+                    self.sentence.view = crate::sentence::View::default();
+                }
             }
             if self.selections.is_empty() {
-                if let (Some(engine),Some(first))=(self.engine,self.candidates.first()) {
-                    if first.kind==CandidateKind::Word && first.consumed==self.input.len() && !first.long_completion {
-                        self.sentence.rebuild(&self.input,&first.text,&first.pinyin,&first.words,engine);
-                        if self.sentence.edited && self.sentence.view.pending_from.is_none() && !self.sentence.view.text.is_empty() {
-                            let first=&mut self.candidates[0];
-                            first.text=self.sentence.view.text.clone();first.commit=first.text.clone();
-                            first.pinyin=self.sentence.view.blocks.iter().map(|b|b.pinyin.as_str()).collect::<Vec<_>>().join(" ");
-                            first.words=self.sentence.view.blocks.iter().map(|b|(b.text.clone(),b.pinyin.clone())).collect();
+                if let (Some(engine), Some(first)) = (self.engine, self.candidates.first()) {
+                    if first.kind == CandidateKind::Word
+                        && first.consumed == self.input.len()
+                        && !first.long_completion
+                    {
+                        self.sentence.rebuild(
+                            &self.input,
+                            &first.text,
+                            &first.pinyin,
+                            &first.words,
+                            engine,
+                        );
+                        if self.sentence.edited
+                            && self.sentence.view.pending_from.is_none()
+                            && !self.sentence.view.text.is_empty()
+                        {
+                            let first = &mut self.candidates[0];
+                            first.text = self.sentence.view.text.clone();
+                            first.commit = first.text.clone();
+                            first.pinyin = self
+                                .sentence
+                                .view
+                                .blocks
+                                .iter()
+                                .map(|b| b.pinyin.as_str())
+                                .collect::<Vec<_>>()
+                                .join(" ");
+                            first.words = self
+                                .sentence
+                                .view
+                                .blocks
+                                .iter()
+                                .map(|b| (b.text.clone(), b.pinyin.clone()))
+                                .collect();
                         }
                     }
                 }
@@ -1512,18 +1761,52 @@ impl<'e> Session<'e> {
         &self.candidates
     }
 
-    fn queue_enhancement(&mut self){
-        self.enhancement_key=None;
-        if self.preview.is_some()||!self.selections.is_empty()||self.no_learn||self.sentence.view.pending_from.is_some()||self.sentence.view.blocks.is_empty(){return;}
-        if let (Some(engine),Some(top))=(self.engine,self.candidates.first()) {
-            let Some(backend)=engine.enhancement_backend()else{return;};
-            let choices=self.candidates.iter().filter(|c|c.consumed==self.input.len()&&c.pinyin==top.pinyin&&c.kind==CandidateKind::Word&&!c.long_completion).take(8).map(|c|engine.lexicon_form(&c.text)).collect();
-            if let Some(mut query)=engine.enhancement_query(&self.input,&top.pinyin,choices) {
-                query.blocks=top.words.iter().map(|(word,_)|engine.lexicon_form(word)).collect();
-                query.context=self.context.chars().rev().take(30).collect::<Vec<_>>().into_iter().rev().collect();
-                query.key=format!("{}\u{1d}{}",query.context,query.key);
-                if self.sentence.edited&&!self.sentence.constrain(&mut query,engine){return;}
-                self.enhancement_key=Some(query.key.clone());
+    fn queue_enhancement(&mut self) {
+        self.enhancement_key = None;
+        if self.preview.is_some()
+            || !self.selections.is_empty()
+            || self.no_learn
+            || self.sentence.view.pending_from.is_some()
+            || self.sentence.view.blocks.is_empty()
+        {
+            return;
+        }
+        if let (Some(engine), Some(top)) = (self.engine, self.candidates.first()) {
+            let Some(backend) = engine.enhancement_backend() else {
+                return;
+            };
+            let choices = self
+                .candidates
+                .iter()
+                .filter(|c| {
+                    c.consumed == self.input.len()
+                        && c.pinyin == top.pinyin
+                        && c.kind == CandidateKind::Word
+                        && !c.long_completion
+                })
+                .take(8)
+                .map(|c| engine.lexicon_form(&c.text))
+                .collect();
+            if let Some(mut query) = engine.enhancement_query(&self.input, &top.pinyin, choices) {
+                query.blocks = top
+                    .words
+                    .iter()
+                    .map(|(word, _)| engine.lexicon_form(word))
+                    .collect();
+                query.context = self
+                    .context
+                    .chars()
+                    .rev()
+                    .take(30)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
+                query.key = format!("{}\u{1d}{}", query.context, query.key);
+                if self.sentence.edited && !self.sentence.constrain(&mut query, engine) {
+                    return;
+                }
+                self.enhancement_key = Some(query.key.clone());
                 backend.submit(query);
             }
         }
@@ -1571,11 +1854,20 @@ impl<'e> Session<'e> {
                     CandidateKind::Word
                 };
                 let corrected = c.features.typo_count > 0.0;
-                let pin_key = (kind == CandidateKind::Word && !corrected && !c.long_completion && consumed == input.len()
-                    && c.words.len() == 1 && c.words[0].known && !c.pinyin.is_empty())
-                    .then(|| format!("{}\t{}", c.pinyin, c.words[0].text));
+                let pin_key = (kind == CandidateKind::Word
+                    && !corrected
+                    && !c.long_completion
+                    && consumed == input.len()
+                    && c.words.len() == 1
+                    && c.words[0].known
+                    && !c.pinyin.is_empty())
+                .then(|| format!("{}\t{}", c.pinyin, c.words[0].text));
                 Candidate {
-                    words: if consumed==input.len(){crate::sentence::words(&c.words)}else{Vec::new()},
+                    words: if consumed == input.len() {
+                        crate::sentence::words(&c.words)
+                    } else {
+                        Vec::new()
+                    },
                     commit: c.text.clone(),
                     text: c.text,
                     pinyin: c.pinyin,
@@ -1772,7 +2064,9 @@ impl<'e> Session<'e> {
                 // 句首词：先放进已选栈，剩下的拼音继续选
                 let mark = self.engine.map(Engine::learn_mark);
                 self.learn(&chosen.text, &chosen.pinyin, chosen.consumed);
-                let changed = mark.zip(self.engine.map(Engine::learn_mark)).filter(|(start, end)| start < end);
+                let changed = mark
+                    .zip(self.engine.map(Engine::learn_mark))
+                    .filter(|(start, end)| start < end);
                 self.push_selection(Selection {
                     plain: self.plain_of(&chosen.text),
                     text: chosen.text,
@@ -1787,7 +2081,9 @@ impl<'e> Session<'e> {
                 self.last_choice = Some(chosen);
             }
         }
-        if self.pending.is_some() { self.pending_rank = index + 1; }
+        if self.pending.is_some() {
+            self.pending_rank = index + 1;
+        }
         true
     }
 
@@ -1809,19 +2105,37 @@ impl<'e> Session<'e> {
     fn commit_with(&mut self, tail: &str, tail_pinyin: &str) {
         let text = self.selected_text() + tail;
         let mark = self.engine.map(Engine::learn_mark);
-        if self.sentence.edited && tail==self.sentence.view.text && !self.no_learn && !self.defer_learning() {
-            if let Some(engine)=self.engine {
+        if self.sentence.edited
+            && tail == self.sentence.view.text
+            && !self.no_learn
+            && !self.defer_learning()
+        {
+            if let Some(engine) = self.engine {
                 if self.sentence.boundaries_changed {
-                    for pair in self.sentence.view.blocks.windows(2).filter(|p|self.sentence.boundary_marks.contains(&p[0].to)) {
-                        let parts=pair.iter().map(|b|(self.plain_of(&b.text),b.pinyin.clone())).collect::<Vec<_>>();
-                        engine.remember_boundary(&format!("{} {}",pair[0].pinyin,pair[1].pinyin),parts);
+                    for pair in self
+                        .sentence
+                        .view
+                        .blocks
+                        .windows(2)
+                        .filter(|p| self.sentence.boundary_marks.contains(&p[0].to))
+                    {
+                        let parts = pair
+                            .iter()
+                            .map(|b| (self.plain_of(&b.text), b.pinyin.clone()))
+                            .collect::<Vec<_>>();
+                        engine.remember_boundary(
+                            &format!("{} {}", pair[0].pinyin, pair[1].pinyin),
+                            parts,
+                        );
                     }
                 }
-                for (word,reading) in self.sentence.merged.clone() {engine.record_merged_word(&self.plain_of(&word),&reading);}
+                for (word, reading) in self.sentence.merged.clone() {
+                    engine.record_merged_word(&self.plain_of(&word), &reading);
+                }
             }
         }
         if self.engine.is_some() && !self.no_learn && !text.is_empty() {
-            if !tail.is_empty() && !self.sentence.merged.iter().any(|(word,_)|word==tail) {
+            if !tail.is_empty() && !self.sentence.merged.iter().any(|(word, _)| word == tail) {
                 // 带上拼音：选够次数后引擎会自动把这个词收进用户词库
                 self.learn(tail, tail_pinyin, self.remaining().len());
             }
@@ -1855,7 +2169,10 @@ impl<'e> Session<'e> {
             }
         }
         self.finish(text);
-        if let Some((start, end)) = mark.zip(self.engine.map(Engine::learn_mark)).filter(|(a, b)| a < b) {
+        if let Some((start, end)) = mark
+            .zip(self.engine.map(Engine::learn_mark))
+            .filter(|(a, b)| a < b)
+        {
             self.committed_learning.push((start, end));
             self.learning_changed = true;
         }
@@ -1878,8 +2195,15 @@ impl<'e> Session<'e> {
         let context = self.context.clone() + &self.selected_text();
         engine.set_context(utf8_tail(&context, CONTEXT_BYTES));
         // 英文和混输使用真正按下的输入码，双拼、简拼时也不能只保留中文读音。
-        let completed=self.candidates.iter().any(|c|c.long_completion&&c.text==word&&c.pinyin==pinyin);
-        let reading = if word.chars().any(|c| c.is_ascii_alphabetic())&&!completed { &self.remaining()[..input_bytes.min(self.remaining().len())] } else { pinyin };
+        let completed = self
+            .candidates
+            .iter()
+            .any(|c| c.long_completion && c.text == word && c.pinyin == pinyin);
+        let reading = if word.chars().any(|c| c.is_ascii_alphabetic()) && !completed {
+            &self.remaining()[..input_bytes.min(self.remaining().len())]
+        } else {
+            pinyin
+        };
         engine.record_selection_with_pinyin(word, Some(reading).filter(|p| !p.is_empty()));
     }
 
@@ -1892,7 +2216,11 @@ impl<'e> Session<'e> {
             return;
         }
         engine.set_context(utf8_tail(&self.context, CONTEXT_BYTES));
-        let reading = if word.chars().any(|c| c.is_ascii_alphabetic()) { &self.input } else { pinyin };
+        let reading = if word.chars().any(|c| c.is_ascii_alphabetic()) {
+            &self.input
+        } else {
+            pinyin
+        };
         engine.record_composed_word(word, reading);
     }
 

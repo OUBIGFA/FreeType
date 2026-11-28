@@ -15,13 +15,15 @@ use std::process::Command;
 use freetype_protocol::{LANGID_ZH_CN, PROFILE_GUID, TEXT_SERVICE_CLSID};
 use windows::core::{s, HRESULT, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{FreeLibrary, ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
-use windows::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_DELAY_UNTIL_REBOOT, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH};
 use windows::Win32::Security::Cryptography::{BCryptHash, BCRYPT_SHA256_ALG_HANDLE};
+use windows::Win32::Storage::FileSystem::{
+    MoveFileExW, MOVEFILE_DELAY_UNTIL_REBOOT, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+};
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 use windows::Win32::System::Registry::{
-    RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegSetValueExW, HKEY, HKEY_LOCAL_MACHINE, KEY_WOW64_64KEY,
-    KEY_WRITE, REG_OPTION_NON_VOLATILE, REG_SZ,
+    RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegSetValueExW, HKEY, HKEY_LOCAL_MACHINE,
+    KEY_WOW64_64KEY, KEY_WRITE, REG_OPTION_NON_VOLATILE, REG_SZ,
 };
 
 const DLL_NAME: &str = "freetype_tsf.dll";
@@ -29,17 +31,27 @@ const ICON_NAME: &str = "freetype.ico";
 pub const REGISTRY_KEY: &str = r"SOFTWARE\FreeType";
 
 /// 提权调用拿不到退出码；只在操作成功后创建本次私有目录中的标记，不覆盖已有文件。
-pub fn record_setup_result(result: Result<(), String>, marker: Option<&Path>) -> Result<(), String> {
+pub fn record_setup_result(
+    result: Result<(), String>,
+    marker: Option<&Path>,
+) -> Result<(), String> {
     result?;
     if let Some(marker) = marker {
-        std::fs::OpenOptions::new().write(true).create_new(true).open(marker)
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(marker)
             .map_err(|error| format!("无法创建安装结果标记 {}：{error}", marker.display()))?;
     }
     Ok(())
 }
 
 pub(crate) fn program_files(x86: bool) -> PathBuf {
-    let var = if x86 { "ProgramFiles(x86)" } else { "ProgramW6432" };
+    let var = if x86 {
+        "ProgramFiles(x86)"
+    } else {
+        "ProgramW6432"
+    };
     std::env::var_os(var)
         .or_else(|| std::env::var_os("ProgramFiles"))
         .map(PathBuf::from)
@@ -49,7 +61,8 @@ pub(crate) fn program_files(x86: bool) -> PathBuf {
 
 fn installed_dll(x86: bool) -> PathBuf {
     let root = program_files(x86);
-    std::fs::read_to_string(root.join("current.txt")).ok()
+    std::fs::read_to_string(root.join("current.txt"))
+        .ok()
         .filter(|revision| valid_revision(revision.trim()))
         .map(|revision| root.join("versions").join(revision.trim()).join(DLL_NAME))
         .unwrap_or_else(|| root.join(DLL_NAME))
@@ -63,7 +76,8 @@ pub(crate) fn valid_revision(revision: &str) -> bool {
 fn stage_component(source: &Path, root: &Path) -> Result<(String, PathBuf), String> {
     let bytes = std::fs::read(source).map_err(|e| e.to_string())?;
     let mut hash = [0u8; 32];
-    unsafe { BCryptHash(BCRYPT_SHA256_ALG_HANDLE, None, &bytes, &mut hash).ok() }.map_err(|e| e.to_string())?;
+    unsafe { BCryptHash(BCRYPT_SHA256_ALG_HANDLE, None, &bytes, &mut hash).ok() }
+        .map_err(|e| e.to_string())?;
     let revision: String = hash.iter().map(|b| format!("{b:02x}")).collect();
     let target = root.join("versions").join(&revision).join(DLL_NAME);
     if target.exists() {
@@ -80,13 +94,25 @@ fn stage_component(source: &Path, root: &Path) -> Result<(String, PathBuf), Stri
 }
 
 fn publish_component(root: &Path, revision: &str) -> Result<(), String> {
-    if !valid_revision(revision) || !root.join("versions").join(revision).join(DLL_NAME).is_file() {
+    if !valid_revision(revision)
+        || !root
+            .join("versions")
+            .join(revision)
+            .join(DLL_NAME)
+            .is_file()
+    {
         return Err("输入法组件未准备完成，不能发布".into());
     }
     let temporary = root.join(format!("current-{}.tmp", std::process::id()));
     std::fs::write(&temporary, revision).map_err(|e| e.to_string())?;
-    unsafe { MoveFileExW(&HSTRING::from(temporary.as_os_str()), &HSTRING::from(root.join("current.txt").as_os_str()), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) }
-        .map_err(|e| format!("无法发布输入法组件：{e}"))
+    unsafe {
+        MoveFileExW(
+            &HSTRING::from(temporary.as_os_str()),
+            &HSTRING::from(root.join("current.txt").as_os_str()),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    }
+    .map_err(|e| format!("无法发布输入法组件：{e}"))
 }
 
 /// 删掉文件；正被占用就改名，重启后删。
@@ -98,11 +124,18 @@ fn remove_file(path: &Path) -> Result<(), String> {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let old = path.with_file_name(format!("{name}.old-{stamp}"));
     std::fs::rename(path, &old).map_err(|e| format!("无法替换 {}：{e}", path.display()))?;
     unsafe {
-        let _ = MoveFileExW(&HSTRING::from(old.as_os_str()), PCWSTR::null(), MOVEFILE_DELAY_UNTIL_REBOOT);
+        let _ = MoveFileExW(
+            &HSTRING::from(old.as_os_str()),
+            PCWSTR::null(),
+            MOVEFILE_DELAY_UNTIL_REBOOT,
+        );
     }
     Ok(())
 }
@@ -127,7 +160,8 @@ fn call_dll(path: &Path, export: windows::core::PCSTR) -> Result<(), String> {
             let result = match GetProcAddress(module, export) {
                 Some(f) => {
                     let f: extern "system" fn() -> HRESULT = std::mem::transmute(f);
-                    f().ok().map_err(|e| format!("{} 调用失败：{e}", path.display()))
+                    f().ok()
+                        .map_err(|e| format!("{} 调用失败：{e}", path.display()))
                 }
                 None => Err(format!("{} 缺少导出函数", path.display())),
             };
@@ -155,7 +189,10 @@ fn regsvr32_x86(path: &Path, unregister: bool) -> Result<(), String> {
     if status.success() {
         Ok(())
     } else {
-        Err(format!("regsvr32 注册 {} 失败；退出状态 {status}", path.display()))
+        Err(format!(
+            "regsvr32 注册 {} 失败；退出状态 {status}",
+            path.display()
+        ))
     }
 }
 
@@ -181,7 +218,13 @@ fn set_server_path(server: &Path) -> Result<(), String> {
             .chain(std::iter::once(&0u16))
             .flat_map(|w| w.to_le_bytes())
             .collect();
-        let status = RegSetValueExW(key, &HSTRING::from("ServerPath"), None, REG_SZ, Some(&value));
+        let status = RegSetValueExW(
+            key,
+            &HSTRING::from("ServerPath"),
+            None,
+            REG_SZ,
+            Some(&value),
+        );
         let _ = RegCloseKey(key);
         if status != ERROR_SUCCESS {
             return Err(format!("写入注册表失败；错误码 {}", status.0));
@@ -202,7 +245,11 @@ pub fn register_tsf(bin_dir: &Path) -> Result<(), String> {
     }
     call_dll(&x64, s!("DllRegisterServer"))?;
     regsvr32_x86(&x86, false)?;
-    crate::brand_icon::register_installation_icon(&x64, &bin_dir.join(ICON_NAME), previous_icon.as_deref())?;
+    crate::brand_icon::register_installation_icon(
+        &x64,
+        &bin_dir.join(ICON_NAME),
+        previous_icon.as_deref(),
+    )?;
     set_server_path(&bin_dir.join("FreeTypeServer.exe"))?;
     // 两种架构全部可用后才通知现存组件切换；注册失败保留旧的发布指针。
     publish_component(&root64, &revision64)?;
@@ -227,7 +274,9 @@ pub fn unregister_tsf() -> Result<(), String> {
         let mut components = vec![root.join(DLL_NAME)];
         if let Ok(entries) = std::fs::read_dir(root.join("versions")) {
             for entry in entries.flatten() {
-                if valid_revision(&entry.file_name().to_string_lossy()) { components.push(entry.path().join(DLL_NAME)); }
+                if valid_revision(&entry.file_name().to_string_lossy()) {
+                    components.push(entry.path().join(DLL_NAME));
+                }
             }
         }
         for path in components {
@@ -236,14 +285,25 @@ pub fn unregister_tsf() -> Result<(), String> {
                     errors.push(e);
                 }
             }
-            if let Some(dir) = path.parent().filter(|dir| *dir != root) { let _ = std::fs::remove_dir(dir); }
+            if let Some(dir) = path.parent().filter(|dir| *dir != root) {
+                let _ = std::fs::remove_dir(dir);
+            }
         }
-        if let Err(e) = remove_file(&root.join("current.txt")) { errors.push(e); }
+        if let Err(e) = remove_file(&root.join("current.txt")) {
+            errors.push(e);
+        }
         if let Ok(entries) = std::fs::read_dir(root.join("brand")) {
             for entry in entries.flatten() {
                 let name = entry.file_name();
-                if name.to_string_lossy().split('.').next().is_some_and(valid_revision) {
-                    if let Err(error) = remove_file(&entry.path()) { errors.push(error); }
+                if name
+                    .to_string_lossy()
+                    .split('.')
+                    .next()
+                    .is_some_and(valid_revision)
+                {
+                    if let Err(error) = remove_file(&entry.path()) {
+                        errors.push(error);
+                    }
                 }
             }
             let _ = std::fs::remove_dir(root.join("brand"));
@@ -267,27 +327,49 @@ pub fn start_and_check() -> Result<(), String> {
     use std::os::windows::process::CommandExt;
     use windows::core::PWSTR;
     use windows::Win32::Foundation::CloseHandle;
-    use windows::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_NAME_WIN32};
+    use windows::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
     let executable = std::env::current_exe().map_err(|e| e.to_string())?;
     let expected = executable.canonicalize().map_err(|e| e.to_string())?;
-    let name = freetype_protocol::pipe_name(&crate::pipe::current_user_sid().map_err(|e| e.to_string())?) + &crate::instance_suffix();
-    Command::new(&executable).creation_flags(0x0800_0000 | 0x0000_0008).spawn().map_err(|e| e.to_string())?;
+    let name =
+        freetype_protocol::pipe_name(&crate::pipe::current_user_sid().map_err(|e| e.to_string())?)
+            + &crate::instance_suffix();
+    Command::new(&executable)
+        .creation_flags(0x0800_0000 | 0x0000_0008)
+        .spawn()
+        .map_err(|e| e.to_string())?;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
     while std::time::Instant::now() < deadline {
-        if let Ok((response, pid)) = crate::pipe::request_with_server(&name, &freetype_protocol::Request::Status) {
+        if let Ok((response, pid)) =
+            crate::pipe::request_with_server(&name, &freetype_protocol::Request::Status)
+        {
             let path = unsafe {
-                let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).map_err(|e| e.to_string())?;
+                let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
+                    .map_err(|e| e.to_string())?;
                 let mut path = [0u16; 32768];
                 let mut len = path.len() as u32;
-                let result = QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, PWSTR(path.as_mut_ptr()), &mut len);
+                let result = QueryFullProcessImageNameW(
+                    process,
+                    PROCESS_NAME_WIN32,
+                    PWSTR(path.as_mut_ptr()),
+                    &mut len,
+                );
                 let _ = CloseHandle(process);
                 result.map_err(|e| e.to_string())?;
                 PathBuf::from(String::from_utf16_lossy(&path[..len as usize]))
             };
-            if path.canonicalize().map_err(|e| e.to_string())? != expected { return Err("仍有其他安装目录的旧服务运行，更新尚未生效".into()); }
+            if path.canonicalize().map_err(|e| e.to_string())? != expected {
+                return Err("仍有其他安装目录的旧服务运行，更新尚未生效".into());
+            }
             if let Some(status) = response.status {
-                if let Some(error) = status.error { return Err(error); }
-                if response.ok && status.ready { return Ok(()); }
+                if let Some(error) = status.error {
+                    return Err(error);
+                }
+                if response.ok && status.ready {
+                    return Ok(());
+                }
             }
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -304,7 +386,8 @@ pub fn tip_string() -> String {
 pub fn enable_for_user(enable: bool) -> Result<(), String> {
     const ILOT_UNINSTALL: u32 = 0x0000_0001;
     unsafe {
-        let module = LoadLibraryW(&HSTRING::from("input.dll")).map_err(|e| format!("无法载入 input.dll：{e}"))?;
+        let module = LoadLibraryW(&HSTRING::from("input.dll"))
+            .map_err(|e| format!("无法载入 input.dll：{e}"))?;
         let result = match GetProcAddress(module, s!("InstallLayoutOrTip")) {
             Some(f) => {
                 let f: extern "system" fn(PCWSTR, u32) -> i32 = std::mem::transmute(f);
@@ -340,10 +423,16 @@ mod tests {
         assert_eq!(std::fs::read(&old).unwrap(), b"first component");
         assert_eq!(std::fs::read(&new).unwrap(), b"second component");
         super::publish_component(root, &second).unwrap();
-        assert_eq!(std::fs::read_to_string(root.join("current.txt")).unwrap(), second);
+        assert_eq!(
+            std::fs::read_to_string(root.join("current.txt")).unwrap(),
+            second
+        );
         for invalid in ["../escape", &"a".repeat(64)] {
             assert!(super::publish_component(root, invalid).is_err());
-            assert_eq!(std::fs::read_to_string(root.join("current.txt")).unwrap(), second);
+            assert_eq!(
+                std::fs::read_to_string(root.join("current.txt")).unwrap(),
+                second
+            );
         }
         std::fs::write(&new, b"corrupt").unwrap();
         assert!(super::stage_component(&source, root).is_err());
@@ -352,8 +441,13 @@ mod tests {
     fn marker_path() -> std::path::PathBuf {
         let root = std::env::var_os("FREETYPE_TEST_TEMP")
             .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../_temp/setup-tests"));
-        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+            .unwrap_or_else(|| {
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../_temp/setup-tests")
+            });
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let directory = root.join(format!("marker-{}-{stamp}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         directory.join("setup.ok")
@@ -362,8 +456,10 @@ mod tests {
     #[test]
     fn setup_marker_is_created_only_for_success() {
         let marker = marker_path();
-        assert_eq!(super::record_setup_result(Err("unregister failed".into()), Some(&marker)),
-                   Err("unregister failed".into()));
+        assert_eq!(
+            super::record_setup_result(Err("unregister failed".into()), Some(&marker)),
+            Err("unregister failed".into())
+        );
         assert!(!marker.exists());
         assert_eq!(super::record_setup_result(Ok(()), Some(&marker)), Ok(()));
         assert!(marker.is_file());

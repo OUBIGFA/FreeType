@@ -13,20 +13,22 @@ pub mod clipboard;
 pub mod convert;
 pub mod datetime;
 pub mod emoji;
+pub mod enhancement;
 pub mod ffi;
 pub mod graph;
+pub mod input_tools;
 pub mod learn;
 pub mod lexicon;
-mod long_completion;
 pub mod llama;
 pub mod lm;
+mod long_completion;
+pub mod lookup_table;
 pub mod msime;
 pub mod nnlm;
-pub mod sentence;
-pub mod enhancement;
 pub mod predict;
 pub mod preedit;
 pub mod rank;
+pub mod sentence;
 pub mod session;
 pub mod session_ffi;
 pub mod shuangpin;
@@ -40,8 +42,6 @@ pub mod voice_ffi;
 #[cfg(not(feature = "voice"))]
 pub mod voice_stub;
 pub mod wordlm;
-pub mod lookup_table;
-pub mod input_tools;
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -260,9 +260,17 @@ impl Engine {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         (self.lexicon.generation(), fuzzy).hash(&mut hasher);
         if fuzzy {
-            (self.config.fuzzy_groups, self.config.fuzzy_penalty.to_bits()).hash(&mut hasher);
+            (
+                self.config.fuzzy_groups,
+                self.config.fuzzy_penalty.to_bits(),
+            )
+                .hash(&mut hasher);
         }
-        lexicon::MemoLexicon { inner, memo: &self.lookup_memo, salt: hasher.finish() }
+        lexicon::MemoLexicon {
+            inner,
+            memo: &self.lookup_memo,
+            salt: hasher.finish(),
+        }
     }
 
     /// 加载微信输入法的字级神经语言模型（`nlrgpt2_nnlm.bin`），返回字表大小。
@@ -276,18 +284,24 @@ impl Engine {
     }
 
     pub fn set_nnlm(&self, model: Option<Arc<nnlm::Nnlm>>) {
-        if let Ok(mut path) = self.nnlm_path.write() { *path = None; }
+        if let Ok(mut path) = self.nnlm_path.write() {
+            *path = None;
+        }
         if let Ok(mut slot) = self.nnlm.write() {
             *slot = model;
         }
     }
 
-    pub fn model_path(&self) -> Option<std::path::PathBuf> { self.nnlm_path.read().ok()?.clone() }
+    pub fn model_path(&self) -> Option<std::path::PathBuf> {
+        self.nnlm_path.read().ok()?.clone()
+    }
 
     /// Windows 设置已完成文件校验与原子替换后，接续使用内存中的模型。
     pub fn install_nnlm(&self, model: Arc<nnlm::Nnlm>, path: std::path::PathBuf) {
         self.set_nnlm(Some(model));
-        if let Ok(mut slot) = self.nnlm_path.write() { *slot = Some(path); }
+        if let Ok(mut slot) = self.nnlm_path.write() {
+            *slot = Some(path);
+        }
     }
 
     pub fn has_nnlm(&self) -> bool {
@@ -337,8 +351,11 @@ impl Engine {
     fn add_learned_word(&self, word: &str, pinyin: &str, heat: f64) {
         // 候选带的拼音已经是全拼（双拼也翻好了）；以前的前端会传双拼键位串（如 "vsgo"），
         // 那样的要先展开，否则用户词会带着一串无效音节存进去，永远也打不出来。
-        let pinyin = if self.config.shuangpin && !word.chars().any(|c| c.is_ascii_alphabetic())
-            && !pinyin.trim().contains(' ') && crate::lexicon::parse_pinyin_keys(pinyin.trim()).is_err() {
+        let pinyin = if self.config.shuangpin
+            && !word.chars().any(|c| c.is_ascii_alphabetic())
+            && !pinyin.trim().contains(' ')
+            && crate::lexicon::parse_pinyin_keys(pinyin.trim()).is_err()
+        {
             crate::shuangpin::to_full_pinyin(self.config.shuangpin_scheme, pinyin.trim())
         } else {
             pinyin.to_string()
@@ -349,7 +366,12 @@ impl Engine {
         // 频次随选用次数增长但有上限，避免用户词压过通用高频词
         let freq = (1000.0 * heat).min(50_000.0);
         let before = self.lexicon.user_word(word);
-        if before.as_ref().is_some_and(|(_, existing)| *existing >= freq) { return; }
+        if before
+            .as_ref()
+            .is_some_and(|(_, existing)| *existing >= freq)
+        {
+            return;
+        }
         if self.lexicon.add(&pinyin, word, freq).is_ok() {
             if let Some(after) = self.lexicon.user_word(word) {
                 self.note_learning(learn::Change::UserWord(word.into(), before, after));
@@ -361,8 +383,13 @@ impl Engine {
     pub fn record_composed_word(&self, word: &str, pinyin: &str) {
         let word = &self.lexicon_form(word);
         let chars = word.chars().count();
-        let mixed_short_word = word.chars().any(|c| c.is_ascii_alphabetic()) && chars <= MIXED_WORD_MAX_CHARS
-            && word.chars().filter(|c| crate::autospace::is_han(*c)).count() <= COMPOSED_WORD_MAX_CHARS;
+        let mixed_short_word = word.chars().any(|c| c.is_ascii_alphabetic())
+            && chars <= MIXED_WORD_MAX_CHARS
+            && word
+                .chars()
+                .filter(|c| crate::autospace::is_han(*c))
+                .count()
+                <= COMPOSED_WORD_MAX_CHARS;
         if chars > COMPOSED_WORD_MAX_CHARS && !mixed_short_word {
             self.record_selection_with_pinyin(word, Some(pinyin));
             return;
@@ -372,38 +399,57 @@ impl Engine {
         if !self.config.auto_learn || word.is_empty() || pinyin.trim().is_empty() {
             return;
         }
-        if self.confirm_pending(word, pinyin, at_ms, true) || self.lexicon.user_word(word).is_some() {
-            let heat = self.history_heat(word, at_ms).max(f64::from(self.config.auto_learn_threshold.max(1)));
+        if self.confirm_pending(word, pinyin, at_ms, true) || self.lexicon.user_word(word).is_some()
+        {
+            let heat = self
+                .history_heat(word, at_ms)
+                .max(f64::from(self.config.auto_learn_threshold.max(1)));
             self.add_learned_word(word, pinyin, heat);
         }
     }
 
     /// An explicit block merge always requires a second confirmation, including
     /// longer names; ordinary automatic sentence learning keeps its own policy.
-    pub fn record_merged_word(&self,word:&str,pinyin:&str){
-        if !self.config.auto_learn||word.is_empty()||word.chars().count()>32{return;}
-        let word=self.lexicon_form(word);let at=now_ms();
-        self.record_selection_at(&word,at);
-        if self.confirm_pending(&word,pinyin,at,true)||self.lexicon.user_word(&word).is_some(){
-            self.add_learned_word(&word,pinyin,f64::from(self.config.auto_learn_threshold.max(1)));
+    pub fn record_merged_word(&self, word: &str, pinyin: &str) {
+        if !self.config.auto_learn || word.is_empty() || word.chars().count() > 32 {
+            return;
+        }
+        let word = self.lexicon_form(word);
+        let at = now_ms();
+        self.record_selection_at(&word, at);
+        if self.confirm_pending(&word, pinyin, at, true) || self.lexicon.user_word(&word).is_some()
+        {
+            self.add_learned_word(
+                &word,
+                pinyin,
+                f64::from(self.config.auto_learn_threshold.max(1)),
+            );
         }
     }
 
     fn confirm_pending(&self, word: &str, code: &str, at_ms: u64, compose: bool) -> bool {
         let code = code.trim().to_ascii_lowercase();
-        let Ok(mut words) = self.pending_words.write() else { return false; };
+        let Ok(mut words) = self.pending_words.write() else {
+            return false;
+        };
         let before = words.get(word).cloned();
-        let confirmed = before.as_ref().is_some_and(|record| record.pinyin == code
-            && at_ms.saturating_sub(record.first_ms) <= learn::NEW_WORD_TTL_MS);
+        let confirmed = before.as_ref().is_some_and(|record| {
+            record.pinyin == code && at_ms.saturating_sub(record.first_ms) <= learn::NEW_WORD_TTL_MS
+        });
         if confirmed {
             words.remove(word);
             self.note_learning(learn::Change::Pending(word.into(), before, None));
         } else if compose {
             if words.len() >= learn::MAX_HISTORY_WORDS {
-                words.retain(|_, record| at_ms.saturating_sub(record.first_ms) <= learn::NEW_WORD_TTL_MS);
+                words.retain(|_, record| {
+                    at_ms.saturating_sub(record.first_ms) <= learn::NEW_WORD_TTL_MS
+                });
             }
             if words.len() < learn::MAX_HISTORY_WORDS {
-                let after = learn::NewWord { pinyin: code, first_ms: at_ms };
+                let after = learn::NewWord {
+                    pinyin: code,
+                    first_ms: at_ms,
+                };
                 words.insert(word.into(), after.clone());
                 self.note_learning(learn::Change::Pending(word.into(), before, Some(after)));
             }
@@ -437,10 +483,16 @@ impl Engine {
         let mut need_prune = false;
         if let Ok(mut pairs) = self.pairs.write() {
             let mut bump = |prev, next| {
-                if let Some(change) = pairs.bump(prev, next, at_ms) { self.note_learning(change); }
+                if let Some(change) = pairs.bump(prev, next, at_ms) {
+                    self.note_learning(change);
+                }
             };
-            if let Some(prev) = &start { bump(prev, &words[0]); }
-            for pair in words.windows(2) { bump(&pair[0], &pair[1]); }
+            if let Some(prev) = &start {
+                bump(prev, &words[0]);
+            }
+            for pair in words.windows(2) {
+                bump(&pair[0], &pair[1]);
+            }
             need_prune = pairs.len() > crate::learn::MAX_USER_PAIRS;
         }
         if !need_prune {
@@ -455,7 +507,9 @@ impl Engine {
                 crate::learn::prune_learning(&mut history, &mut pairs);
             }
         }
-        if let Some(tail) = words.last() { self.record_last_word(tail); }
+        if let Some(tail) = words.last() {
+            self.record_last_word(tail);
+        }
     }
 
     /// 光标前的最后一个词：上一次选的词，而且光标前的文本正好以它结尾
@@ -474,7 +528,8 @@ impl Engine {
         // 记的是词库里的写法，光标前是上屏的（开着繁体就是转换过的）字
         let shown = self.shown_text(&last);
         let matches = context.trim_end().ends_with(&shown)
-            || crate::autospace::without_boundary_spaces(context.trim_end()).ends_with(&crate::autospace::without_boundary_spaces(&shown));
+            || crate::autospace::without_boundary_spaces(context.trim_end())
+                .ends_with(&crate::autospace::without_boundary_spaces(&shown));
         matches.then_some(last)
     }
 
@@ -483,7 +538,12 @@ impl Engine {
     /// 不是上一次 input() 的候选就原样返回。
     pub fn lexicon_form(&self, shown: &str) -> String {
         if self.config.traditional {
-            if let Some(words) = self.last_words.read().ok().and_then(|m| m.get(shown).cloned()) {
+            if let Some(words) = self
+                .last_words
+                .read()
+                .ok()
+                .and_then(|m| m.get(shown).cloned())
+            {
                 if !words.is_empty() {
                     return words.concat();
                 }
@@ -515,19 +575,29 @@ impl Engine {
             .pairs
             .read()
             .map_err(|_| anyhow::anyhow!("pairs lock poisoned"))?;
-        let pending = self.pending_words.read().map_err(|_| anyhow::anyhow!("pending words lock poisoned"))?;
-        learn::write_atomic(path.as_ref(), &(learn::history_text(&history, &pairs, &pending)+&learn::boundary_text(&self.sentence_boundaries())))?;
+        let pending = self
+            .pending_words
+            .read()
+            .map_err(|_| anyhow::anyhow!("pending words lock poisoned"))?;
+        learn::write_atomic(
+            path.as_ref(),
+            &(learn::history_text(&history, &pairs, &pending)
+                + &learn::boundary_text(&self.sentence_boundaries())),
+        )?;
         Ok(())
     }
 
     /// 读回 [`Engine::save_history`] 存的输入习惯，返回条数。
     pub fn load_history<P: AsRef<std::path::Path>>(&self, path: P) -> Result<usize> {
         // Validate the added section before mutating any learning state.
-        let text=std::fs::read_to_string(path.as_ref())?;
-        let mut boundaries=sentence::Boundaries::new();
-        for line in text.lines().filter_map(|s|s.strip_prefix("b\t")) {
-            boundaries=serde_json::from_str(line)?;
-            anyhow::ensure!(sentence::valid_boundaries(&boundaries),"切分记录格式不正确");
+        let text = std::fs::read_to_string(path.as_ref())?;
+        let mut boundaries = sentence::Boundaries::new();
+        for line in text.lines().filter_map(|s| s.strip_prefix("b\t")) {
+            boundaries = serde_json::from_str(line)?;
+            anyhow::ensure!(
+                sentence::valid_boundaries(&boundaries),
+                "切分记录格式不正确"
+            );
         }
         let mut history = self
             .history
@@ -537,13 +607,21 @@ impl Engine {
             .pairs
             .write()
             .map_err(|_| anyhow::anyhow!("pairs lock poisoned"))?;
-        let mut pending = self.pending_words.write().map_err(|_| anyhow::anyhow!("pending words lock poisoned"))?;
-        let n=learn::load_history(path, &mut history, &mut pairs, &mut pending)?;
-        let count=boundaries.len();*self.boundaries.write().unwrap()=boundaries;Ok(n+count)
+        let mut pending = self
+            .pending_words
+            .write()
+            .map_err(|_| anyhow::anyhow!("pending words lock poisoned"))?;
+        let n = learn::load_history(path, &mut history, &mut pairs, &mut pending)?;
+        let count = boundaries.len();
+        *self.boundaries.write().unwrap() = boundaries;
+        Ok(n + count)
     }
 
     fn history_heat(&self, word: &str, at_ms: u64) -> f64 {
-        self.history.read().ok().and_then(|h| h.get(word).copied())
+        self.history
+            .read()
+            .ok()
+            .and_then(|h| h.get(word).copied())
             .map_or(0.0, |e| learn::decayed(e, at_ms))
     }
 
@@ -768,9 +846,11 @@ impl Engine {
         if word.is_empty() || self.lexicon.is_custom(word) {
             return false;
         }
-        let mut boundaries=self.boundaries.write().unwrap();let before=boundaries.len();
-        boundaries.retain(|_,(parts,_)|!parts.iter().any(|(w,_)|w==word));
-        let mut forgot = self.lexicon.remove(word)||before!=boundaries.len();drop(boundaries);
+        let mut boundaries = self.boundaries.write().unwrap();
+        let before = boundaries.len();
+        boundaries.retain(|_, (parts, _)| !parts.iter().any(|(w, _)| w == word));
+        let mut forgot = self.lexicon.remove(word) || before != boundaries.len();
+        drop(boundaries);
         if let Ok(mut history) = self.history.write() {
             forgot |= history.remove(word).is_some();
         }
@@ -794,7 +874,9 @@ impl Engine {
     pub fn clear_learned(&self) {
         self.boundaries.write().unwrap().clear();
         self.lexicon.clear();
-        if let Ok(mut pending) = self.pending_words.write() { pending.clear(); }
+        if let Ok(mut pending) = self.pending_words.write() {
+            pending.clear();
+        }
         self.clear_learning_journal();
         if let Ok(mut history) = self.history.write() {
             history.clear();
@@ -862,7 +944,7 @@ impl Engine {
         };
         self.prepend_custom_codes(raw, at_ms, &mut result);
         self.add_long_completion(raw, &mut result);
-        self.add_english_prefix(raw,at_ms,&mut result);
+        self.add_english_prefix(raw, at_ms, &mut result);
         if let Ok(mut last) = self.last_words.write() {
             last.clear();
             for c in &result {
@@ -894,13 +976,33 @@ impl Engine {
         // 输入码没有音节路径，沿用已有热度衰减和词搭配给同码的个人词排序。
         let start = self.start_word();
         let preference = |word: &str| {
-            let hot = self.history.read().ok().and_then(|history| history.get(word).copied()).map(|entry| crate::learn::decayed(entry, at_ms)).unwrap_or(0.0);
-            let pair = start.as_ref().and_then(|previous| self.pairs.read().ok().map(|pairs| pairs.bonus(previous, word, at_ms))).unwrap_or(0.0);
+            let hot = self
+                .history
+                .read()
+                .ok()
+                .and_then(|history| history.get(word).copied())
+                .map(|entry| crate::learn::decayed(entry, at_ms))
+                .unwrap_or(0.0);
+            let pair = start
+                .as_ref()
+                .and_then(|previous| {
+                    self.pairs
+                        .read()
+                        .ok()
+                        .map(|pairs| pairs.bonus(previous, word, at_ms))
+                })
+                .unwrap_or(0.0);
             (1.0 + hot).ln() + pair
         };
-        learned.sort_by(|a, b| preference(&b.1).total_cmp(&preference(&a.1)).then_with(|| b.2.total_cmp(&a.2)));
+        learned.sort_by(|a, b| {
+            preference(&b.1)
+                .total_cmp(&preference(&a.1))
+                .then_with(|| b.2.total_cmp(&a.2))
+        });
         learned.retain(|(_, text, _)| !words.contains(text));
-        result.retain(|c| !words.contains(&c.text) && !learned.iter().any(|(_, text, _)| text == &c.text));
+        result.retain(|c| {
+            !words.contains(&c.text) && !learned.iter().any(|(_, text, _)| text == &c.text)
+        });
         let configured = words.into_iter().map(|text| Candidate {
             long_completion: false,
             pinyin: String::new(),
@@ -917,9 +1019,17 @@ impl Engine {
         });
         let learned = learned.into_iter().map(|(input, text, freq)| Candidate {
             long_completion: false,
-            pinyin: input.clone(), score: preference(&text), features: Feature::default(),
-            words: vec![CandidateWord { text: text.clone(), pinyin: input, freq, known: true }],
-            consumed: raw.len(), text,
+            pinyin: input.clone(),
+            score: preference(&text),
+            features: Feature::default(),
+            words: vec![CandidateWord {
+                text: text.clone(),
+                pinyin: input,
+                freq,
+                known: true,
+            }],
+            consumed: raw.len(),
+            text,
         });
         let front = configured.chain(learned);
         result.splice(0..0, front);
@@ -931,8 +1041,15 @@ impl Engine {
         let display = raw.trim();
         let leading = raw.len() - raw.trim_start().len();
         let scheme = self.config.shuangpin_scheme;
-        let variants = crate::shuangpin::decode_fuzzy(scheme, display,
-            if self.config.fuzzy { self.config.fuzzy_groups } else { 0 });
+        let variants = crate::shuangpin::decode_fuzzy(
+            scheme,
+            display,
+            if self.config.fuzzy {
+                self.config.fuzzy_groups
+            } else {
+                0
+            },
+        );
         let Some(first) = variants.first() else {
             // 翻不了（不是双拼）：只给原始串
             let mut result = Vec::new();
@@ -943,7 +1060,12 @@ impl Engine {
             return Ok(result);
         };
         // 双拼配齐的音节不是全拼前缀；只给未配齐的最后一键补全。
-        let completion = display.bytes().filter(|b| scheme.is_key(b.to_ascii_lowercase())).count() % 2 == 1;
+        let completion = display
+            .bytes()
+            .filter(|b| scheme.is_key(b.to_ascii_lowercase()))
+            .count()
+            % 2
+            == 1;
         let mut result = self.pinyin_candidates(&first.pinyin, Some(display), completion, at_ms)?;
         result.retain_mut(|c| {
             let used = if is_raw_candidate(c) {
@@ -970,7 +1092,11 @@ impl Engine {
         if !extra.is_empty() {
             result.extend(extra);
             result = dedupe_by_text(result);
-            result.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.text.cmp(&b.text)));
+            result.sort_by(|a, b| {
+                b.score
+                    .total_cmp(&a.score)
+                    .then_with(|| a.text.cmp(&b.text))
+            });
             self.promote_custom(&mut result);
             result.truncate(self.config.max_candidates.max(1));
         }
@@ -1042,43 +1168,99 @@ impl Engine {
 
     /// 模糊音扩大召回时仍给完整拼写的整词保留位置。只查 2–4 音节的索引，
     /// 不再跑束搜索；保留原首选，最多补回三个精确词，避免低频词首次输入就消失。
-    fn keep_literal_words(&self, raw: &str, consumed: usize, at_ms: u64, found: &mut Vec<Candidate>) -> Result<()> {
+    fn keep_literal_words(
+        &self,
+        raw: &str,
+        consumed: usize,
+        at_ms: u64,
+        found: &mut Vec<Candidate>,
+    ) -> Result<()> {
         let parsed = parse(raw)?;
-        let graph = SyllableGraph::build(&parsed, GraphOptions {
-            mode: GraphMode::Full, allow_erhua: false, typo: false, completion: false,
-        });
+        let graph = SyllableGraph::build(
+            &parsed,
+            GraphOptions {
+                mode: GraphMode::Full,
+                allow_erhua: false,
+                typo: false,
+                completion: false,
+            },
+        );
         let mut paths = Vec::new();
         exact_segmentations(&graph, 0, 4, &mut Vec::new(), &mut paths);
         let mut entries = Vec::new();
         for path in paths.iter().filter(|p| (2..=4).contains(&p.len())) {
             let query: Vec<_> = path.iter().map(|edge| edge.query()).collect();
             for entry in self.lexicon.lookup_common(&query) {
-                if entries.iter().any(|(e, _): &(crate::lexicon::LexEntry, String)| e.word == entry.word) { continue; }
-                entries.push((entry, query.iter().map(|q| q.display()).collect::<Vec<_>>().join(" ")));
+                if entries
+                    .iter()
+                    .any(|(e, _): &(crate::lexicon::LexEntry, String)| e.word == entry.word)
+                {
+                    continue;
+                }
+                entries.push((
+                    entry,
+                    query
+                        .iter()
+                        .map(|q| q.display())
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                ));
             }
         }
-        entries.sort_by(|(a, _), (b, _)| self.history_heat(&b.word, at_ms).total_cmp(&self.history_heat(&a.word, at_ms))
-            .then_with(|| b.freq.total_cmp(&a.freq)));
+        entries.sort_by(|(a, _), (b, _)| {
+            self.history_heat(&b.word, at_ms)
+                .total_cmp(&self.history_heat(&a.word, at_ms))
+                .then_with(|| b.freq.total_cmp(&a.freq))
+        });
         let mut slot = 1;
         for (entry, pinyin) in entries.into_iter().take(3) {
             let text = self.shown_text(&entry.word);
-            if let Some(at) = found.iter().position(|c| c.text == text && c.consumed == consumed && !c.long_completion) {
-                if at <= slot { slot = slot.max(at + 1); continue; }
+            if let Some(at) = found
+                .iter()
+                .position(|c| c.text == text && c.consumed == consumed && !c.long_completion)
+            {
+                if at <= slot {
+                    slot = slot.max(at + 1);
+                    continue;
+                }
                 let candidate = found.remove(at);
                 found.insert(slot.min(found.len()), candidate);
             } else {
-                found.insert(slot.min(found.len()), Candidate {
-                    text, pinyin: pinyin.clone(), consumed, score: 0.0, long_completion: false,
-                    features: Feature { coverage_score: 1.0, ..Default::default() },
-                    words: vec![CandidateWord { text: entry.word, pinyin, freq: entry.freq, known: true }],
-                });
+                found.insert(
+                    slot.min(found.len()),
+                    Candidate {
+                        text,
+                        pinyin: pinyin.clone(),
+                        consumed,
+                        score: 0.0,
+                        long_completion: false,
+                        features: Feature {
+                            coverage_score: 1.0,
+                            ..Default::default()
+                        },
+                        words: vec![CandidateWord {
+                            text: entry.word,
+                            pinyin,
+                            freq: entry.freq,
+                            known: true,
+                        }],
+                    },
+                );
             }
             slot += 1;
         }
         // 保持后续合并所需的单调分数；原样字母候选仍留在末尾可选。
-        for i in 1..found.len() { if found[i].score >= found[i-1].score { found[i].score = found[i-1].score - 1e-3; } }
+        for i in 1..found.len() {
+            if found[i].score >= found[i - 1].score {
+                found[i].score = found[i - 1].score - 1e-3;
+            }
+        }
         while found.len() > self.config.max_candidates.max(1) {
-            if let Some(i) = found.iter().rposition(|c| !is_raw_candidate(c)) { found.remove(i); } else { break; }
+            if let Some(i) = found.iter().rposition(|c| !is_raw_candidate(c)) {
+                found.remove(i);
+            } else {
+                break;
+            }
         }
         Ok(())
     }
@@ -1247,10 +1429,17 @@ impl Engine {
         // 首音节常用字不要被几百个替代切分的生僻词压到长尾之后。
         let single = |c: &Candidate| c.text.chars().count() == 1;
         let (chars, words): (Vec<_>, Vec<_>) = heads.into_iter().partition(single);
-        let (common, rare): (Vec<_>, Vec<_>) = chars.into_iter().partition(|c| c.words[0].freq >= 1.0);
-        let (other_chars, other_words): (Vec<_>, Vec<_>) = other_splits.into_iter().partition(single);
-        for mut candidate in whole.into_iter().chain(words).chain(common)
-            .chain(other_words).chain(rare).chain(other_chars)
+        let (common, rare): (Vec<_>, Vec<_>) =
+            chars.into_iter().partition(|c| c.words[0].freq >= 1.0);
+        let (other_chars, other_words): (Vec<_>, Vec<_>) =
+            other_splits.into_iter().partition(single);
+        for mut candidate in whole
+            .into_iter()
+            .chain(words)
+            .chain(common)
+            .chain(other_words)
+            .chain(rare)
+            .chain(other_chars)
         {
             if result.len() >= max {
                 break;
@@ -1423,13 +1612,34 @@ impl Engine {
     ///
     /// 模糊音视图里精确读音和模糊读音都有（模糊词扣 `fuzzy_penalty`），一次搜索就够了，
     /// 两种读音的词按各自的分数排在一起。
-    fn query_plain(&self, normalized: &str, completion: bool, at_ms: u64) -> Result<Vec<Candidate>> {
+    fn query_plain(
+        &self,
+        normalized: &str,
+        completion: bool,
+        at_ms: u64,
+    ) -> Result<Vec<Candidate>> {
         self.run_query(normalized, completion, at_ms, self.config.fuzzy)
     }
 
-    fn full_input_graph(&self, input: &crate::syllable::ParsedInput, typo: bool, completion: bool) -> SyllableGraph {
-        let mut graph = SyllableGraph::build_with_typos(input, GraphOptions { mode: GraphMode::Full, allow_erhua: true, typo, completion }, self.config.typo_kinds);
-        if self.config.fuzzy { graph.add_fuzzy_spellings(self.config.fuzzy_groups); }
+    fn full_input_graph(
+        &self,
+        input: &crate::syllable::ParsedInput,
+        typo: bool,
+        completion: bool,
+    ) -> SyllableGraph {
+        let mut graph = SyllableGraph::build_with_typos(
+            input,
+            GraphOptions {
+                mode: GraphMode::Full,
+                allow_erhua: true,
+                typo,
+                completion,
+            },
+            self.config.typo_kinds,
+        );
+        if self.config.fuzzy {
+            graph.add_fuzzy_spellings(self.config.fuzzy_groups);
+        }
         graph
     }
 
@@ -1437,14 +1647,24 @@ impl Engine {
     ///
     /// 末音节补全（zhongg -> 中国、zhonggu -> 中国）和纠错都做成了音节图里的边，
     /// 一次搜索就能同时给出精确、补全、纠错三类候选。
-    fn run_query(&self, normalized: &str, completion: bool, at_ms: u64, fuzzy: bool) -> Result<Vec<Candidate>> {
+    fn run_query(
+        &self,
+        normalized: &str,
+        completion: bool,
+        at_ms: u64,
+        fuzzy: bool,
+    ) -> Result<Vec<Candidate>> {
         let parsed = parse(normalized)?;
         if parsed.is_empty() {
             return Ok(Vec::new());
         }
         let typo = self.config.typo_correction && !self.config.shuangpin;
         let full = self.full_input_graph(&parsed, typo, completion);
-        let mut full_found = if full.has_complete_path() { self.query_once(&full, at_ms, fuzzy)? } else { Vec::new() };
+        let mut full_found = if full.has_complete_path() {
+            self.query_once(&full, at_ms, fuzzy)?
+        } else {
+            Vec::new()
+        };
         // 不靠补全、纠错就能完整解析：直接用全拼。
         // 但能切成音节不等于词库里有词：hm、hng 这类叹词音节词库不收，以前只给出原样的 hm，
         // 打 hm（后面、好吗）一个中文候选都没有。一个认识的词都凑不出来就接着试简拼。
@@ -1453,8 +1673,12 @@ impl Engine {
             if !fuzzy && self.config.fuzzy_fallback && !self.config.shuangpin {
                 self.fuzzy_fallback(&full, &mut full_found);
             }
-            let any_known = full_found.iter().any(|c| c.features.typo_count == 0.0 && c.features.prefix_completion == 0.0
-                && !c.words.is_empty() && c.words.iter().all(|w| w.known));
+            let any_known = full_found.iter().any(|c| {
+                c.features.typo_count == 0.0
+                    && c.features.prefix_completion == 0.0
+                    && !c.words.is_empty()
+                    && c.words.iter().all(|w| w.known)
+            });
             if !self.config.jianpin_fallback || any_known {
                 return Ok(full_found);
             }
@@ -1464,8 +1688,12 @@ impl Engine {
         if self.config.jianpin_fallback {
             // 图上能用“未知儿化 + 补全”走通，不等于词库能解释输入。仅当完整候选确有
             // 不靠纠错的已知词时省掉混简拼查询，否则 shurf 会永远失去 shu+r+f 这条路。
-            let completion_explains = full.has_path_without_erhua_or_typo() && full_found.iter().any(|c| c.features.typo_count == 0.0
-                && !c.words.is_empty() && c.words.iter().all(|w| w.known));
+            let completion_explains = full.has_path_without_erhua_or_typo()
+                && full_found.iter().any(|c| {
+                    c.features.typo_count == 0.0
+                        && !c.words.is_empty()
+                        && c.words.iter().all(|w| w.known)
+                });
             if let Some(jianpin) = abbrev_graph(&parsed, completion_explains) {
                 let mut found = self.query_once(&jianpin, at_ms, fuzzy)?;
                 if jianpin.mode() == GraphMode::Mixed {
@@ -1487,17 +1715,44 @@ impl Engine {
     }
 
     /// 当补全耗尽束搜索名额时，单独补回打全的常用单字（WowType 59b3c91）。
-    fn keep_exact_syllable(&self, graph: &SyllableGraph, found: &mut Vec<Candidate>, at_ms: u64, fuzzy: bool) -> Result<()> {
-        let one = graph.edges_from(0).iter().any(|edge| edge.end == graph.len() && !edge.typo
-            && edge.completion == 0 && matches!(edge.kind, EdgeKind::Full { erhua: false, .. }));
-        let exact = |c: &Candidate| c.features.typo_count == 0.0 && c.features.prefix_completion == 0.0
-            && c.words.len() == 1 && c.words[0].known && !c.pinyin.contains(' ');
-        if !one || found.iter().any(exact) { return Ok(()); }
-        let graph = SyllableGraph::build(graph.input(), GraphOptions {
-            mode: GraphMode::Full, allow_erhua: false, typo: false, completion: false,
+    fn keep_exact_syllable(
+        &self,
+        graph: &SyllableGraph,
+        found: &mut Vec<Candidate>,
+        at_ms: u64,
+        fuzzy: bool,
+    ) -> Result<()> {
+        let one = graph.edges_from(0).iter().any(|edge| {
+            edge.end == graph.len()
+                && !edge.typo
+                && edge.completion == 0
+                && matches!(edge.kind, EdgeKind::Full { erhua: false, .. })
         });
-        let mut extra: Vec<_> = self.query_once(&graph, at_ms, fuzzy)?.into_iter()
-            .filter(|c| exact(c) && c.words[0].freq >= 1.0 && !found.iter().any(|item| item.text == c.text))
+        let exact = |c: &Candidate| {
+            c.features.typo_count == 0.0
+                && c.features.prefix_completion == 0.0
+                && c.words.len() == 1
+                && c.words[0].known
+                && !c.pinyin.contains(' ')
+        };
+        if !one || found.iter().any(exact) {
+            return Ok(());
+        }
+        let graph = SyllableGraph::build(
+            graph.input(),
+            GraphOptions {
+                mode: GraphMode::Full,
+                allow_erhua: false,
+                typo: false,
+                completion: false,
+            },
+        );
+        let mut extra: Vec<_> = self
+            .query_once(&graph, at_ms, fuzzy)?
+            .into_iter()
+            .filter(|c| {
+                exact(c) && c.words[0].freq >= 1.0 && !found.iter().any(|item| item.text == c.text)
+            })
             .collect();
         if let Some(top) = found.first().map(|c| c.score) {
             let count = extra.len();
@@ -1543,16 +1798,27 @@ impl Engine {
         for segmentation in segmentations.iter().filter(|s| (2..=4).contains(&s.len())) {
             let query: Vec<SyllableQuery> = segmentation.iter().map(|e| e.query()).collect();
             let exact = self.lexicon.lookup_common(&query);
-            let pinyin = query.iter().map(|q| q.display()).collect::<Vec<_>>().join(" ");
+            let pinyin = query
+                .iter()
+                .map(|q| q.display())
+                .collect::<Vec<_>>()
+                .join(" ");
             for entry in view.lookup_common(&query) {
                 // 精确读音也有这个词、而且更常用：不是靠模糊音才有的
-                if exact.iter().any(|e| e.word == entry.word && e.freq >= entry.freq) {
+                if exact
+                    .iter()
+                    .any(|e| e.word == entry.word && e.freq >= entry.freq)
+                {
                     continue;
                 }
                 if found.iter().chain(&extra).any(|c| c.text == entry.word) {
                     continue;
                 }
-                let lm = if mid_sentence { 0.0 } else { self.lm.score(None, &entry.word) };
+                let lm = if mid_sentence {
+                    0.0
+                } else {
+                    self.lm.score(None, &entry.word)
+                };
                 let feature = Feature {
                     coverage_score: 1.0,
                     lm_score_with_previous_txt: lm as f32,
@@ -1586,7 +1852,11 @@ impl Engine {
         extra.sort_by(|a, b| b.score.total_cmp(&a.score));
         extra.truncate(2);
         found.extend(extra);
-        found.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.text.cmp(&b.text)));
+        found.sort_by(|a, b| {
+            b.score
+                .total_cmp(&a.score)
+                .then_with(|| a.text.cmp(&b.text))
+        });
         found.truncate(self.config.max_candidates.max(1));
     }
 
@@ -1673,8 +1943,15 @@ impl Engine {
         order.sort_by(|&a, &b| paths[b].score.total_cmp(&paths[a].score));
         let preceding = self.context();
         // 无上文的短词保留词频排序，避免逐键跑神经模型。
-        if preceding.trim().is_empty() && paths.first().is_none_or(|path|
-            path.words.iter().map(|word| word.syllable_count).sum::<usize>() < 5) {
+        if preceding.trim().is_empty()
+            && paths.first().is_none_or(|path| {
+                path.words
+                    .iter()
+                    .map(|word| word.syllable_count)
+                    .sum::<usize>()
+                    < 5
+            })
+        {
             return out;
         }
         let context = model.context_tokens(&preceding);
@@ -1911,7 +2188,10 @@ fn lift_split_word(exact: &mut Vec<Candidate>) {
     };
     let mut word = exact.remove(at);
     // 分数夹在前后两个之间，后面再按分数排也不会变
-    let (above, below) = (exact[SPLIT_WORD_SLOT - 1].score, exact[SPLIT_WORD_SLOT].score);
+    let (above, below) = (
+        exact[SPLIT_WORD_SLOT - 1].score,
+        exact[SPLIT_WORD_SLOT].score,
+    );
     word.score = (above + below) / 2.0;
     exact.insert(SPLIT_WORD_SLOT, word);
 }
@@ -1992,13 +2272,18 @@ fn promote_split_reading(candidates: &mut Vec<Candidate>, input_len: usize) {
         return;
     }
     let letters = |pinyin: &str| pinyin.split_whitespace().collect::<String>();
-    let (top_pinyin, top_letters, top_freq) = (top.pinyin.clone(), letters(&top.pinyin), top.words[0].freq);
+    let (top_pinyin, top_letters, top_freq) =
+        (top.pinyin.clone(), letters(&top.pinyin), top.words[0].freq);
     // 字母一样、音节边界不一样，就是另一种切法
-    let split = |c: &Candidate| exact_word(c) && c.pinyin != top_pinyin && letters(&c.pinyin) == top_letters;
+    let split = |c: &Candidate| {
+        exact_word(c) && c.pinyin != top_pinyin && letters(&c.pinyin) == top_letters
+    };
     let Some(at) = candidates.iter().position(split) else {
         return;
     };
-    if at < SPLIT_READING_FIRST_PAGE || candidates[at].words[0].freq * SPLIT_READING_RATIO < top_freq {
+    if at < SPLIT_READING_FIRST_PAGE
+        || candidates[at].words[0].freq * SPLIT_READING_RATIO < top_freq
+    {
         return;
     }
     let word = candidates.remove(at);
@@ -2161,25 +2446,39 @@ fn promote_picked(candidates: &mut Vec<Candidate>) {
             && c.features.full_jianpin == 0.0
     };
     let strongest = |single: bool| {
-        let mut indices: Vec<_> = candidates.iter().enumerate()
+        let mut indices: Vec<_> = candidates
+            .iter()
+            .enumerate()
             .filter(|(_, c)| picked(c) && (c.text.chars().count() == 1) == single)
-            .map(|(index, _)| index).collect();
-        indices.sort_by(|&a, &b| candidates[b].features.history_use_count
-            .total_cmp(&candidates[a].features.history_use_count).then(a.cmp(&b)));
+            .map(|(index, _)| index)
+            .collect();
+        indices.sort_by(|&a, &b| {
+            candidates[b]
+                .features
+                .history_use_count
+                .total_cmp(&candidates[a].features.history_use_count)
+                .then(a.cmp(&b))
+        });
         indices
     };
-    let word = strongest(false).first().copied().filter(|&i| i != 0
-        && candidates[i].features.history_use_count > candidates[0].features.history_use_count);
+    let word = strongest(false).first().copied().filter(|&i| {
+        i != 0
+            && candidates[i].features.history_use_count > candidates[0].features.history_use_count
+    });
     let mut singles = strongest(true);
     // 候选首位不被单字提权替换；其后最多提升三个足够热的单字。
     singles.retain(|&index| index != 0 || word.is_some());
     singles.truncate(3);
-    if word.is_none() && singles.is_empty() { return; }
+    if word.is_none() && singles.is_empty() {
+        return;
+    }
     let mut order = Vec::with_capacity(candidates.len());
     order.push(word.unwrap_or(0));
     order.extend(singles);
     let mut taken = vec![false; candidates.len()];
-    for &index in &order { taken[index] = true; }
+    for &index in &order {
+        taken[index] = true;
+    }
     order.extend((0..candidates.len()).filter(|&index| !taken[index]));
     let mut old: Vec<_> = std::mem::take(candidates).into_iter().map(Some).collect();
     candidates.extend(order.into_iter().map(|index| old[index].take().unwrap()));
@@ -2447,9 +2746,7 @@ fn compose_candidates(result: &mut Vec<Candidate>, prefix: Vec<Candidate>, max: 
     // JUNK_SENTENCE_MARGIN 以上的整句（泥 | 好、点 | 脑、钟 | 国）是硬凑的，不占位置；用户选过的照留
     let top_word = whole
         .first()
-        .filter(|c| {
-            c.words.len() == 1 && c.words[0].known && c.features.prefix_completion == 0.0
-        })
+        .filter(|c| c.words.len() == 1 && c.words[0].known && c.features.prefix_completion == 0.0)
         .map(|c| c.score);
     for c in whole {
         if is_sentence(&c) {
@@ -2488,7 +2785,9 @@ fn compose_candidates(result: &mut Vec<Candidate>, prefix: Vec<Candidate>, max: 
     let weak_top = kept.first().is_some_and(|c| {
         is_sentence(c)
             && c.features.history_use_count == 0.0
-            && c.words.iter().all(|w| w.pinyin.split_whitespace().count() == 1)
+            && c.words
+                .iter()
+                .all(|w| w.pinyin.split_whitespace().count() == 1)
     });
     if weak_top {
         let top = kept[0].score;
@@ -2889,7 +3188,10 @@ mod tests {
             texts[1..SPLIT_READING_FIRST_PAGE].contains(&"预案"),
             "拆开读法的常见词留在第一页：{texts:?}"
         );
-        assert!(list.windows(2).all(|w| w[0].score > w[1].score), "分数单调递减");
+        assert!(
+            list.windows(2).all(|w| w[0].score > w[1].score),
+            "分数单调递减"
+        );
         // 分数差超过 lift_split_word 的 3.5 但词频仍在 1/100 内时，由 promote_split_reading 提到第 2 位
         let e2 = engine(concat!(
             "yu an\t预案\t30000\n",
@@ -2900,7 +3202,10 @@ mod tests {
         let list2 = e2.input("yuan");
         let texts2: Vec<&str> = list2.iter().map(|c| c.text.as_str()).collect();
         assert_eq!(texts2[1], "预案", "{texts2:?}");
-        assert!(list2.windows(2).all(|w| w[0].score > w[1].score), "分数单调递减");
+        assert!(
+            list2.windows(2).all(|w| w[0].score > w[1].score),
+            "分数单调递减"
+        );
         // 打了隔音符就只有拆开的读法
         assert_eq!(e.input("yu'an")[0].text, "预案");
     }
@@ -2911,7 +3216,10 @@ mod tests {
         let e = split_reading_engine();
         let texts: Vec<String> = e.input("jiang").into_iter().map(|c| c.text).collect();
         let at = texts.iter().position(|t| t == "激昂");
-        assert!(at.map_or(true, |i| i >= SPLIT_READING_FIRST_PAGE), "{texts:?}");
+        assert!(
+            at.map_or(true, |i| i >= SPLIT_READING_FIRST_PAGE),
+            "{texts:?}"
+        );
     }
 
     #[test]
@@ -2967,7 +3275,10 @@ mod tests {
         let mut tsv = String::from("lia\t俩\t99\nlia\t倆\t0.5\nli a\t理啊\t50\n");
         for (i, character) in ('\u{4e00}'..).take(60).enumerate() {
             let syllable = ["lian", "liang", "liao"][i % 3];
-            tsv.push_str(&format!("{syllable}\t{character}\t{}\n", 100_000 - i * 1000));
+            tsv.push_str(&format!(
+                "{syllable}\t{character}\t{}\n",
+                100_000 - i * 1000
+            ));
         }
         let lexicon = Arc::new(MemoryLexicon::from_tsv_str(&tsv).unwrap());
         let mut engine = Engine::new(lexicon, Arc::new(BigramLm::default()));
@@ -3242,7 +3553,10 @@ mod tests {
         assert!(has(&e, "wangse", "黄色"));
         e.set_fuzzy_groups(fuzzy::UN_IONG);
         assert!(has(&e, "jiong", "军"));
-        assert!(has(&e, "yong", "云"), "yun 是 ün，和 yong 是 un = iong，不是 un = ong");
+        assert!(
+            has(&e, "yong", "云"),
+            "yun 是 ün，和 yong 是 un = iong，不是 un = ong"
+        );
         e.set_fuzzy_groups(fuzzy::ENG_ONG);
         assert!(has(&e, "zheng", "中"));
         e.set_fuzzy_groups(fuzzy::AN_AI);
@@ -3527,7 +3841,12 @@ mod tests {
         e.load_english_str("ok\nbug\n");
         let texts =
             |input: &str| -> Vec<String> { e.input(input).into_iter().map(|c| c.text).collect() };
-        assert_eq!(texts("ok").first().map(String::as_str), Some("ok"), "{:?}", texts("ok"));
+        assert_eq!(
+            texts("ok").first().map(String::as_str),
+            Some("ok"),
+            "{:?}",
+            texts("ok")
+        );
         let bug = texts("bug");
         assert_eq!(bug.first().map(String::as_str), Some("不过"), "{bug:?}");
         assert_eq!(bug.get(1).map(String::as_str), Some("bug"), "{bug:?}");
@@ -3610,7 +3929,10 @@ mod tests {
             let texts = |r: &[(String, f64)]| r.iter().map(|c| c.0.clone()).collect::<Vec<_>>();
             assert_eq!(texts(&got), texts(&reference), "lm_weight {lm_weight}");
             for (a, b) in got.iter().zip(&reference) {
-                assert!((a.1 - b.1).abs() < 1e-9, "lm_weight {lm_weight}: {a:?} vs {b:?}");
+                assert!(
+                    (a.1 - b.1).abs() < 1e-9,
+                    "lm_weight {lm_weight}: {a:?} vs {b:?}"
+                );
             }
         }
     }
@@ -3620,9 +3942,8 @@ mod tests {
         // 去掉的只是基础模型的句首分：用户在「快」后面选过「乐」，这个搭配加成要留着。
         // 两个引擎都选过一次「乐」（热度一样），只有 a 是在「快」后面选的。
         let make = || {
-            let lexicon: Arc<dyn Lexicon> = Arc::new(
-                MemoryLexicon::from_tsv_str("le\t了\t100000\nle\t乐\t10000\n").unwrap(),
-            );
+            let lexicon: Arc<dyn Lexicon> =
+                Arc::new(MemoryLexicon::from_tsv_str("le\t了\t100000\nle\t乐\t10000\n").unwrap());
             Engine::new(lexicon, Arc::new(SentenceStartBoost))
         };
         // 搭配只认「上一次选的词，且光标前正好以它结尾」，所以先选前一个字
@@ -3639,7 +3960,10 @@ mod tests {
             e.set_context("");
             e.record_selection("快");
             e.set_context("快");
-            e.input("le").into_iter().find(|c| c.text == "乐").map(|c| c.score)
+            e.input("le")
+                .into_iter()
+                .find(|c| c.text == "乐")
+                .map(|c| c.score)
         };
         let (sa, sb) = (score(&a).unwrap(), score(&b).unwrap());
         assert!(sa > sb, "学过的搭配没起作用：{sa} vs {sb}");
@@ -3665,15 +3989,18 @@ mod tests {
 
     #[test]
     fn context_merged_into_one_word_counts_as_common_pair() {
-        let lexicon: Arc<dyn Lexicon> = Arc::new(
-            MemoryLexicon::from_tsv_str("yao\t要\t1000000\nyao\t腰\t30000\n").unwrap(),
-        );
+        let lexicon: Arc<dyn Lexicon> =
+            Arc::new(MemoryLexicon::from_tsv_str("yao\t要\t1000000\nyao\t腰\t30000\n").unwrap());
         let e = Engine::new(lexicon, Arc::new(MergedPairLm));
         // 上文只有「我」和「今天我」（整段不是模型里的词）都要一样：取末尾模型认识的后缀
         for context in ["我", "今天我"] {
             e.set_context(context);
             let texts: Vec<String> = e.input("yao").into_iter().map(|c| c.text).collect();
-            assert_eq!(texts.first().map(String::as_str), Some("要"), "{context}: {texts:?}");
+            assert_eq!(
+                texts.first().map(String::as_str),
+                Some("要"),
+                "{context}: {texts:?}"
+            );
         }
     }
 
@@ -4099,7 +4426,11 @@ mod tests {
         ));
         let has = |raw: &str, want: &str| {
             let c = e.input(raw);
-            assert!(c.iter().any(|c| c.text == want), "{raw} 应有 {want}：{:?}", c.iter().map(|c| &c.text).collect::<Vec<_>>());
+            assert!(
+                c.iter().any(|c| c.text == want),
+                "{raw} 应有 {want}：{:?}",
+                c.iter().map(|c| &c.text).collect::<Vec<_>>()
+            );
         };
         has("r", "人");
         has("r", "日");

@@ -19,8 +19,8 @@ use wowtype_core::session::{self, CandidateKind, KeyAction, Session};
 use wowtype_core::symbols;
 use wowtype_core::Engine;
 
-use crate::raw::{self, Raw};
 use crate::lookup_mode::{Action as LookupAction, Kind as LookupKind, LookupMode};
+use crate::raw::{self, Raw};
 use crate::tools::{self, Outcome, Page, Sources, Tool};
 
 /// 光标前记多少个字当上文。
@@ -170,10 +170,17 @@ pub fn session_config(config: &Config) -> session::Config {
 
 impl ClientState {
     pub fn open_lookup(&mut self, kind: LookupKind, env: &Env) -> Out {
-        if self.session.learning_disabled() { return self.current(false, env); }
-        let same = self.lookup.as_ref().is_some_and(|lookup| lookup.kind == kind);
+        if self.session.learning_disabled() {
+            return self.current(false, env);
+        }
+        let same = self
+            .lookup
+            .as_ref()
+            .is_some_and(|lookup| lookup.kind == kind);
         self.clear();
-        if same { return self.current(true, env); }
+        if same {
+            return self.current(true, env);
+        }
         if env.engine.and_then(Engine::input_tools).is_none() {
             let mut out = self.current(true, env);
             out.frame.hint = Some("查询词典未就绪；请检查安装数据".into());
@@ -186,16 +193,33 @@ impl ClientState {
     fn lookup_action(&mut self, action: LookupAction, env: &Env) -> Out {
         match action {
             LookupAction::Stay => self.current(true, env),
-            LookupAction::Close => { self.lookup = None; self.current(true, env) }
+            LookupAction::Close => {
+                self.lookup = None;
+                self.current(true, env)
+            }
             LookupAction::Pass => self.current(false, env),
             LookupAction::Commit { text, learn } => {
-                let english = self.lookup.as_ref().is_some_and(|lookup| lookup.kind == LookupKind::English);
-                if learn { self.session.learn_external_word(text.trim(), &wowtype_core::input_tools::letters(text.trim())); }
-                self.lookup = if english { Some(LookupMode::new(LookupKind::English)) } else { None };
+                let english = self
+                    .lookup
+                    .as_ref()
+                    .is_some_and(|lookup| lookup.kind == LookupKind::English);
+                if learn {
+                    self.session.learn_external_word(
+                        text.trim(),
+                        &wowtype_core::input_tools::letters(text.trim()),
+                    );
+                }
+                self.lookup = if english {
+                    Some(LookupMode::new(LookupKind::English))
+                } else {
+                    None
+                };
                 // 英文的补空格是独立开关；查询注解从来不进入提交路径。
                 self.remember(&text);
                 let mut out = self.current(true, env);
-                if !text.is_empty() { out.frame.commit = Some(text); }
+                if !text.is_empty() {
+                    out.frame.commit = Some(text);
+                }
                 out.frame.undo_learning = learn && self.session.has_commit_learning();
                 out
             }
@@ -229,7 +253,10 @@ impl ClientState {
 
     /// 在组字、开着面板或邮箱补全。
     pub fn busy(&self) -> bool {
-        self.session.composing() || self.tool.is_some() || self.raw.is_some() || self.lookup.is_some()
+        self.session.composing()
+            || self.tool.is_some()
+            || self.raw.is_some()
+            || self.lookup.is_some()
     }
 
     pub fn vim_escape_idle(&self) -> bool {
@@ -243,8 +270,14 @@ impl ClientState {
     /// 光标前的字（DLL 读到的）。
     pub fn set_before(&mut self, before: &str) {
         let n = before.chars().count();
-        let context: String = before.chars().skip(n.saturating_sub(CONTEXT_CHARS)).collect();
-        if !context.is_empty() && context != self.context && self.committed_from.as_ref() == Some(&context) {
+        let context: String = before
+            .chars()
+            .skip(n.saturating_sub(CONTEXT_CHARS))
+            .collect();
+        if !context.is_empty()
+            && context != self.context
+            && self.committed_from.as_ref() == Some(&context)
+        {
             return;
         }
         self.committed_from = None;
@@ -313,8 +346,13 @@ impl ClientState {
         };
         frame.candidates = items.iter().map(|item| shown_text(&item.text)).collect();
         // 数字键不选词时不标序号；空格或方向键选词时显示当前高亮
-        frame.labels = if env.config.predict_digits { Vec::new() } else { vec![String::new(); items.len()] };
-        frame.cursor = (env.config.predict_space || env.config.predict_arrows).then_some(self.predict_cursor);
+        frame.labels = if env.config.predict_digits {
+            Vec::new()
+        } else {
+            vec![String::new(); items.len()]
+        };
+        frame.cursor =
+            (env.config.predict_space || env.config.predict_arrows).then_some(self.predict_cursor);
         frame.predict_double_space = env.config.predict_space && env.config.predict_double_space;
         frame.has_prev = false;
         frame.has_next = false;
@@ -324,7 +362,11 @@ impl ClientState {
 
     /// 选了第 index 个联想词：记搭配、上屏，接着联想下一个词。
     fn choose_prediction(&mut self, index: usize, env: &Env) -> Out {
-        let Some(item) = self.predict.take().and_then(|items| items.get(index).cloned()) else {
+        let Some(item) = self
+            .predict
+            .take()
+            .and_then(|items| items.get(index).cloned())
+        else {
             return self.current(true, env);
         };
         // 先记搭配（上文还是上屏之前的），再上屏
@@ -341,9 +383,13 @@ impl ClientState {
     /// 联想词显示着的时候来了一个键。Some：这个键处理完了；None：已收起联想，照常处理这个键。
     fn predict_key(&mut self, key: &Key, env: &Env) -> Option<Out> {
         let count = self.live_prediction(env)?.len();
-        let plain = key.modifiers & (modifier::CTRL | modifier::ALT | modifier::SUPER | modifier::SHIFT) == 0;
+        let plain = key.modifiers
+            & (modifier::CTRL | modifier::ALT | modifier::SUPER | modifier::SHIFT)
+            == 0;
         if plain && env.config.predict_space && env.config.predict_double_space {
-            if key.keysym == 0x20 { return Some(self.current(false, env)); }
+            if key.keysym == 0x20 {
+                return Some(self.current(false, env));
+            }
             if key.keysym == keysym::SPACE_DOUBLE {
                 let mut out = self.choose_prediction(self.predict_cursor, env);
                 out.frame.replace_space = out.frame.commit.is_some();
@@ -354,7 +400,8 @@ impl ClientState {
             self.predict = None;
             return Some(self.current(true, env));
         }
-        if plain && env.config.predict_arrows && matches!(key.keysym, keysym::LEFT | keysym::RIGHT) {
+        if plain && env.config.predict_arrows && matches!(key.keysym, keysym::LEFT | keysym::RIGHT)
+        {
             // 和组字候选一致：走到两头就停住，不绕回另一端，也不让光标挪进应用的正文。
             self.predict_cursor = if key.keysym == keysym::LEFT {
                 self.predict_cursor.saturating_sub(1)
@@ -363,14 +410,19 @@ impl ClientState {
             };
             return Some(self.current(true, env));
         }
-        let digit = printable(key).filter(char::is_ascii_digit).or_else(|| keypad_digit(key));
+        let digit = printable(key)
+            .filter(char::is_ascii_digit)
+            .or_else(|| keypad_digit(key));
         let index = if !plain {
             None
         } else if key.keysym == 0x20 && env.config.predict_space {
             Some(self.predict_cursor)
         } else if env.config.predict_digits {
             // 和候选的标号一样：1–9，0 是第 10 个
-            digit.and_then(|c| c.to_digit(10)).map(|d| (d as usize + 9) % 10).filter(|i| *i < count)
+            digit
+                .and_then(|c| c.to_digit(10))
+                .map(|d| (d as usize + 9) % 10)
+                .filter(|i| *i < count)
         } else {
             None
         };
@@ -399,13 +451,38 @@ impl ClientState {
             forgot: core.forgot,
             ..Out::default()
         };
-        out.frame.sentence=self.session.sentence_view().map(|v|freetype_protocol::SentenceView {
-            text:v.text.clone(),raw:v.raw.clone(),cursor:v.cursor,
-            blocks:v.blocks.iter().map(|b|freetype_protocol::SentenceBlock{from:b.from,to:b.to,text:b.text.clone(),confirmed:b.confirmed,corrected:b.corrected,focused:b.focused,uncertain:b.uncertain}).collect(),
-            alternatives:v.alternatives.iter().skip(v.page*9).take(9).map(|a|a.text.clone()).collect(),
-            page:v.page,has_prev:v.page>0,has_next:(v.page+1)*9<v.alternatives.len(),
-        });
-        out.frame.enhancement_pending=self.session.enhancement_pending();
+        out.frame.sentence =
+            self.session
+                .sentence_view()
+                .map(|v| freetype_protocol::SentenceView {
+                    text: v.text.clone(),
+                    raw: v.raw.clone(),
+                    cursor: v.cursor,
+                    blocks: v
+                        .blocks
+                        .iter()
+                        .map(|b| freetype_protocol::SentenceBlock {
+                            from: b.from,
+                            to: b.to,
+                            text: b.text.clone(),
+                            confirmed: b.confirmed,
+                            corrected: b.corrected,
+                            focused: b.focused,
+                            uncertain: b.uncertain,
+                        })
+                        .collect(),
+                    alternatives: v
+                        .alternatives
+                        .iter()
+                        .skip(v.page * 9)
+                        .take(9)
+                        .map(|a| a.text.clone())
+                        .collect(),
+                    page: v.page,
+                    has_prev: v.page > 0,
+                    has_next: (v.page + 1) * 9 < v.alternatives.len(),
+                });
+        out.frame.enhancement_pending = self.session.enhancement_pending();
         if let Some(text) = &core.commit {
             if let Some(choice) = self.session.last_choice() {
                 if choice.kind == CandidateKind::Emoji && !choice.emoji.is_empty() {
@@ -424,24 +501,40 @@ impl ClientState {
             Vec::new()
         };
         if !candidates.is_empty() {
-            let shown = &self.session.candidates()[core.cand_start..core.cand_start + core.cand_count];
-            out.frame.pin_slots = shown.iter().map(|c| c.pin_key.as_ref().map(|_| c.pin_position)).collect();
+            let shown =
+                &self.session.candidates()[core.cand_start..core.cand_start + core.cand_count];
+            out.frame.pin_slots = shown
+                .iter()
+                .map(|c| c.pin_key.as_ref().map(|_| c.pin_position))
+                .collect();
             out.frame.pin_limit = env.config.page_size as u8;
             let pin_badge = match env.config.pin_badge.as_str() {
-                "paperclip" => "📎", "pushpin" => "📌", "dot" => "•", _ => "",
+                "paperclip" => "📎",
+                "pushpin" => "📌",
+                "dot" => "•",
+                _ => "",
             };
             if env.config.typo_mark || !pin_badge.is_empty() {
-                out.frame.badges = shown.iter().map(|c| {
-                    if c.pin_position > 0 { pin_badge.into() }
-                    else if env.config.typo_mark && c.corrected { "*".into() }
-                    else { String::new() }
-                }).collect();
+                out.frame.badges = shown
+                    .iter()
+                    .map(|c| {
+                        if c.pin_position > 0 {
+                            pin_badge.into()
+                        } else if env.config.typo_mark && c.corrected {
+                            "*".into()
+                        } else {
+                            String::new()
+                        }
+                    })
+                    .collect();
             }
         }
         let calculator = self.session.calc_active() && self.session.input().len() > 1;
         let expanded = core.panel == session::Panel::Expanded;
         if calculator {
-            out.frame.labels = (0..candidates.len()).map(|i| char::from(b'a' + i as u8).to_string()).collect();
+            out.frame.labels = (0..candidates.len())
+                .map(|i| char::from(b'a' + i as u8).to_string())
+                .collect();
             out.frame.title = Some("字母选词；回车或 = 提交结果；$ 提交金额".into());
         } else if expanded {
             let row = core.cand_cursor.map(|c| c / session::GRID_COLS);
@@ -460,7 +553,8 @@ impl ClientState {
         out.frame.forgettable = !candidates.is_empty();
         out.frame.handled = core.handled;
         out.frame.selected_rank = core.selected_rank;
-        out.frame.preedit_cursor = utf16_len(&core.preedit[..core.preedit_cursor.min(core.preedit.len())]);
+        out.frame.preedit_cursor =
+            utf16_len(&core.preedit[..core.preedit_cursor.min(core.preedit.len())]);
         out.frame.preedit = core.preedit;
         match env.config.inline_preedit.as_str() {
             "spaces" => {
@@ -491,7 +585,12 @@ impl ClientState {
 
     /// 现在的样子（不按键）。
     pub fn current(&mut self, handled: bool, env: &Env) -> Out {
-        if let Some(lookup) = &self.lookup { return Out { frame: lookup.frame(handled, env.config), ..Out::default() }; }
+        if let Some(lookup) = &self.lookup {
+            return Out {
+                frame: lookup.frame(handled, env.config),
+                ..Out::default()
+            };
+        }
         if let Some(tool) = &self.tool {
             return Out {
                 frame: tool_frame(tool, handled),
@@ -508,9 +607,12 @@ impl ClientState {
         self.core_frame(core, env)
     }
 
-    pub fn sentence_action(&mut self, action:wowtype_core::sentence::Action, env:&Env)->Out {
-        if self.tool.is_some()||self.raw.is_some()||self.lookup.is_some(){return self.current(false,env);}
-        let frame=self.session.sentence_action(action);self.core_frame(frame,env)
+    pub fn sentence_action(&mut self, action: wowtype_core::sentence::Action, env: &Env) -> Out {
+        if self.tool.is_some() || self.raw.is_some() || self.lookup.is_some() {
+            return self.current(false, env);
+        }
+        let frame = self.session.sentence_action(action);
+        self.core_frame(frame, env)
     }
 
     /// 打开工具栏或表情面板（结束正在打的字）。
@@ -547,7 +649,8 @@ impl ClientState {
             if env.config.auto_pair {
                 return Some(open.to_string());
             }
-            let want_open = prev.is_some_and(|p| p.is_whitespace() || "(（[【<《{「『".contains(p)) || !self.quote_open[slot];
+            let want_open = prev.is_some_and(|p| p.is_whitespace() || "(（[【<《{「『".contains(p))
+                || !self.quote_open[slot];
             self.quote_open[slot] = want_open;
             return Some(if want_open { open } else { close }.to_string());
         }
@@ -555,13 +658,27 @@ impl ClientState {
     }
 
     pub fn pairs_enabled(&self, config: &Config) -> bool {
-        config.auto_pair && config.fullwidth_punct && !matches!(self.app.as_str(),
-            "windowsterminal.exe" | "openconsole.exe" | "conhost.exe" | "cmd.exe" | "powershell.exe" | "pwsh.exe" | "mintty.exe" | "wezterm-gui.exe" | "alacritty.exe")
+        config.auto_pair
+            && config.fullwidth_punct
+            && !matches!(
+                self.app.as_str(),
+                "windowsterminal.exe"
+                    | "openconsole.exe"
+                    | "conhost.exe"
+                    | "cmd.exe"
+                    | "powershell.exe"
+                    | "pwsh.exe"
+                    | "mintty.exe"
+                    | "wezterm-gui.exe"
+                    | "alacritty.exe"
+            )
     }
 
     /// 标点要上屏的字和光标往回挪几个（成对补全）。
     fn punct_commit(&mut self, c: char, env: &Env, prev: Option<char>) -> (String, usize) {
-        let text = self.punct_text(c, env, prev).unwrap_or_else(|| c.to_string());
+        let text = self
+            .punct_text(c, env, prev)
+            .unwrap_or_else(|| c.to_string());
         if self.pairs_enabled(env.config) {
             if let Some((_, close)) = PAIRS.iter().find(|(open, _)| *open == text) {
                 return (format!("{text}{close}"), utf16_len(close));
@@ -572,7 +689,10 @@ impl ClientState {
 
     pub fn key(&mut self, key: &Key, env: &Env) -> Out {
         if let Some(lookup) = &mut self.lookup {
-            let Some(engine) = env.engine else { self.lookup = None; return self.current(false, env); };
+            let Some(engine) = env.engine else {
+                self.lookup = None;
+                return self.current(false, env);
+            };
             let action = lookup.key(key, engine, env.config);
             return self.lookup_action(action, env);
         }
@@ -648,7 +768,9 @@ impl ClientState {
     }
 
     pub fn close_pair(&mut self, env: &Env) -> Out {
-        if self.raw.is_some() { return self.reset(true, env); }
+        if self.raw.is_some() {
+            return self.reset(true, env);
+        }
         self.dismiss_prediction();
         let (text, emoji) = self.finish_for_punctuation(env);
         let mut out = self.current(true, env);
@@ -664,7 +786,9 @@ impl ClientState {
             if !self.session.composing() {
                 break;
             }
-            let space = self.session.key(&session::Key::press(session::keysym::SPACE));
+            let space = self
+                .session
+                .key(&session::Key::press(session::keysym::SPACE));
             if let Some(choice) = self.session.last_choice() {
                 if choice.kind == CandidateKind::Emoji {
                     emoji = Some(choice.emoji.clone());
@@ -714,7 +838,11 @@ impl ClientState {
         let composing = self.session.composing();
         let plain_input = composing
             && self.session.selections().is_empty()
-            && self.session.input().bytes().all(|b| b.is_ascii_alphanumeric());
+            && self
+                .session
+                .input()
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric());
         if key.keysym == keysym::KP_DECIMAL && env.config.numpad_dot {
             if plain_input {
                 return Some(self.start_raw(format!("{}.", self.session.input()), env));
@@ -795,7 +923,9 @@ impl ClientState {
             keysym::LEFT | keysym::UP => raw.move_cursor(true),
             keysym::RIGHT | keysym::DOWN | keysym::TAB => raw.move_cursor(false),
             // 这些键没有邮箱正文含义，和候选框的翻页箭头使用同一入口。
-            keysym::PAGE_UP | keysym::PAGE_DOWN => return self.page(key.keysym == keysym::PAGE_DOWN, env),
+            keysym::PAGE_UP | keysym::PAGE_DOWN => {
+                return self.page(key.keysym == keysym::PAGE_DOWN, env)
+            }
             keysym::KP_DECIMAL => raw.push('.'),
             sym => {
                 let c = char::from_u32(sym)
@@ -884,7 +1014,10 @@ impl ClientState {
     }
 
     pub fn page(&mut self, next: bool, env: &Env) -> Out {
-        if let Some(lookup) = &mut self.lookup { lookup.page(next, env.config.page_size as usize); return self.current(true, env); }
+        if let Some(lookup) = &mut self.lookup {
+            lookup.page(next, env.config.page_size as usize);
+            return self.current(true, env);
+        }
         if let Some(tool) = self.tool.as_mut() {
             tool.page(next);
             return self.current(true, env);
@@ -912,7 +1045,9 @@ impl ClientState {
     pub fn reset(&mut self, commit: bool, env: &Env) -> Out {
         if let Some(lookup) = self.lookup.take() {
             let mut out = self.current(true, env);
-            if commit && !lookup.query.is_empty() { out.frame.commit = Some(lookup.query); }
+            if commit && !lookup.query.is_empty() {
+                out.frame.commit = Some(lookup.query);
+            }
             return out;
         }
         self.predict = None;

@@ -37,7 +37,7 @@ pub struct MappedLexicon {
     count: usize,
     total: f64,
     compact: bool,
-    completions: std::sync::Mutex<HashMap<(Vec<SyllableKey>,String),Vec<LexEntry>>>,
+    completions: std::sync::Mutex<HashMap<(Vec<SyllableKey>, String), Vec<LexEntry>>>,
 }
 
 fn checksum(reader: impl Read) -> std::io::Result<u32> {
@@ -88,11 +88,23 @@ fn query_key(query: &[SyllableQuery]) -> Option<Vec<u8>> {
 fn verified_identity(source: Option<&Path>, index: &Path) -> Option<String> {
     let stamp = |path: &Path| -> Option<String> {
         let meta = fs::metadata(path).ok()?;
-        let modified = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
+        let modified = meta
+            .modified()
+            .ok()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?;
         Some(format!("{} {}", meta.len(), modified.as_nanos()))
     };
-    let source = match source { Some(path) => stamp(path)?, None => "standalone".into() };
-    Some(format!("FTD2 {} {} {}", cache_version(), stamp(index)?, source))
+    let source = match source {
+        Some(path) => stamp(path)?,
+        None => "standalone".into(),
+    };
+    Some(format!(
+        "FTD2 {} {} {}",
+        cache_version(),
+        stamp(index)?,
+        source
+    ))
 }
 
 fn u32_at(bytes: &[u8], pos: usize) -> u32 {
@@ -114,7 +126,9 @@ fn read_integer(bytes: &[u8], cursor: &mut usize) -> u64 {
         let byte = bytes[*cursor];
         *cursor += 1;
         value |= u64::from(byte & 127) << shift;
-        if byte < 128 { return value; }
+        if byte < 128 {
+            return value;
+        }
     }
     unreachable!("validated immutable index offset")
 }
@@ -206,7 +220,9 @@ impl MappedLexicon {
         // Equal frequencies share their exact f32 representation, keeping FST outputs small
         // without quantizing ranking scores or storing one float for every word.
         let mut priors = std::collections::BTreeMap::new();
-        for entry in &words { priors.insert((entry.freq.ln() as f32).to_bits(), 0_u64); }
+        for entry in &words {
+            priors.insert((entry.freq.ln() as f32).to_bits(), 0_u64);
+        }
         for (bits, offset) in &mut priors {
             *offset = u64::try_from(bytes.len())?;
             bytes.extend(bits.to_le_bytes());
@@ -283,7 +299,8 @@ impl MappedLexicon {
         // Compilers publish immutable files by rename; no writable mapping is created.
         let file = unsafe { Mmap::map(&file)? };
         ensure!(
-            (&file[..4] == MAGIC || &file[..4] == LEGACY_MAGIC) && u32_at(&file, 4) == cache_version(),
+            (&file[..4] == MAGIC || &file[..4] == LEGACY_MAGIC)
+                && u32_at(&file, 4) == cache_version(),
             "词库索引版本不匹配"
         );
         if let Some(source) = source.filter(|_| full) {
@@ -321,7 +338,9 @@ impl MappedLexicon {
         });
         let mut previous = 0_i64;
         std::iter::from_fn(move || {
-            if remaining == 0 { return None; }
+            if remaining == 0 {
+                return None;
+            }
             remaining -= 1;
             let pos = if self.compact {
                 let value = read_integer(&data.file, &mut cursor);
@@ -361,7 +380,11 @@ impl MappedLexicon {
             let syllables = read_integer(data, &mut cursor) as usize;
             (word_len, syllables, cursor)
         } else {
-            (u32_at(data, 0) as usize, u16::from_le_bytes(data[4..6].try_into().unwrap()) as usize, 6)
+            (
+                u32_at(data, 0) as usize,
+                u16::from_le_bytes(data[4..6].try_into().unwrap()) as usize,
+                6,
+            )
         };
         let freq = f64::from_le_bytes(data[cursor..cursor + 8].try_into().unwrap());
         cursor += 8;
@@ -387,36 +410,69 @@ impl MappedLexicon {
 }
 
 impl Lexicon for MappedLexicon {
-    fn long_completions(&self, prefix: &[SyllableKey], word_prefix: &str, limit: usize) -> Vec<LexEntry> {
-        if prefix.len() < 2 || limit == 0 { return Vec::new(); }
-        let cache_key=(prefix.to_vec(),word_prefix.to_owned());
-        if let Some(found)=self.completions.lock().unwrap().get(&cache_key){return found.iter().take(limit.min(32)).cloned().collect();}
+    fn long_completions(
+        &self,
+        prefix: &[SyllableKey],
+        word_prefix: &str,
+        limit: usize,
+    ) -> Vec<LexEntry> {
+        if prefix.len() < 2 || limit == 0 {
+            return Vec::new();
+        }
+        let cache_key = (prefix.to_vec(), word_prefix.to_owned());
+        if let Some(found) = self.completions.lock().unwrap().get(&cache_key) {
+            return found.iter().take(limit.min(32)).cloned().collect();
+        }
         let prefix_key = full_key(prefix.iter().copied());
         let mut stream = self.index.range().ge(&prefix_key).into_stream();
         let mut best = Vec::new();
         while let Some((key, _)) = stream.next() {
-            if !key.starts_with(&prefix_key) { break; }
-            if key.len() == prefix_key.len() { continue; }
-            for entry in self.entries(key).filter(|entry| long_word_matches(entry, prefix, word_prefix)) {
+            if !key.starts_with(&prefix_key) {
+                break;
+            }
+            if key.len() == prefix_key.len() {
+                continue;
+            }
+            for entry in self
+                .entries(key)
+                .filter(|entry| long_word_matches(entry, prefix, word_prefix))
+            {
                 best.push(entry);
                 best.sort_unstable_by(|a, b| long_word_order(b, a));
                 best.truncate(32);
             }
         }
-        let mut cache=self.completions.lock().unwrap();if cache.len()>=512{cache.clear();}cache.insert(cache_key,best.clone());
-        best.truncate(limit.min(32));best
+        let mut cache = self.completions.lock().unwrap();
+        if cache.len() >= 512 {
+            cache.clear();
+        }
+        cache.insert(cache_key, best.clone());
+        best.truncate(limit.min(32));
+        best
     }
     fn complete_long_word(&self, prefix: &[SyllableKey], word_prefix: &str) -> Option<LexEntry> {
-        if prefix.len() < 2 { return None; }
+        if prefix.len() < 2 {
+            return None;
+        }
         // 复用已部署的全拼 FST；只读取前缀范围，无须改文件格式或另建常驻索引。
         let prefix_key = full_key(prefix.iter().copied());
         let mut stream = self.index.range().ge(&prefix_key).into_stream();
         let mut best: Option<LexEntry> = None;
         while let Some((key, _)) = stream.next() {
-            if !key.starts_with(&prefix_key) { break; }
-            if key.len() == prefix_key.len() { continue; }
-            for entry in self.entries(key).filter(|entry| long_word_matches(entry, prefix, word_prefix)) {
-                if best.as_ref().is_none_or(|old| long_word_order(&entry, old).is_gt()) {
+            if !key.starts_with(&prefix_key) {
+                break;
+            }
+            if key.len() == prefix_key.len() {
+                continue;
+            }
+            for entry in self
+                .entries(key)
+                .filter(|entry| long_word_matches(entry, prefix, word_prefix))
+            {
+                if best
+                    .as_ref()
+                    .is_none_or(|old| long_word_order(&entry, old).is_gt())
+                {
                     best = Some(entry);
                 }
             }
@@ -512,10 +568,15 @@ impl PredictionIndex for MappedLexicon {
         self.index
             .get(prefixed(PRIOR, word.as_bytes()))
             .and_then(|value| {
-                if !self.compact { return Some(f32::from_bits(value as u32)); }
+                if !self.compact {
+                    return Some(f32::from_bits(value as u32));
+                }
                 let data = self.index.as_fst().as_inner();
                 let pos = usize::try_from(value).ok()?;
-                let bytes = data.file.get(self.entries_end..data.start)?.get(pos.checked_sub(self.entries_end)?..)?;
+                let bytes = data
+                    .file
+                    .get(self.entries_end..data.start)?
+                    .get(pos.checked_sub(self.entries_end)?..)?;
                 Some(f32::from_le_bytes(bytes.get(..4)?.try_into().ok()?))
             })
     }

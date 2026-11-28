@@ -36,7 +36,9 @@ pub fn dictionary_name(name: &str) -> Option<String> {
     let name: String = name
         .trim()
         .chars()
-        .filter(|c| !matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') && !c.is_control())
+        .filter(|c| {
+            !matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') && !c.is_control()
+        })
         .collect();
     let name = name.trim_end_matches(['.', ' ']).to_string();
     let reserved = {
@@ -76,7 +78,9 @@ pub(crate) fn write_atomic(path: &Path, data: &str) -> io::Result<()> {
 
 pub(crate) fn write_atomic_bytes(path: &Path, data: &[u8]) -> io::Result<()> {
     static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
-    let filename = path.file_name().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "缺少文件名"))?;
+    let filename = path
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "缺少文件名"))?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -87,7 +91,11 @@ pub(crate) fn write_atomic_bytes(path: &Path, data: &[u8]) -> io::Result<()> {
         name.push(filename);
         name.push(format!(".{}.{serial}.tmp", std::process::id()));
         let tmp = path.with_file_name(name);
-        match fs::OpenOptions::new().write(true).create_new(true).open(&tmp) {
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
+        {
             Ok(file) => break (tmp, file),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(error) => return Err(error),
@@ -98,7 +106,10 @@ pub(crate) fn write_atomic_bytes(path: &Path, data: &[u8]) -> io::Result<()> {
     let result = result.and_then(|()| fs::rename(&tmp, path));
     if let Err(error) = result {
         if let Err(cleanup) = fs::remove_file(&tmp) {
-            return Err(io::Error::new(error.kind(), format!("{error}；清理临时文件 {} 失败：{cleanup}", tmp.display())));
+            return Err(io::Error::new(
+                error.kind(),
+                format!("{error}；清理临时文件 {} 失败：{cleanup}", tmp.display()),
+            ));
         }
         return Err(error);
     }
@@ -107,7 +118,8 @@ pub(crate) fn write_atomic_bytes(path: &Path, data: &[u8]) -> io::Result<()> {
 
 fn read_text(path: &Path) -> io::Result<String> {
     let bytes = fs::read(path)?;
-    String::from_utf8(bytes).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "文件不是 UTF-8 编码"))
+    String::from_utf8(bytes)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "文件不是 UTF-8 编码"))
 }
 
 /// 常用语完整校验后再保存；统一换行并去重，不丢掉短语内部的空白。
@@ -167,7 +179,9 @@ impl Store {
         // 缺省项由 Config::default 补齐，让新版本的默认值能自然生效。
         let mut values = serde_json::to_value(config).map_err(io::Error::other)?;
         let defaults = serde_json::to_value(Config::default()).map_err(io::Error::other)?;
-        values.as_object_mut().expect("Config is a JSON object")
+        values
+            .as_object_mut()
+            .expect("Config is a JSON object")
             .retain(|key, value| defaults.get(key) != Some(value));
         let text = serde_json::to_string_pretty(&values).map_err(io::Error::other)?;
         write_atomic(&self.config_path(), &(text + "\n"))
@@ -214,7 +228,10 @@ impl Store {
     }
 
     pub fn save_quick_phrases(&self, phrases: &[msime::QuickPhrase]) -> io::Result<()> {
-        write_atomic(&self.quick_phrase_path(), &msime::format_quick_phrases(phrases))
+        write_atomic(
+            &self.quick_phrase_path(),
+            &msime::format_quick_phrases(phrases),
+        )
     }
 
     pub fn list_quick_phrases(&self) -> Vec<QuickPhrase> {
@@ -244,7 +261,8 @@ impl Store {
                 weight: p.weight,
             });
         }
-        self.save_quick_phrases(&out).map_err(|e| format!("保存快捷短语失败：{e}"))
+        self.save_quick_phrases(&out)
+            .map_err(|e| format!("保存快捷短语失败：{e}"))
     }
 
     /// 导入快捷短语：水杉、Rime 格式，或搜狗自定义短语、微信输入法常用语导出的 `编码,位置=短语`。
@@ -264,7 +282,8 @@ impl Store {
 
     pub fn export_quick_phrases(&self, path: &Path) -> Result<usize, String> {
         let phrases = self.load_quick_phrases();
-        write_atomic(path, &msime::format_quick_phrases(&phrases)).map_err(|e| format!("写入文件失败：{e}"))?;
+        write_atomic(path, &msime::format_quick_phrases(&phrases))
+            .map_err(|e| format!("写入文件失败：{e}"))?;
         Ok(phrases.len())
     }
 
@@ -275,7 +294,8 @@ impl Store {
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(e) => return Err(format!("读取常用语失败：{e}")),
         };
-        let phrases = serde_json::from_str(&text).map_err(|e| format!("常用语文件格式错误：{e}"))?;
+        let phrases =
+            serde_json::from_str(&text).map_err(|e| format!("常用语文件格式错误：{e}"))?;
         normalize_common_phrases(phrases)
     }
 
@@ -287,14 +307,19 @@ impl Store {
     }
 
     /// JSON 保留多行短语；纯文本按一行一条导入，空行不作短语。
-    pub fn import_common_phrases(&self, path: &Path, replace: bool) -> Result<ImportReport, String> {
+    pub fn import_common_phrases(
+        &self,
+        path: &Path,
+        replace: bool,
+    ) -> Result<ImportReport, String> {
         let text = read_text(path).map_err(|e| format!("读取常用语失败：{e}"))?;
         let text = text.trim_start_matches('\u{feff}').trim();
         if text.is_empty() {
             return Err("文件里没有常用语".into());
         }
         let incoming = if text.starts_with(['{', '[']) {
-            let data: serde_json::Value = serde_json::from_str(text).map_err(|e| format!("常用语备份格式错误：{e}"))?;
+            let data: serde_json::Value =
+                serde_json::from_str(text).map_err(|e| format!("常用语备份格式错误：{e}"))?;
             let phrases = if data.is_array() {
                 data
             } else {
@@ -305,10 +330,17 @@ impl Store {
             };
             serde_json::from_value(phrases).map_err(|e| format!("常用语列表格式错误：{e}"))?
         } else {
-            text.lines().filter(|line| !line.trim().is_empty()).map(str::to_string).collect()
+            text.lines()
+                .filter(|line| !line.trim().is_empty())
+                .map(str::to_string)
+                .collect()
         };
         let incoming = normalize_common_phrases(incoming)?;
-        let mut phrases = if replace { Vec::new() } else { self.load_common_phrases()? };
+        let mut phrases = if replace {
+            Vec::new()
+        } else {
+            self.load_common_phrases()?
+        };
         let before = phrases.len();
         for phrase in incoming {
             if !phrases.contains(&phrase) {
@@ -317,14 +349,18 @@ impl Store {
         }
         let added = phrases.len() - before;
         self.set_common_phrases(phrases)?;
-        Ok(ImportReport { added, ..ImportReport::default() })
+        Ok(ImportReport {
+            added,
+            ..ImportReport::default()
+        })
     }
 
     pub fn export_common_phrases(&self, path: &Path) -> Result<usize, String> {
         let phrases = self.load_common_phrases()?;
         let text = serde_json::to_string_pretty(&serde_json::json!({
             "format": "freetype-common-phrases", "version": 1, "phrases": phrases,
-        })).map_err(|e| e.to_string())?;
+        }))
+        .map_err(|e| e.to_string())?;
         write_atomic(path, &(text + "\n")).map_err(|e| format!("写入常用语备份失败：{e}"))?;
         Ok(phrases.len())
     }
@@ -338,7 +374,8 @@ impl Store {
         reading: &dyn Fn(&[String]) -> Box<dyn dictfmt::Reading>,
     ) -> Result<ImportReport, String> {
         let name = dictionary_name(name).ok_or("词库名称不能为空，也不能是系统保留名")?;
-        let imported = dictfmt::parse_dictionary_file(path, reading).map_err(|e| format!("读取文件失败：{e}"))?;
+        let imported = dictfmt::parse_dictionary_file(path, reading)
+            .map_err(|e| format!("读取文件失败：{e}"))?;
         if imported.parsed.items.is_empty() && imported.foreign > 0 {
             // 英文词典（en.dict.yaml）、符号表：没有可以按拼音打出来的中文词条
             return Err(format!(
@@ -347,19 +384,36 @@ impl Store {
             ));
         }
         let mut meta = self.dictionary_metadata(&name)?;
-        meta.source = format!("{} · {}", imported.format.name(), path.file_name().unwrap_or_default().to_string_lossy());
+        meta.source = format!(
+            "{} · {}",
+            imported.format.name(),
+            path.file_name().unwrap_or_default().to_string_lossy()
+        );
         if imported.parsed.items.is_empty() {
-            return Err(imported.parsed.errors.first().map_or_else(|| "文件中没有可用词条".into(),
-                |error| format!("文件中没有可用词条；第 {} 行：{}", error.line, error.message)));
+            return Err(imported.parsed.errors.first().map_or_else(
+                || "文件中没有可用词条".into(),
+                |error| {
+                    format!(
+                        "文件中没有可用词条；第 {} 行：{}",
+                        error.line, error.message
+                    )
+                },
+            ));
         }
         self.write_dictionary(&name, &meta, &imported.parsed.items)?;
         let mut report = report(imported.parsed.items.len(), &imported.parsed.errors);
         let mut note = format!("识别为{}", imported.format.name());
         if imported.tables > 0 {
-            note.push_str(&format!("；包含 import_tables 中的 {} 个词典", imported.tables));
+            note.push_str(&format!(
+                "；包含 import_tables 中的 {} 个词典",
+                imported.tables
+            ));
         }
         if imported.annotated > 0 {
-            note.push_str(&format!("；{} 条只有词语，已按常用读音补充拼音；多音字可能不准确", imported.annotated));
+            note.push_str(&format!(
+                "；{} 条只有词语，已按常用读音补充拼音；多音字可能不准确",
+                imported.annotated
+            ));
         }
         if imported.foreign > 0 {
             note.push_str(&format!("；已跳过 {} 条非中文词语", imported.foreign));
@@ -370,15 +424,26 @@ impl Store {
 
     pub fn remove_dictionary(&self, name: &str) -> Result<(), String> {
         let name = dictionary_name(name).ok_or("词库名称无效")?;
-        fs::remove_file(self.dict_dir().join(format!("{name}.txt"))).map_err(|e| format!("删除词库失败：{e}"))
+        fs::remove_file(self.dict_dir().join(format!("{name}.txt")))
+            .map_err(|e| format!("删除词库失败：{e}"))
     }
 
     /// 全部导入的词库，按名字排。
     pub fn load_dictionaries(&self) -> Vec<(String, Vec<msime::DictEntry>)> {
-        self.read_dictionaries().into_iter().filter(|(_, _, meta)| meta.enabled).map(|(name, entries, _)| (name, entries)).collect()
+        self.read_dictionaries()
+            .into_iter()
+            .filter(|(_, _, meta)| meta.enabled)
+            .map(|(name, entries, _)| (name, entries))
+            .collect()
     }
 
-    fn read_dictionaries(&self) -> Vec<(String, Vec<msime::DictEntry>, crate::dictionary_catalog::Metadata)> {
+    fn read_dictionaries(
+        &self,
+    ) -> Vec<(
+        String,
+        Vec<msime::DictEntry>,
+        crate::dictionary_catalog::Metadata,
+    )> {
         let Ok(dir) = fs::read_dir(self.dict_dir()) else {
             return Vec::new();
         };
@@ -393,7 +458,10 @@ impl Store {
                 let text = read_text(&path).ok()?;
                 let meta = match crate::dictionary_catalog::metadata(&text) {
                     Ok(meta) => meta,
-                    Err(error) => { crate::log(&format!("{name}：{error}")); return None; }
+                    Err(error) => {
+                        crate::log(&format!("{name}：{error}"));
+                        return None;
+                    }
                 };
                 Some((name, msime::parse_dictionary(&text).items, meta))
             })
@@ -421,7 +489,8 @@ mod tests {
     use super::*;
 
     fn temp_store(name: &str) -> Store {
-        let dir = std::env::temp_dir().join(format!("freetype-store-{name}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("freetype-store-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         Store::new(dir)
     }
@@ -434,7 +503,8 @@ mod tests {
         config.page_size = 9;
         store.save_config(&config).unwrap();
         assert_eq!(store.load_config(), config);
-        let raw: serde_json::Value = serde_json::from_str(&fs::read_to_string(store.config_path()).unwrap()).unwrap();
+        let raw: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(store.config_path()).unwrap()).unwrap();
         assert_eq!(raw, serde_json::json!({"page_size": 9}));
         let _ = fs::remove_dir_all(store.dir());
     }
@@ -478,13 +548,19 @@ mod tests {
         fs::write(&file, "\u{feff}dz\t四川省\\n宜宾市\t20\r\nbad1\tx\r\n").unwrap();
         let report = store.import_quick_phrases(&file, false).unwrap();
         assert_eq!((report.added, report.skipped), (1, 1));
-        assert_eq!(report.errors, vec!["第 2 行：编码只能包含英文字母，短语不能为空"]);
+        assert_eq!(
+            report.errors,
+            vec!["第 2 行：编码只能包含英文字母，短语不能为空"]
+        );
         assert_eq!(store.list_quick_phrases()[0].text, "四川省\n宜宾市");
         let again = store.import_quick_phrases(&file, false).unwrap();
         assert_eq!(again.added, 0, "同一条不重复加");
         let out = store.dir().with_extension("out.txt");
         assert_eq!(store.export_quick_phrases(&out).unwrap(), 1);
-        assert_eq!(fs::read_to_string(&out).unwrap(), "dz\t四川省\\n宜宾市\t20\n");
+        assert_eq!(
+            fs::read_to_string(&out).unwrap(),
+            "dz\t四川省\\n宜宾市\t20\n"
+        );
         for path in [file, out] {
             let _ = fs::remove_file(path);
         }
@@ -497,13 +573,25 @@ mod tests {
         fs::create_dir_all(store.dir()).unwrap();
         let file = store.dir().join("src.txt");
         fs::write(&file, "# 人名\n韵酒\tyun jiu\t500\n坏\n").unwrap();
-        let report = store.import_dictionary(&file, "我的词库", &|_| Box::new(crate::dictfmt::LexiconReading::default())).unwrap();
+        let report = store
+            .import_dictionary(&file, "我的词库", &|_| {
+                Box::new(crate::dictfmt::LexiconReading::default())
+            })
+            .unwrap();
         assert_eq!((report.added, report.skipped), (1, 1));
         assert_eq!(
-            store.list_dictionaries().into_iter().map(|d| (d.name, d.entries, d.enabled)).collect::<Vec<_>>(),
+            store
+                .list_dictionaries()
+                .into_iter()
+                .map(|d| (d.name, d.entries, d.enabled))
+                .collect::<Vec<_>>(),
             vec![("我的词库".into(), 1, true)]
         );
-        assert!(store.import_dictionary(&file, "CON", &|_| Box::new(crate::dictfmt::LexiconReading::default())).is_err());
+        assert!(store
+            .import_dictionary(&file, "CON", &|_| Box::new(
+                crate::dictfmt::LexiconReading::default()
+            ))
+            .is_err());
         store.remove_dictionary("我的词库").unwrap();
         assert!(store.list_dictionaries().is_empty());
         let _ = fs::remove_dir_all(store.dir());
@@ -515,22 +603,39 @@ mod tests {
         let source = store.dir().join("rime");
         fs::create_dir_all(source.join("cn_dicts")).unwrap();
         let main = source.join("demo.dict.yaml");
-        fs::write(&main, "---\nname: demo\nversion: \"1\"\nimport_tables:\n  - cn_dicts/base\n...\nA\tA\n").unwrap();
+        fs::write(
+            &main,
+            "---\nname: demo\nversion: \"1\"\nimport_tables:\n  - cn_dicts/base\n...\nA\tA\n",
+        )
+        .unwrap();
         fs::write(
             source.join("cn_dicts/base.dict.yaml"),
             "---\nname: base\nversion: \"1\"\n...\n韵酒\tyun jiu\t500\n",
         )
         .unwrap();
-        let reading = |_: &[String]| -> Box<dyn crate::dictfmt::Reading> { Box::new(crate::dictfmt::LexiconReading::default()) };
+        let reading = |_: &[String]| -> Box<dyn crate::dictfmt::Reading> {
+            Box::new(crate::dictfmt::LexiconReading::default())
+        };
         let report = store.import_dictionary(&main, "demo", &reading).unwrap();
         assert_eq!((report.added, report.skipped), (1, 0));
         let note = report.note.unwrap();
-        assert!(note.contains("Rime 词典") && note.contains("1 个词典") && note.contains("已跳过 1 条非中文词语"), "{note}");
+        assert!(
+            note.contains("Rime 词典")
+                && note.contains("1 个词典")
+                && note.contains("已跳过 1 条非中文词语"),
+            "{note}"
+        );
         assert_eq!(store.load_dictionaries()[0].1[0].word, "韵酒");
         // 只有英文词条的词典：说明原因，不存空词库
         let english = source.join("en.dict.yaml");
-        fs::write(&english, "---\nname: en\nversion: \"1\"\n...\nabandon\tabandon\n").unwrap();
-        let error = store.import_dictionary(&english, "en", &reading).unwrap_err();
+        fs::write(
+            &english,
+            "---\nname: en\nversion: \"1\"\n...\nabandon\tabandon\n",
+        )
+        .unwrap();
+        let error = store
+            .import_dictionary(&english, "en", &reading)
+            .unwrap_err();
         assert!(error.contains("不是中文词语"), "{error}");
         assert_eq!(store.list_dictionaries().len(), 1);
         let _ = fs::remove_dir_all(store.dir());
@@ -542,14 +647,36 @@ mod tests {
         let source = store.dir().join("source");
         fs::create_dir_all(&source).unwrap();
         let outside = store.dir().join("outside.dict.yaml");
-        fs::write(&outside, "---\nname: outside\n...\n私密词\tsi mi ci\t1000\n").unwrap();
+        fs::write(
+            &outside,
+            "---\nname: outside\n...\n私密词\tsi mi ci\t1000\n",
+        )
+        .unwrap();
         let main = source.join("main.dict.yaml");
-        let absolute = outside.with_extension("").with_extension("").to_string_lossy().into_owned();
+        let absolute = outside
+            .with_extension("")
+            .with_extension("")
+            .to_string_lossy()
+            .into_owned();
         for table in ["../outside".to_string(), absolute] {
-            fs::write(&main, format!("---\nname: main\nimport_tables:\n  - {table}\n...\n你好\tni hao\t1000\n")).unwrap();
-            let parsed = dictfmt::parse_dictionary_file(&main, &|_| Box::new(crate::dictfmt::LexiconReading::default())).unwrap();
-            assert_eq!(parsed.parsed.items.len(), 1, "import_tables read outside data: {table}");
-            assert!(!parsed.parsed.errors.is_empty(), "invalid table references must be reported");
+            fs::write(
+                &main,
+                format!("---\nname: main\nimport_tables:\n  - {table}\n...\n你好\tni hao\t1000\n"),
+            )
+            .unwrap();
+            let parsed = dictfmt::parse_dictionary_file(&main, &|_| {
+                Box::new(crate::dictfmt::LexiconReading::default())
+            })
+            .unwrap();
+            assert_eq!(
+                parsed.parsed.items.len(),
+                1,
+                "import_tables read outside data: {table}"
+            );
+            assert!(
+                !parsed.parsed.errors.is_empty(),
+                "invalid table references must be reported"
+            );
         }
     }
 

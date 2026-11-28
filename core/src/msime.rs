@@ -218,7 +218,10 @@ pub fn parse_quick_phrases(text: &str) -> Parsed<QuickPhrase> {
                 message: message.to_string(),
             })
         };
-        let cols: Vec<&str> = line.split('\t').map(|f| f.trim_matches([' ', '\t'])).collect();
+        let cols: Vec<&str> = line
+            .split('\t')
+            .map(|f| f.trim_matches([' ', '\t']))
+            .collect();
         if cols.len() != 2 && cols.len() != 3 {
             error("格式错误，应为：编码<Tab>短语<Tab>权重；短语内的换行请写成 \\n");
             continue;
@@ -247,7 +250,12 @@ pub fn format_quick_phrases(phrases: &[QuickPhrase]) -> String {
     sorted.sort_by(|a, b| a.code.cmp(&b.code).then(b.weight.cmp(&a.weight)));
     let mut out = String::new();
     for p in sorted {
-        out.push_str(&format!("{}\t{}\t{}\n", p.code, escape_phrase(&p.text), p.weight));
+        out.push_str(&format!(
+            "{}\t{}\t{}\n",
+            p.code,
+            escape_phrase(&p.text),
+            p.weight
+        ));
     }
     out
 }
@@ -256,7 +264,10 @@ pub fn format_quick_phrases(phrases: &[QuickPhrase]) -> String {
 pub fn merge_quick_phrases(base: &mut Vec<QuickPhrase>, more: Vec<QuickPhrase>) -> usize {
     let mut added = 0;
     for p in more {
-        if let Some(slot) = base.iter_mut().find(|q| q.code == p.code && q.text == p.text) {
+        if let Some(slot) = base
+            .iter_mut()
+            .find(|q| q.code == p.code && q.text == p.text)
+        {
             slot.weight = p.weight;
         } else {
             base.push(p);
@@ -331,7 +342,8 @@ mod tests {
 
     #[test]
     fn quick_phrases_unescape_and_default_weight() {
-        let parsed = parse_quick_phrases("YYJQ\t韵酒\nDZ\t四川省\\n宜宾市\\t\\\\x\t20\n\nbad1\tx\nok\t \n");
+        let parsed =
+            parse_quick_phrases("YYJQ\t韵酒\nDZ\t四川省\\n宜宾市\\t\\\\x\t20\n\nbad1\tx\nok\t \n");
         assert_eq!(
             parsed.items,
             vec![
@@ -368,7 +380,10 @@ mod tests {
         let text = format_quick_phrases(&phrases);
         assert_eq!(text, "dz\t乙\\n丙\t9\ndz\t甲\t1\n");
         assert_eq!(parse_quick_phrases(&text).items.len(), 2);
-        assert_eq!(quick_phrases_to_custom_tsv(&phrases), "dz\t乙\\n丙\ndz\t甲\n");
+        assert_eq!(
+            quick_phrases_to_custom_tsv(&phrases),
+            "dz\t乙\\n丙\ndz\t甲\n"
+        );
     }
 
     #[test]
@@ -382,7 +397,8 @@ mod tests {
 
     #[test]
     fn quick_phrases_reach_engine_candidates() {
-        let lexicon = crate::MemoryLexicon::from_tsv_str("ni hao\t你好\t100\nyun\t韵\t10\n").unwrap();
+        let lexicon =
+            crate::MemoryLexicon::from_tsv_str("ni hao\t你好\t100\nyun\t韵\t10\n").unwrap();
         let engine = crate::Engine::new(
             std::sync::Arc::new(lexicon),
             std::sync::Arc::new(crate::BigramLm::default()),

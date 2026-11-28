@@ -73,7 +73,10 @@ impl LexiconReading {
             if !need.contains(word) {
                 continue;
             }
-            let freq: f64 = cols.next().and_then(|f| f.trim().parse().ok()).unwrap_or(0.0);
+            let freq: f64 = cols
+                .next()
+                .and_then(|f| f.trim().parse().ok())
+                .unwrap_or(0.0);
             let better = words.get(word).is_none_or(|(_, f)| freq > *f);
             if better {
                 words.insert(word.to_string(), (pinyin.trim().to_string(), freq));
@@ -133,7 +136,13 @@ pub fn decode(bytes: &[u8]) -> String {
 fn utf16(bytes: &[u8], big_endian: bool) -> String {
     let units: Vec<u16> = bytes
         .chunks_exact(2)
-        .map(|p| if big_endian { u16::from_be_bytes([p[0], p[1]]) } else { u16::from_le_bytes([p[0], p[1]]) })
+        .map(|p| {
+            if big_endian {
+                u16::from_be_bytes([p[0], p[1]])
+            } else {
+                u16::from_le_bytes([p[0], p[1]])
+            }
+        })
         .collect();
     String::from_utf16_lossy(&units)
 }
@@ -151,7 +160,12 @@ fn gbk(bytes: &[u8]) -> String {
             return String::from_utf8_lossy(bytes).into_owned();
         }
         let mut wide = vec![0u16; n as usize];
-        MultiByteToWideChar(936, MULTI_BYTE_TO_WIDE_CHAR_FLAGS(0), bytes, Some(&mut wide));
+        MultiByteToWideChar(
+            936,
+            MULTI_BYTE_TO_WIDE_CHAR_FLAGS(0),
+            bytes,
+            Some(&mut wide),
+        );
         String::from_utf16_lossy(&wide)
     }
 }
@@ -170,7 +184,12 @@ fn u16_at(bytes: &[u8], at: usize) -> Option<u16> {
 }
 
 fn u32_at(bytes: &[u8], at: usize) -> Option<u32> {
-    Some(u32::from_le_bytes([*bytes.get(at)?, *bytes.get(at + 1)?, *bytes.get(at + 2)?, *bytes.get(at + 3)?]))
+    Some(u32::from_le_bytes([
+        *bytes.get(at)?,
+        *bytes.get(at + 1)?,
+        *bytes.get(at + 2)?,
+        *bytes.get(at + 3)?,
+    ]))
 }
 
 fn utf16_at(bytes: &[u8], at: usize, len: usize) -> Option<String> {
@@ -240,7 +259,11 @@ fn parse_scel(bytes: &[u8]) -> Parsed<DictEntry> {
                 (true, Some(pinyin)) if !word.is_empty() => parsed.items.push(DictEntry {
                     word,
                     pinyin,
-                    weight: if freq == 0 { DEFAULT_WEIGHT } else { u32::from(freq) },
+                    weight: if freq == 0 {
+                        DEFAULT_WEIGHT
+                    } else {
+                        u32::from(freq)
+                    },
                 }),
                 _ => parsed.errors.push(LineError {
                     line: parsed.items.len() + parsed.errors.len() + 1,
@@ -260,15 +283,27 @@ fn is_word(text: &str) -> bool {
 fn parse_text_line(line: &str) -> Result<(String, Option<String>, u32), &'static str> {
     // 搜狗：'ni'hao 你好
     if let Some(rest) = line.strip_prefix('\'') {
-        let (code, word) = rest.split_once([' ', '\t']).ok_or("格式错误，应为：'ni'hao 你好")?;
+        let (code, word) = rest
+            .split_once([' ', '\t'])
+            .ok_or("格式错误，应为：'ni'hao 你好")?;
         let pinyin = msime::normalize_pinyin(code).ok_or("拼音无效")?;
         let word = word.trim();
-        return if is_word(word) { Ok((word.to_string(), Some(pinyin), DEFAULT_WEIGHT)) } else { Err("词语为空") };
+        return if is_word(word) {
+            Ok((word.to_string(), Some(pinyin), DEFAULT_WEIGHT))
+        } else {
+            Err("词语为空")
+        };
     }
     let cols: Vec<&str> = if line.contains('\t') {
-        line.split('\t').map(str::trim).filter(|c| !c.is_empty()).collect()
+        line.split('\t')
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+            .collect()
     } else {
-        line.split([' ', ',', '，']).map(str::trim).filter(|c| !c.is_empty()).collect()
+        line.split([' ', ',', '，'])
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+            .collect()
     };
     let mut word = None;
     let mut pinyin = None;
@@ -277,8 +312,13 @@ fn parse_text_line(line: &str) -> Result<(String, Option<String>, u32), &'static
     for col in &cols {
         if is_word(col) && word.is_none() {
             word = Some(col.to_string());
-        } else if col.bytes().all(|b| b.is_ascii_digit() || b == b'.') && col.bytes().any(|b| b.is_ascii_digit()) {
-            weight = col.parse::<f64>().map(|f| f.clamp(1.0, f64::from(u32::MAX)) as u32).unwrap_or(DEFAULT_WEIGHT);
+        } else if col.bytes().all(|b| b.is_ascii_digit() || b == b'.')
+            && col.bytes().any(|b| b.is_ascii_digit())
+        {
+            weight = col
+                .parse::<f64>()
+                .map(|f| f.clamp(1.0, f64::from(u32::MAX)) as u32)
+                .unwrap_or(DEFAULT_WEIGHT);
         } else if col.is_ascii() || msime::normalize_pinyin(col).is_some() {
             codes.push(col);
         }
@@ -310,17 +350,19 @@ struct Place {
 
 impl Collected {
     fn error(&mut self, tables: &[String], place: Place, message: &str) {
-        self.parsed.errors.push(match place.table.checked_sub(1).and_then(|i| tables.get(i)) {
-            // 导入表里的行：行号前面带上是哪个词典
-            Some(table) => LineError {
-                line: 0,
-                message: format!("{table} 第 {} 行：{message}", place.line),
+        self.parsed.errors.push(
+            match place.table.checked_sub(1).and_then(|i| tables.get(i)) {
+                // 导入表里的行：行号前面带上是哪个词典
+                Some(table) => LineError {
+                    line: 0,
+                    message: format!("{table} 第 {} 行：{message}", place.line),
+                },
+                None => LineError {
+                    line: place.line,
+                    message: message.to_string(),
+                },
             },
-            None => LineError {
-                line: place.line,
-                message: message.to_string(),
-            },
-        });
+        );
     }
 }
 
@@ -342,13 +384,20 @@ fn collect_text(text: &str, out: &mut Collected) {
             _ if yaml || line.starts_with('#') || line.starts_with(';') => continue,
             _ => {}
         }
-        let place = Place { table: 0, line: i + 1 };
+        let place = Place {
+            table: 0,
+            line: i + 1,
+        };
         match parse_text_line(line) {
             Ok((word, Some(pinyin), weight)) => {
                 if line.starts_with('\'') {
                     out.sogou += 1;
                 }
-                out.parsed.items.push(DictEntry { word, pinyin, weight });
+                out.parsed.items.push(DictEntry {
+                    word,
+                    pinyin,
+                    weight,
+                });
             }
             Ok((word, None, weight)) => out.bare.push((place, word, weight)),
             Err(message) => out.error(&[], place, message),
@@ -466,8 +515,17 @@ mod rime {
                 "import_tables" => List::ImportTables,
                 _ => continue,
             };
-            match value.trim().strip_prefix('[').and_then(|v| v.strip_suffix(']')) {
-                Some(inline) => header.list(list).extend(inline.split(',').map(scalar).filter(|item| !item.is_empty())),
+            match value
+                .trim()
+                .strip_prefix('[')
+                .and_then(|v| v.strip_suffix(']'))
+            {
+                Some(inline) => header.list(list).extend(
+                    inline
+                        .split(',')
+                        .map(scalar)
+                        .filter(|item| !item.is_empty()),
+                ),
                 None => open = Some(list),
             }
         }
@@ -480,9 +538,14 @@ mod rime {
     pub fn split(text: &str) -> Option<(Header, usize)> {
         let lines: Vec<&str> = text
             .split('\n')
-            .map(|l| l.trim_start_matches('\u{feff}').trim_end_matches(['\r', ' ', '\t']))
+            .map(|l| {
+                l.trim_start_matches('\u{feff}')
+                    .trim_end_matches(['\r', ' ', '\t'])
+            })
             .collect();
-        let open = lines.iter().position(|l| !l.trim().is_empty() && !l.starts_with('#'))?;
+        let open = lines
+            .iter()
+            .position(|l| !l.trim().is_empty() && !l.starts_with('#'))?;
         if lines[open].trim() != "---" {
             return None;
         }
@@ -500,7 +563,11 @@ mod rime {
         let Some(value) = number.parse::<f64>().ok().filter(|v| v.is_finite()) else {
             return DEFAULT_WEIGHT;
         };
-        let value = if percent { f64::from(DEFAULT_WEIGHT) * value / 100.0 } else { value };
+        let value = if percent {
+            f64::from(DEFAULT_WEIGHT) * value / 100.0
+        } else {
+            value
+        };
         value.clamp(1.0, f64::from(u32::MAX)) as u32
     }
 
@@ -513,7 +580,14 @@ mod rime {
     }
 
     /// 读一个 Rime 词典的正文。`table` 是第几个文件（见 [`Place`]）。
-    pub fn collect(text: &str, header: &Header, body: usize, table: usize, tables: &[String], out: &mut Collected) {
+    pub fn collect(
+        text: &str,
+        header: &Header,
+        body: usize,
+        table: usize,
+        tables: &[String],
+        out: &mut Collected,
+    ) {
         let layout = header.layout();
         let mut comments = true;
         for (i, raw) in text.split('\n').enumerate().skip(body) {
@@ -536,8 +610,15 @@ mod rime {
                 out.foreign += 1;
                 continue;
             }
-            let weight = layout.weight.and_then(|at| cols.get(at)).map_or(DEFAULT_WEIGHT, |w| weight(w));
-            match layout.code.and_then(|at| cols.get(at)).filter(|c| !c.is_empty()) {
+            let weight = layout
+                .weight
+                .and_then(|at| cols.get(at))
+                .map_or(DEFAULT_WEIGHT, |w| weight(w));
+            match layout
+                .code
+                .and_then(|at| cols.get(at))
+                .filter(|c| !c.is_empty())
+            {
                 None => out.bare.push((place, word.to_string(), weight)),
                 Some(text) => match msime::normalize_pinyin(&code(text)) {
                     Some(pinyin) => out.parsed.items.push(DictEntry {
@@ -556,8 +637,12 @@ mod rime {
     pub fn read_table(main: &Path, table: &str) -> Option<Vec<u8>> {
         // import_tables 只接受包内相对名称；拒绝父目录、盘符和绝对路径，
         // 免得导入外部词典时读入该词典指定的其他本机文件。
-        if table.is_empty() || table.contains(':') || !Path::new(table).components()
-            .all(|part| matches!(part, std::path::Component::Normal(_))) {
+        if table.is_empty()
+            || table.contains(':')
+            || !Path::new(table)
+                .components()
+                .all(|part| matches!(part, std::path::Component::Normal(_)))
+        {
             return None;
         }
         let relative = format!("{table}.dict.yaml");
@@ -572,7 +657,10 @@ mod rime {
 
 /// 读词库文件（任意上面的格式）。Rime 主词典的 `import_tables` 这里读不到（没有路径），
 /// 会报在出错的行里；从文件导入用 [`parse_dictionary_file`]。
-pub fn parse_dictionary(bytes: &[u8], reading: &dyn Fn(&[String]) -> Box<dyn Reading>) -> Imported<DictEntry> {
+pub fn parse_dictionary(
+    bytes: &[u8],
+    reading: &dyn Fn(&[String]) -> Box<dyn Reading>,
+) -> Imported<DictEntry> {
     parse_dictionary_with(bytes, reading, &|_| None)
 }
 
@@ -582,7 +670,9 @@ pub fn parse_dictionary_file(
     reading: &dyn Fn(&[String]) -> Box<dyn Reading>,
 ) -> std::io::Result<Imported<DictEntry>> {
     let bytes = std::fs::read(path)?;
-    Ok(parse_dictionary_with(&bytes, reading, &|table| rime::read_table(path, table)))
+    Ok(parse_dictionary_with(&bytes, reading, &|table| {
+        rime::read_table(path, table)
+    }))
 }
 
 fn parse_dictionary_with(
@@ -611,7 +701,11 @@ fn parse_dictionary_with(
             let whole = Place { table: 0, line: 0 };
             for (i, table) in tables.iter().enumerate() {
                 let Some(bytes) = read_table(table) else {
-                    out.error(&[], whole, &format!("未找到 {table}.dict.yaml；请检查 import_tables 中的相对路径"));
+                    out.error(
+                        &[],
+                        whole,
+                        &format!("未找到 {table}.dict.yaml；请检查 import_tables 中的相对路径"),
+                    );
                     continue;
                 };
                 let text = decode(&bytes);
@@ -620,7 +714,13 @@ fn parse_dictionary_with(
                         rime::collect(&text, &header, body, i + 1, &tables, &mut out);
                         read += 1;
                     }
-                    None => out.error(&[], whole, &format!("{table}.dict.yaml 不是 Rime 词典；缺少由 --- 和 ... 包围的文件头")),
+                    None => out.error(
+                        &[],
+                        whole,
+                        &format!(
+                            "{table}.dict.yaml 不是 Rime 词典；缺少由 --- 和 ... 包围的文件头"
+                        ),
+                    ),
                 }
             }
         }
@@ -632,12 +732,23 @@ fn parse_dictionary_with(
         let words: Vec<String> = bare.iter().map(|(_, w, _)| w.clone()).collect();
         let reader = reading(&words);
         for (place, word, weight) in bare {
-            match reader.pinyin(&word).and_then(|p| msime::normalize_pinyin(&p)) {
+            match reader
+                .pinyin(&word)
+                .and_then(|p| msime::normalize_pinyin(&p))
+            {
                 Some(pinyin) => {
                     annotated += 1;
-                    out.parsed.items.push(DictEntry { word, pinyin, weight });
+                    out.parsed.items.push(DictEntry {
+                        word,
+                        pinyin,
+                        weight,
+                    });
                 }
-                None => out.error(&tables, place, &format!("「{word}」里有不认识读音的字，没有拼音")),
+                None => out.error(
+                    &tables,
+                    place,
+                    &format!("「{word}」里有不认识读音的字，没有拼音"),
+                ),
             }
         }
     }
@@ -733,7 +844,8 @@ fn parse_sogou_phrases(text: &str) -> Parsed<QuickPhrase> {
     let mut parsed = Parsed::default();
     // 正在读的一条：(开头在第几行, 编码, 位置, 各行)
     let mut open: Option<(usize, String, u32, Vec<String>)> = None;
-    let close = |parsed: &mut Parsed<QuickPhrase>, entry: Option<(usize, String, u32, Vec<String>)>| {
+    let close = |parsed: &mut Parsed<QuickPhrase>,
+                 entry: Option<(usize, String, u32, Vec<String>)>| {
         let Some((line, code, position, lines)) = entry else {
             return;
         };
@@ -816,7 +928,11 @@ mod tests {
     #[test]
     fn sogou_text_in_utf16_and_utf8() {
         let text = "'ni'hao 你好\r\n'wei'xin 微信\r\n";
-        for bytes in [utf16le(text, true), utf16le(text, false), text.as_bytes().to_vec()] {
+        for bytes in [
+            utf16le(text, true),
+            utf16le(text, false),
+            text.as_bytes().to_vec(),
+        ] {
             let got = read(&bytes);
             assert_eq!(got.format, Format::SogouText);
             assert_eq!(got.parsed.items.len(), 2, "{:?}", got.parsed.errors);
@@ -848,18 +964,34 @@ mod tests {
         assert_eq!(words[0], ("你好", "ni hao", 500));
         assert_eq!(words[1], ("微信", "wei xin", 300));
         assert_eq!(words[2], ("你好", "ni hao", DEFAULT_WEIGHT));
-        assert_eq!(words[3], ("微信", "wei xin", DEFAULT_WEIGHT), "只有词语的按读音注音");
+        assert_eq!(
+            words[3],
+            ("微信", "wei xin", DEFAULT_WEIGHT),
+            "只有词语的按读音注音"
+        );
         assert_eq!(got.annotated, 1);
         assert_eq!(got.parsed.errors.len(), 2, "{:?}", got.parsed.errors);
-        assert!(got.parsed.errors.iter().any(|e| e.message.contains("生僻词")));
+        assert!(got
+            .parsed
+            .errors
+            .iter()
+            .any(|e| e.message.contains("生僻词")));
     }
 
     fn items(got: &Imported<DictEntry>) -> Vec<(&str, &str, u32)> {
-        got.parsed.items.iter().map(|e| (e.word.as_str(), e.pinyin.as_str(), e.weight)).collect()
+        got.parsed
+            .items
+            .iter()
+            .map(|e| (e.word.as_str(), e.pinyin.as_str(), e.weight))
+            .collect()
     }
 
     fn errors<T>(parsed: &Parsed<T>) -> Vec<(usize, &str)> {
-        parsed.errors.iter().map(|e| (e.line, e.message.as_str())).collect()
+        parsed
+            .errors
+            .iter()
+            .map(|e| (e.line, e.message.as_str()))
+            .collect()
     }
 
     #[test]
@@ -889,7 +1021,12 @@ mod tests {
     fn rime_no_comment_line_turns_hash_lines_into_entries() {
         let text = "---\nname: demo\nversion: \"1\"\ncolumns: [text, weight, code]\n...\n# 注释\n# no comment\n#号\t7\tjing hao\n";
         let got = read(text.as_bytes());
-        assert_eq!(items(&got), vec![("#号", "jing hao", 7)], "{:?}", got.parsed.errors);
+        assert_eq!(
+            items(&got),
+            vec![("#号", "jing hao", 7)],
+            "{:?}",
+            got.parsed.errors
+        );
     }
 
     #[test]
@@ -899,26 +1036,44 @@ mod tests {
             "---\nname: main\nversion: \"1\"\nimport_tables:\n  - cn_dicts/base   # 基础词库\n",
             "  # - cn_dicts/off\n  - cn_dicts/missing\n  - cn_dicts/plain\n...\n你好\tni hao\t9\n",
         );
-        let base = "---\nname: base\nversion: \"1\"\n...\n你好\tni hao\t1\n微信\twei xin\t2\n坏\tb@d\n";
-        let got = parse_dictionary_with(main.as_bytes(), &|_| Box::new(Fixed), &|table| match table {
-            "cn_dicts/base" => Some(base.as_bytes().to_vec()),
-            "cn_dicts/plain" => Some("你好\tni hao\n".as_bytes().to_vec()),
-            _ => None,
-        });
+        let base =
+            "---\nname: base\nversion: \"1\"\n...\n你好\tni hao\t1\n微信\twei xin\t2\n坏\tb@d\n";
+        let got = parse_dictionary_with(
+            main.as_bytes(),
+            &|_| Box::new(Fixed),
+            &|table| match table {
+                "cn_dicts/base" => Some(base.as_bytes().to_vec()),
+                "cn_dicts/plain" => Some("你好\tni hao\n".as_bytes().to_vec()),
+                _ => None,
+            },
+        );
         assert_eq!(got.format, Format::Rime);
-        assert_eq!(items(&got), vec![("你好", "ni hao", 9), ("微信", "wei xin", 2)], "重复的词条留最前面的");
+        assert_eq!(
+            items(&got),
+            vec![("你好", "ni hao", 9), ("微信", "wei xin", 2)],
+            "重复的词条留最前面的"
+        );
         assert_eq!(got.tables, 1);
         assert_eq!(
             errors(&got.parsed),
             vec![
                 (0, "cn_dicts/base 第 7 行：拼音无效"),
-                (0, "未找到 cn_dicts/missing.dict.yaml；请检查 import_tables 中的相对路径"),
-                (0, "cn_dicts/plain.dict.yaml 不是 Rime 词典；缺少由 --- 和 ... 包围的文件头"),
+                (
+                    0,
+                    "未找到 cn_dicts/missing.dict.yaml；请检查 import_tables 中的相对路径"
+                ),
+                (
+                    0,
+                    "cn_dicts/plain.dict.yaml 不是 Rime 词典；缺少由 --- 和 ... 包围的文件头"
+                ),
             ]
         );
         // 没有路径可找时（只给了内容）：报出来，不当成功
         let alone = read(main.as_bytes());
-        assert_eq!((alone.parsed.items.len(), alone.parsed.errors.len()), (1, 3));
+        assert_eq!(
+            (alone.parsed.items.len(), alone.parsed.errors.len()),
+            (1, 3)
+        );
     }
 
     #[test]
@@ -938,7 +1093,11 @@ mod tests {
             "qm,3=此致\r\n敬礼\r\nkong,1=\r\n",
         );
         let got = parse_quick_phrases(text.as_bytes());
-        let phrases: Vec<(&str, &str)> = got.items.iter().map(|p| (p.code.as_str(), p.text.as_str())).collect();
+        let phrases: Vec<(&str, &str)> = got
+            .items
+            .iter()
+            .map(|p| (p.code.as_str(), p.text.as_str()))
+            .collect();
         assert_eq!(
             phrases,
             vec![
@@ -960,8 +1119,11 @@ mod tests {
         );
         let got = parse_quick_phrases(text.as_bytes());
         assert!(got.errors.is_empty(), "{:?}", got.errors);
-        let phrases: Vec<(&str, &str, u32)> =
-            got.items.iter().map(|p| (p.code.as_str(), p.text.as_str(), p.weight)).collect();
+        let phrases: Vec<(&str, &str, u32)> = got
+            .items
+            .iter()
+            .map(|p| (p.code.as_str(), p.text.as_str(), p.weight))
+            .collect();
         assert_eq!(phrases[0], ("u", "有", 3));
         assert_eq!(phrases[1], ("yx", "me@example.com", 2));
         assert_eq!((phrases[2].0, phrases[2].1), ("wz", "https://example.com"));
@@ -1000,7 +1162,10 @@ mod tests {
 
     #[test]
     fn sogou_scel() {
-        let bytes = scel_bytes(&[(&[0, 1], "你好", 321), (&[2, 3], "微信", 0)], &["ni", "hao", "wei", "xin"]);
+        let bytes = scel_bytes(
+            &[(&[0, 1], "你好", 321), (&[2, 3], "微信", 0)],
+            &["ni", "hao", "wei", "xin"],
+        );
         let got = read(&bytes);
         assert_eq!(got.format, Format::SogouScel);
         assert_eq!(got.parsed.items.len(), 2, "{:?}", got.parsed.errors);
@@ -1013,9 +1178,14 @@ mod tests {
     #[test]
     fn lexicon_reading_prefers_whole_word_then_chars() {
         let lexicon = "hao\t好\t100\nhao\t号\t50\nni\t你\t90\nni hao\t你好\t800\nhang\t行\t10\nxing\t行\t80\n";
-        let reading = LexiconReading::from_tsv(lexicon, &["你好".into(), "你行".into(), "龘".into()]);
+        let reading =
+            LexiconReading::from_tsv(lexicon, &["你好".into(), "你行".into(), "龘".into()]);
         assert_eq!(reading.pinyin("你好").as_deref(), Some("ni hao"));
-        assert_eq!(reading.pinyin("你行").as_deref(), Some("ni xing"), "多音字取频次高的");
+        assert_eq!(
+            reading.pinyin("你行").as_deref(),
+            Some("ni xing"),
+            "多音字取频次高的"
+        );
         assert_eq!(reading.pinyin("龘"), None);
     }
 
@@ -1024,19 +1194,33 @@ mod tests {
         let sogou = "[header]\ndz,1=北京市海淀区\nyx,2=me@example.com\nyx,1=hi@example.com\n";
         let got = parse_quick_phrases(sogou.as_bytes());
         assert_eq!(got.items.len(), 3, "{:?}", got.errors);
-        assert_eq!((got.items[0].code.as_str(), got.items[0].text.as_str()), ("dz", "北京市海淀区"));
+        assert_eq!(
+            (got.items[0].code.as_str(), got.items[0].text.as_str()),
+            ("dz", "北京市海淀区")
+        );
         assert!(got.items[2].weight > got.items[1].weight, "位置 1 排前面");
         let rime = "北京市\tbj\n上海市\tsh\t5\n";
         let got = parse_quick_phrases(&utf16le(rime, true));
         assert_eq!(got.items.len(), 2, "{:?}", got.errors);
-        assert_eq!((got.items[1].code.as_str(), got.items[1].text.as_str(), got.items[1].weight), ("sh", "上海市", 5));
+        assert_eq!(
+            (
+                got.items[1].code.as_str(),
+                got.items[1].text.as_str(),
+                got.items[1].weight
+            ),
+            ("sh", "上海市", 5)
+        );
         let msime_form = "bj\t北京市\n";
-        assert_eq!(parse_quick_phrases(msime_form.as_bytes()).items[0].text, "北京市");
+        assert_eq!(
+            parse_quick_phrases(msime_form.as_bytes()).items[0].text,
+            "北京市"
+        );
     }
 
     #[test]
     fn text_dictionary_normalizes_tones_and_uppercase() {
-        let got = read("你好\tNi Hǎo\t300\n白色 bai2se4 120\n绿色\tlǜ\tsè\n'nǚ'xiá 女侠\n".as_bytes());
+        let got =
+            read("你好\tNi Hǎo\t300\n白色 bai2se4 120\n绿色\tlǜ\tsè\n'nǚ'xiá 女侠\n".as_bytes());
         assert!(got.parsed.errors.is_empty(), "{:?}", got.parsed.errors);
         let items: Vec<(&str, &str, u32)> = got
             .parsed

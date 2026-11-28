@@ -113,7 +113,11 @@ impl Engine {
         let prefix = model.as_ref().map(|m| m.context_tokens(context));
         let mut first_scores = HashMap::new();
         // Only the best first-character continuations need full inference. Keep personal pairs separately.
-        let keep = if model.is_some() { limit.max(12) } else { limit } + habits.len();
+        let keep = if model.is_some() {
+            limit.max(12)
+        } else {
+            limit
+        } + habits.len();
         let mut top: Vec<(f64, String)> = Vec::new();
         let mut floor = f64::NEG_INFINITY;
         self.lm.next_lifts(&prev, &mut |word, lift| {
@@ -137,10 +141,19 @@ impl Engine {
             }
             let score = match (&model, &prefix) {
                 (Some(model), Some(prefix)) if habit.is_none() => {
-                    let Some(first) = word.chars().next() else { return };
-                    if !model.knows(first) { return; }
-                    let score = *first_scores.entry(first).or_insert_with(|| model.next_char_logprob(prefix, first)) as f64;
-                    if score < -(400.0f64).ln() { return; }
+                    let Some(first) = word.chars().next() else {
+                        return;
+                    };
+                    if !model.knows(first) {
+                        return;
+                    }
+                    let score = *first_scores
+                        .entry(first)
+                        .or_insert_with(|| model.next_char_logprob(prefix, first))
+                        as f64;
+                    if score < -(400.0f64).ln() {
+                        return;
+                    }
                     score
                 }
                 (Some(_), _) => 100.0 + habit.unwrap_or_default(),
@@ -159,8 +172,17 @@ impl Engine {
         // 模型里没有的搭配：只有用户的习惯
         for (word, (bonus, seen)) in &habits {
             if !seen {
-                let ln_freq = prior.log_frequency(word).map_or(UNKNOWN_FREQ.ln(), f64::from);
-                top.push((if model.is_some() { 100.0 + bonus } else { ln_freq + bonus }, (*word).to_string()));
+                let ln_freq = prior
+                    .log_frequency(word)
+                    .map_or(UNKNOWN_FREQ.ln(), f64::from);
+                top.push((
+                    if model.is_some() {
+                        100.0 + bonus
+                    } else {
+                        ln_freq + bonus
+                    },
+                    (*word).to_string(),
+                ));
             }
         }
         if let (Some(model), Some(prefix)) = (&model, &prefix) {
@@ -196,7 +218,9 @@ impl Engine {
         let start = self.start_word();
         let mut need_prune = false;
         if let (Some(prev), Ok(mut pairs)) = (start, self.pairs.write()) {
-            if let Some(change) = pairs.bump(&prev, word, at_ms) { self.note_learning(change); }
+            if let Some(change) = pairs.bump(&prev, word, at_ms) {
+                self.note_learning(change);
+            }
             need_prune = pairs.len() > crate::learn::MAX_USER_PAIRS;
         }
         if need_prune {
@@ -233,7 +257,11 @@ mod tests {
     }
 
     fn texts(engine: &Engine, context: &str) -> Vec<String> {
-        engine.predict_after_at(context, 5, 1000).into_iter().map(|p| p.text).collect()
+        engine
+            .predict_after_at(context, 5, 1000)
+            .into_iter()
+            .map(|p| p.text)
+            .collect()
     }
 
     /// 像用户刚用拼音上屏了「今天」。
@@ -252,7 +280,10 @@ mod tests {
         // 「的」哪儿都常见，在「今天」后面并不比平时多：不出
         assert!(!got.contains(&"的".to_string()), "{got:?}");
         // 词库里没有的词、原词重复不出
-        assert!(!got.contains(&"腊月初九".to_string()) && !got.contains(&"今天".to_string()), "{got:?}");
+        assert!(
+            !got.contains(&"腊月初九".to_string()) && !got.contains(&"今天".to_string()),
+            "{got:?}"
+        );
     }
 
     #[test]
@@ -278,7 +309,10 @@ mod tests {
         }
         assert_eq!(engine.pair_count(), 1);
         // 接着联想：上一个词变成了「开会」
-        assert!(texts(&engine, "今天开会").is_empty(), "模型和习惯里「开会」后面都没有词");
+        assert!(
+            texts(&engine, "今天开会").is_empty(),
+            "模型和习惯里「开会」后面都没有词"
+        );
         commit_today(&engine);
         assert_eq!(texts(&engine, "今天")[0], "开会", "用过两次的搭配排最前");
         // 很久以后热度退了，回到模型的排序

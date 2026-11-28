@@ -165,7 +165,8 @@ impl SyllableGraph {
         if matches!(options.mode, GraphMode::Jianpin | GraphMode::Mixed) {
             build_jianpin_edges(input, &mut edges);
         }
-        if options.typo && kinds != 0 && matches!(options.mode, GraphMode::Full | GraphMode::Mixed) {
+        if options.typo && kinds != 0 && matches!(options.mode, GraphMode::Full | GraphMode::Mixed)
+        {
             build_typo_edges(input, &mut edges, kinds);
         }
         if options.completion && matches!(options.mode, GraphMode::Full | GraphMode::Mixed) {
@@ -191,11 +192,16 @@ impl SyllableGraph {
     /// 模糊输入中的非标准音节（suang、din）也必须进入同一张图；不能当错键或先替换成
     /// 合法音节再模糊一次。每个查询仍携带原声韵，让词库视图按开关匹配并收取原有惩罚。
     pub(crate) fn add_fuzzy_spellings(&mut self, groups: u32) {
-        if groups == 0 { return; }
+        if groups == 0 {
+            return;
+        }
         for start in 0..self.input.len() {
             for end in start + 2..=(start + MAX_SYLLABLE_LEN).min(self.input.len()) {
-                if self.input.forced_between(start, end) { continue; }
-                let text = std::str::from_utf8(&self.input.letters[start..end]).expect("ASCII input");
+                if self.input.forced_between(start, end) {
+                    continue;
+                }
+                let text =
+                    std::str::from_utf8(&self.input.letters[start..end]).expect("ASCII input");
                 if let Some(syllable) = crate::syllable::fuzzy_spelling(text, groups) {
                     add_edge(&mut self.edges, full_edge(start, end, syllable, false));
                 }
@@ -235,9 +241,14 @@ impl SyllableGraph {
     /// 没打全的尾巴（zhon、nih 的 h）补全是帮用户少打几个键；打全了的音节再接长，
     /// 出来的是另一个读音，见 `beam::collect_dfs`。
     pub fn completes_whole_syllable(&self, edge: &Edge) -> bool {
-        edge.completion > 0 && (syllable_of(&self.input.letters[edge.start..edge.end]).is_some()
-            || self.edges[edge.start].iter().any(|exact| exact.end == edge.end && !exact.typo
-                && exact.completion == 0 && matches!(exact.kind, EdgeKind::Full { erhua: false, .. })))
+        edge.completion > 0
+            && (syllable_of(&self.input.letters[edge.start..edge.end]).is_some()
+                || self.edges[edge.start].iter().any(|exact| {
+                    exact.end == edge.end
+                        && !exact.typo
+                        && exact.completion == 0
+                        && matches!(exact.kind, EdgeKind::Full { erhua: false, .. })
+                }))
     }
 
     /// 不靠纠错边、补全边能否走完。
@@ -479,7 +490,9 @@ fn build_typo_edges(input: &ParsedInput, edges: &mut [Vec<Edge>], kinds: u8) {
         }
     }
 
-    if kinds & typo::SWAP == 0 { return; }
+    if kinds & typo::SWAP == 0 {
+        return;
+    }
     // 跨音节对调：交换 k 与 k+1 后，在两者之间切开得到两个音节
     for k in 0..n.saturating_sub(1) {
         if letters[k] == letters[k + 1] || input.forced_between(k, k + 2) {
@@ -710,13 +723,20 @@ mod tests {
         };
         // yin 已经是完整音节：接成 ying 是换了读音；yi 后面的 n 没打全，照常补全
         let yin = completions("yin");
-        let whole: Vec<&str> = yin.iter().filter(|(_, whole)| *whole).map(|(text, _)| text.as_str()).collect();
+        let whole: Vec<&str> = yin
+            .iter()
+            .filter(|(_, whole)| *whole)
+            .map(|(text, _)| text.as_str())
+            .collect();
         assert_eq!(whole, ["ying"], "{yin:?}");
         assert!(yin.contains(&("ni".to_string(), false)), "{yin:?}");
         // zhon、nih 的 h 没打全：补全，不算换读音
         for text in ["zhon", "nih"] {
             let found = completions(text);
-            assert!(!found.is_empty() && found.iter().all(|(_, whole)| !whole), "{text}: {found:?}");
+            assert!(
+                !found.is_empty() && found.iter().all(|(_, whole)| !whole),
+                "{text}: {found:?}"
+            );
         }
         assert!(completions("zhon").contains(&("zhong".to_string(), false)));
     }
@@ -755,11 +775,26 @@ mod tests {
 
     #[test]
     fn typo_kinds_are_independent() {
-        for (input, expected) in [("sahng", typo::SWAP), ("shabg", typo::NEIGHBOR), ("shng", typo::MISSING), ("sjhang", typo::EXTRA)] {
+        for (input, expected) in [
+            ("sahng", typo::SWAP),
+            ("shabg", typo::NEIGHBOR),
+            ("shng", typo::MISSING),
+            ("sjhang", typo::EXTRA),
+        ] {
             let parsed = parse(input).unwrap();
             for kind in [typo::SWAP, typo::NEIGHBOR, typo::MISSING, typo::EXTRA] {
-                let graph = SyllableGraph::build_with_typos(&parsed, GraphOptions { typo: true, ..GraphOptions::default() }, kind);
-                let found = graph.edges_from(0).iter().any(|edge| edge.end == parsed.len() && edge.typo && edge.display() == "shang");
+                let graph = SyllableGraph::build_with_typos(
+                    &parsed,
+                    GraphOptions {
+                        typo: true,
+                        ..GraphOptions::default()
+                    },
+                    kind,
+                );
+                let found = graph
+                    .edges_from(0)
+                    .iter()
+                    .any(|edge| edge.end == parsed.len() && edge.typo && edge.display() == "shang");
                 assert_eq!(found, expected == kind, "{input}, {kind}");
             }
         }

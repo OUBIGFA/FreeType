@@ -408,8 +408,10 @@ fn date_time_follows_trigger_word_even_when_it_is_not_first() {
     let lexicon: Arc<dyn Lexicon> = Arc::new(
         MemoryLexicon::from_tsv_str("shi jian\t事件\t900000\nshi jian\t时间\t500000\n").unwrap(),
     );
-    let engine: &'static Engine =
-        Box::leak(Box::new(Engine::new(lexicon, Arc::new(BigramLm::default()))));
+    let engine: &'static Engine = Box::leak(Box::new(Engine::new(
+        lexicon,
+        Arc::new(BigramLm::default()),
+    )));
     let mut session = with(engine);
     type_keys(&mut session, "shijian");
     assert_eq!(texts(&mut session)[..3], ["时间", "10:20", "10:20:30"]);
@@ -508,7 +510,11 @@ fn calculator() {
     session.append("12345.67");
     assert_eq!(
         texts(&mut session),
-        ["壹万贰仟叁佰肆拾伍元陆角柒分", "一万二千三百四十五点六七", "12345.67"]
+        [
+            "壹万贰仟叁佰肆拾伍元陆角柒分",
+            "一万二千三百四十五点六七",
+            "12345.67"
+        ]
     );
 
     // 全拼时只认小写 v
@@ -643,7 +649,11 @@ fn traditional_learns_the_lexicon_form() {
         type_keys(&mut session, "wanli");
         choose_text(&mut session, "萬");
         let frame = choose_text(&mut session, "裏");
-        assert_eq!(frame.commit.as_deref(), Some("萬裏"), "上屏的是候选显示的字");
+        assert_eq!(
+            frame.commit.as_deref(),
+            Some("萬裏"),
+            "上屏的是候选显示的字"
+        );
     }
     let learned: Vec<String> = engine.user_words().into_iter().map(|(_, w, _)| w).collect();
     assert_eq!(learned, ["万里"], "学的是词库里的写法");
@@ -657,7 +667,10 @@ fn traditional_learns_the_lexicon_form() {
     engine.set_traditional(false);
     let candidates = shown(&engine);
     assert_eq!(candidates[0], "万里", "{candidates:?}");
-    assert!(candidates.iter().all(|c| !c.contains('萬')), "{candidates:?}");
+    assert!(
+        candidates.iter().all(|c| !c.contains('萬')),
+        "{candidates:?}"
+    );
 }
 
 fn with_engine_ref(engine: &Engine) -> Session<'_> {
@@ -793,19 +806,33 @@ fn zero_selects_the_tenth_visible_candidate_on_ten_item_pages() {
     for sym in [keysym::DIGIT_0, keysym::KP_0] {
         for next_page in [false, true] {
             let mut session = with(many_engine());
-            session.configure(Config { page_size: 10, emoji_suggest: false, ..Config::default() });
+            session.configure(Config {
+                page_size: 10,
+                emoji_suggest: false,
+                ..Config::default()
+            });
             type_keys(&mut session, "shi");
-            if next_page { type_keys(&mut session, "<pgdn>"); }
+            if next_page {
+                type_keys(&mut session, "<pgdn>");
+            }
             let shown = shown_texts(&mut session);
             assert_eq!(shown.len(), 10);
             let frame = session.key(&Key::press(sym));
-            assert_eq!(frame.commit.as_ref(), Some(&shown[9]), "0 应选当前页显示的第 10 个候选");
+            assert_eq!(
+                frame.commit.as_ref(),
+                Some(&shown[9]),
+                "0 应选当前页显示的第 10 个候选"
+            );
             assert!(!session.composing());
         }
     }
     let mut session = with(many_engine());
     let frame = type_keys(&mut session, "v10+2<sp>");
-    assert_eq!(frame.commit.as_deref(), Some("12"), "计算器里的 0 仍是数字正文");
+    assert_eq!(
+        frame.commit.as_deref(),
+        Some("12"),
+        "计算器里的 0 仍是数字正文"
+    );
 }
 
 #[test]
@@ -968,7 +995,11 @@ fn cursor_moves_across_pages_but_stops_at_both_ends() {
     assert_eq!(frame.cand_start, 5, "光标移出这一页，跟着翻页");
     assert_eq!(frame.cand_cursor, Some(0));
     let frame = type_keys(&mut session, "<left>");
-    assert_eq!((frame.cand_start, frame.cand_cursor), (0, Some(4)), "往回也跨页");
+    assert_eq!(
+        (frame.cand_start, frame.cand_cursor),
+        (0, Some(4)),
+        "往回也跨页"
+    );
 
     // 第一个往左：停在第一个，不绕到末页的生僻字；吃掉，不交给应用
     let (mut session, _) = default_paged();
@@ -1292,24 +1323,37 @@ fn composed_word_is_learned_after_second_use() {
         ))
         .unwrap(),
     );
-    let engine: &'static Engine =
-        Box::leak(Box::new(Engine::new(lexicon, Arc::new(BigramLm::default()))));
+    let engine: &'static Engine = Box::leak(Box::new(Engine::new(
+        lexicon,
+        Arc::new(BigramLm::default()),
+    )));
 
     let mut session = with(engine);
     type_keys(&mut session, "shuangpinge");
-    assert_ne!(texts(&mut session).first().map(String::as_str), Some("霜频阁"));
+    assert_ne!(
+        texts(&mut session).first().map(String::as_str),
+        Some("霜频阁")
+    );
     for use_no in 1..=2 {
-        if use_no == 2 { type_keys(&mut session, "shuangpinge"); }
+        if use_no == 2 {
+            type_keys(&mut session, "shuangpinge");
+        }
         choose_text(&mut session, "霜");
         choose_text(&mut session, "频");
         let frame = choose_text(&mut session, "阁");
         assert_eq!(frame.commit.as_deref(), Some("霜频阁"));
-        assert_eq!(engine.user_words().iter().any(|(_, w, _)| w == "霜频阁"), use_no == 2);
+        assert_eq!(
+            engine.user_words().iter().any(|(_, w, _)| w == "霜频阁"),
+            use_no == 2
+        );
     }
 
     let mut again = with(engine);
     type_keys(&mut again, "shuangpinge");
-    assert_eq!(texts(&mut again).first().map(String::as_str), Some("霜频阁"));
+    assert_eq!(
+        texts(&mut again).first().map(String::as_str),
+        Some("霜频阁")
+    );
 
     // 超过四个字的是整句，不会一次就进词库
     let mut long = with(engine);
@@ -1321,7 +1365,10 @@ fn composed_word_is_learned_after_second_use() {
     let frame = choose_text(&mut long, "门");
     assert_eq!(frame.commit.as_deref(), Some("窝门区窝门"));
     assert!(
-        !engine.user_words().iter().any(|(_, w, _)| w == "窝门区窝门"),
+        !engine
+            .user_words()
+            .iter()
+            .any(|(_, w, _)| w == "窝门区窝门"),
         "整句不该一次就进词库：{:?}",
         engine.user_words()
     );
@@ -1509,7 +1556,10 @@ fn brackets_pick_first_or_last_char() {
     assert!(frame.preedit.is_empty());
 
     let mut session = with(engine());
-    assert_eq!(type_keys(&mut session, "kaixin]").commit.as_deref(), Some("心"));
+    assert_eq!(
+        type_keys(&mut session, "kaixin]").commit.as_deref(),
+        Some("心")
+    );
 
     // 光标挪到第二个候选：取它的字
     let mut session = with(engine());
@@ -1530,13 +1580,20 @@ fn brackets_pick_first_or_last_char() {
     let frame = type_keys(&mut session, "]");
     assert_eq!(frame.commit, None);
     assert_eq!(session.selected_text(), "好");
-    assert_eq!(type_keys(&mut session, "<sp>").commit.as_deref(), Some("好中国"));
+    assert_eq!(
+        type_keys(&mut session, "<sp>").commit.as_deref(),
+        Some("好中国")
+    );
 
     // 取出来的字不记选词：你好没学过，不会因为按了 [ 变成用户词
     let engine = engine();
     let mut session = with(engine);
     type_keys(&mut session, "nihao[");
-    assert!(engine.user_words().is_empty(), "以词定字不学词：{:?}", engine.user_words());
+    assert!(
+        engine.user_words().is_empty(),
+        "以词定字不学词：{:?}",
+        engine.user_words()
+    );
 }
 
 #[test]
@@ -1623,10 +1680,17 @@ fn caret_edits_pinyin() {
     // #129：左右键在拼音里移动光标，字母插在光标处，退格删光标前一个；到了两头吃掉，不去挑候选
     let mut session = caret_session();
     let frame = type_keys(&mut session, "nihao");
-    assert_eq!(frame.preedit_cursor, frame.preedit.len(), "一开始光标在末尾");
+    assert_eq!(
+        frame.preedit_cursor,
+        frame.preedit.len(),
+        "一开始光标在末尾"
+    );
     let first = frame.cand_cursor;
     let frame = type_keys(&mut session, "<right>");
-    assert!(frame.handled && frame.cand_cursor == first, "末尾的右键吃掉，候选不动");
+    assert!(
+        frame.handled && frame.cand_cursor == first,
+        "末尾的右键吃掉，候选不动"
+    );
 
     let frame = type_keys(&mut session, "<left><left><left>");
     assert_eq!(
@@ -1674,7 +1738,12 @@ fn caret_resets_after_choosing_a_word() {
     type_keys(&mut session, "nihaoshijie<left><left>");
     choose_text(&mut session, "你好");
     let frame = session.frame(true);
-    assert_eq!(frame.preedit_cursor, frame.preedit.len(), "{}", frame.preedit);
+    assert_eq!(
+        frame.preedit_cursor,
+        frame.preedit.len(),
+        "{}",
+        frame.preedit
+    );
     type_keys(&mut session, "a");
     assert_eq!(session.remaining(), "shijiea");
 }
@@ -1685,7 +1754,11 @@ fn caret_resets_when_switching_back_to_candidates() {
     type_keys(&mut session, "nihao<left><left>");
     session.configure(Config::default());
     let frame = session.frame(true);
-    assert_eq!(frame.preedit_cursor, frame.preedit.len(), "换回挑候选：光标回到末尾");
+    assert_eq!(
+        frame.preedit_cursor,
+        frame.preedit.len(),
+        "换回挑候选：光标回到末尾"
+    );
     type_keys(&mut session, "x");
     assert_eq!(session.input(), "nihaox");
 }
@@ -1703,7 +1776,11 @@ fn caret_shuangpin_shows_keys() {
         ..Config::default()
     });
     let frame = type_keys(&mut session, "vsgo");
-    assert!(frame.preedit.contains("zhong"), "光标在末尾时照常显示全拼：{}", frame.preedit);
+    assert!(
+        frame.preedit.contains("zhong"),
+        "光标在末尾时照常显示全拼：{}",
+        frame.preedit
+    );
     let frame = type_keys(&mut session, "<left>");
     assert_eq!(frame.preedit, "vsgo");
     assert_eq!(frame.preedit_cursor, 3);

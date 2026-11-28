@@ -218,7 +218,9 @@ fn fuzzy_table() -> &'static [(u32, u32)] {
             }
             (part, 0)
         }
-        let mut table: Vec<(u32, u32)> = SYLLABLES.iter().copied()
+        let mut table: Vec<(u32, u32)> = SYLLABLES
+            .iter()
+            .copied()
             .chain(fuzzy_spellings().iter().map(String::as_str))
             .enumerate()
             .map(|(i, text)| match split_parts(text) {
@@ -260,8 +262,15 @@ fn fuzzy_table() -> &'static [(u32, u32)] {
 fn fuzzy_spellings() -> &'static [String] {
     static SPELLINGS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
     SPELLINGS.get_or_init(|| {
-        let mut values: Vec<_> = INITIALS.iter().copied().chain(std::iter::once(""))
-            .flat_map(|initial| FINALS.iter().map(move |final_| format!("{initial}{final_}")))
+        let mut values: Vec<_> = INITIALS
+            .iter()
+            .copied()
+            .chain(std::iter::once(""))
+            .flat_map(|initial| {
+                FINALS
+                    .iter()
+                    .map(move |final_| format!("{initial}{final_}"))
+            })
             .filter(|text| text.len() <= MAX_SYLLABLE_LEN && id_of(text).is_none())
             .collect();
         values.sort();
@@ -272,14 +281,27 @@ fn fuzzy_spellings() -> &'static [String] {
 
 /// 只有打开的模糊音组能把该写法对应到合法音节时，才让它参与查询。
 pub(crate) fn fuzzy_spelling(text: &str, groups: u32) -> Option<Syllable> {
-    if groups == 0 || id_of(text).is_some() { return None; }
-    let index = fuzzy_spellings().binary_search_by(|s| s.as_str().cmp(text)).ok()?;
+    if groups == 0 || id_of(text).is_some() {
+        return None;
+    }
+    let index = fuzzy_spellings()
+        .binary_search_by(|s| s.as_str().cmp(text))
+        .ok()?;
     let id = (SYLLABLES.len() + index) as SyllableId;
-    if !(0..SYLLABLES.len()).any(|valid| fuzzy_groups_between(id, valid as SyllableId)
-        .is_some_and(|needed| needed != 0 && needed & !groups == 0)) { return None; }
+    if !(0..SYLLABLES.len()).any(|valid| {
+        fuzzy_groups_between(id, valid as SyllableId)
+            .is_some_and(|needed| needed != 0 && needed & !groups == 0)
+    }) {
+        return None;
+    }
     let text = fuzzy_spellings()[index].as_str();
     let (initial, final_) = split_parts(text)?;
-    Some(Syllable { id, text, initial, final_ })
+    Some(Syllable {
+        id,
+        text,
+        initial,
+        final_,
+    })
 }
 
 /// 音节在「全部模糊音分组都打开」时的归并键。
@@ -395,10 +417,25 @@ impl Syllable {
     pub fn from_id(id: SyllableId) -> Option<Self> {
         // 每份词库反复使用同一组音节，只拆分一次声母和韵母。
         static TABLE: std::sync::OnceLock<Vec<Option<Syllable>>> = std::sync::OnceLock::new();
-        TABLE.get_or_init(|| SYLLABLES.iter().enumerate().map(|(id, &text)| {
-            let (initial, final_) = split(text)?;
-            Some(Syllable { id: id as SyllableId, text, initial, final_ })
-        }).collect()).get(id as usize).copied().flatten()
+        TABLE
+            .get_or_init(|| {
+                SYLLABLES
+                    .iter()
+                    .enumerate()
+                    .map(|(id, &text)| {
+                        let (initial, final_) = split(text)?;
+                        Some(Syllable {
+                            id: id as SyllableId,
+                            text,
+                            initial,
+                            final_,
+                        })
+                    })
+                    .collect()
+            })
+            .get(id as usize)
+            .copied()
+            .flatten()
     }
 
     /// 首字母（简拼用的那一维）。
@@ -426,9 +463,14 @@ impl SyllableQuery {
     pub fn display(self) -> String {
         match self {
             Self::Full { id, erhua } => {
-                let text = Syllable::from_id(id).map(|s| s.text)
-                    .or_else(|| (id as usize).checked_sub(SYLLABLES.len())
-                        .and_then(|index| fuzzy_spellings().get(index)).map(String::as_str))
+                let text = Syllable::from_id(id)
+                    .map(|s| s.text)
+                    .or_else(|| {
+                        (id as usize)
+                            .checked_sub(SYLLABLES.len())
+                            .and_then(|index| fuzzy_spellings().get(index))
+                            .map(String::as_str)
+                    })
                     .unwrap_or("?");
                 if erhua {
                     format!("{text}r")
@@ -712,7 +754,15 @@ mod tests {
         assert_eq!(Syllable::from_text("lue").map(|s| s.text), Some("lve"));
         assert_eq!(split("nue"), Some(("n", "ve")));
         // j q x y 后面的 ü 用 v 打：和 u 是同一个音节
-        for (v, u) in [("jv", "ju"), ("qv", "qu"), ("xv", "xu"), ("yv", "yu"), ("qvan", "quan"), ("xve", "xue"), ("jvn", "jun")] {
+        for (v, u) in [
+            ("jv", "ju"),
+            ("qv", "qu"),
+            ("xv", "xu"),
+            ("yv", "yu"),
+            ("qvan", "quan"),
+            ("xve", "xue"),
+            ("jvn", "jun"),
+        ] {
             assert_eq!(id_of(v), id_of(u), "{v} 应等于 {u}");
         }
         // l、n 后面的 v 不动：lv（绿）和 lu（路）是两个音节

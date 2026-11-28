@@ -24,13 +24,23 @@ pub(crate) fn write_atomic(path: &Path, data: impl AsRef<[u8]>) -> std::io::Resu
     use std::io::Write;
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
-    let filename = path.file_name().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "缺少文件名"))?;
+    let filename = path
+        .file_name()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "缺少文件名"))?;
     let (temporary, mut file) = loop {
         let mut name = std::ffi::OsString::from(".");
         name.push(filename);
-        name.push(format!(".{}-{}.tmp", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        name.push(format!(
+            ".{}-{}.tmp",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
         let temporary = path.with_file_name(name);
-        match std::fs::OpenOptions::new().write(true).create_new(true).open(&temporary) {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+        {
             Ok(file) => break (temporary, file),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(e),
@@ -41,7 +51,10 @@ pub(crate) fn write_atomic(path: &Path, data: impl AsRef<[u8]>) -> std::io::Resu
     let result = result.and_then(|()| std::fs::rename(&temporary, path));
     if let Err(error) = result {
         if let Err(cleanup) = std::fs::remove_file(&temporary) {
-            return Err(std::io::Error::new(error.kind(), format!("{error}；临时文件清理失败：{cleanup}")));
+            return Err(std::io::Error::new(
+                error.kind(),
+                format!("{error}；临时文件清理失败：{cleanup}"),
+            ));
         }
         return Err(error);
     }
@@ -71,7 +84,11 @@ pub(crate) struct NewWord {
 
 /// 保存改动前后的值；撤销只还原仍是 after 的记录，不覆盖其他会话的新选择。
 pub(crate) enum Change {
-    Boundary(String, Option<(Vec<(String,String)>,u64)>, (Vec<(String,String)>,u64)),
+    Boundary(
+        String,
+        Option<(Vec<(String, String)>, u64)>,
+        (Vec<(String, String)>, u64),
+    ),
     Word(String, Option<HistoryEntry>, HistoryEntry),
     Pair(String, String, Option<HistoryEntry>, HistoryEntry),
     UserWord(String, Option<(String, f64)>, (String, f64)),
@@ -86,7 +103,9 @@ pub(crate) struct Journal {
 }
 
 impl Journal {
-    pub fn mark(&self) -> u64 { self.first + self.changes.len() as u64 }
+    pub fn mark(&self) -> u64 {
+        self.first + self.changes.len() as u64
+    }
 
     pub fn push(&mut self, change: Change) {
         self.changes.push_back(Some(change));
@@ -97,8 +116,13 @@ impl Journal {
     }
 
     pub fn take(&mut self, start: u64, end: u64) -> Vec<Change> {
-        if start < self.first { return Vec::new(); }
-        (start..end.min(self.mark())).rev().filter_map(|seq| self.changes[(seq - self.first) as usize].take()).collect()
+        if start < self.first {
+            return Vec::new();
+        }
+        (start..end.min(self.mark()))
+            .rev()
+            .filter_map(|seq| self.changes[(seq - self.first) as usize].take())
+            .collect()
     }
 
     pub fn clear(&mut self) {
@@ -120,8 +144,12 @@ impl LearningSnapshot {
     pub fn save(self, dict: &Path, history: &Path) -> Result<()> {
         write_atomic(dict, &crate::lexicon::user_dict_text(&self.user_words))
             .context("保存学习词条")?;
-        write_atomic(history, &(history_text(&self.words, &self.pairs, &self.pending)+&boundary_text(&self.boundaries)))
-            .context("保存输入习惯")?;
+        write_atomic(
+            history,
+            &(history_text(&self.words, &self.pairs, &self.pending)
+                + &boundary_text(&self.boundaries)),
+        )
+        .context("保存输入习惯")?;
         Ok(())
     }
 }
@@ -169,17 +197,44 @@ impl Engine {
         let mut changed = false;
         for change in changes {
             changed |= match change {
-                Change::Boundary(key,before,after)=>{
-                    let mut rows=self.boundaries.write().unwrap();
-                    if rows.get(&key)!=Some(&after){false}else{if let Some(value)=before{rows.insert(key,value);}else{rows.remove(&key);}true}
+                Change::Boundary(key, before, after) => {
+                    let mut rows = self.boundaries.write().unwrap();
+                    if rows.get(&key) != Some(&after) {
+                        false
+                    } else {
+                        if let Some(value) = before {
+                            rows.insert(key, value);
+                        } else {
+                            rows.remove(&key);
+                        }
+                        true
+                    }
                 }
-                Change::Word(word, before, after) => restore_entry(&mut self.history.write().unwrap(), word, before, Some(after)),
-                Change::Pair(prev, word, before, after) => self.pairs.write().unwrap().restore(prev, word, before, after),
-                Change::UserWord(word, before, after) => self.lexicon.restore_word(&word, before, after),
-                Change::Pending(word, before, after) => restore_entry(&mut self.pending_words.write().unwrap(), word, before, after),
+                Change::Word(word, before, after) => restore_entry(
+                    &mut self.history.write().unwrap(),
+                    word,
+                    before,
+                    Some(after),
+                ),
+                Change::Pair(prev, word, before, after) => self
+                    .pairs
+                    .write()
+                    .unwrap()
+                    .restore(prev, word, before, after),
+                Change::UserWord(word, before, after) => {
+                    self.lexicon.restore_word(&word, before, after)
+                }
+                Change::Pending(word, before, after) => restore_entry(
+                    &mut self.pending_words.write().unwrap(),
+                    word,
+                    before,
+                    after,
+                ),
                 Change::Last(before, after) => {
                     let mut current = self.last_word.write().unwrap();
-                    if *current != after { continue; }
+                    if *current != after {
+                        continue;
+                    }
                     *current = before;
                     true
                 }
@@ -189,9 +244,20 @@ impl Engine {
     }
 }
 
-fn restore_entry<T: PartialEq>(entries: &mut HashMap<String, T>, key: String, before: Option<T>, after: Option<T>) -> bool {
-    if entries.get(&key) != after.as_ref() { return false; }
-    if let Some(before) = before { entries.insert(key, before); } else { entries.remove(&key); }
+fn restore_entry<T: PartialEq>(
+    entries: &mut HashMap<String, T>,
+    key: String,
+    before: Option<T>,
+    after: Option<T>,
+) -> bool {
+    if entries.get(&key) != after.as_ref() {
+        return false;
+    }
+    if let Some(before) = before {
+        entries.insert(key, before);
+    } else {
+        entries.remove(&key);
+    }
     true
 }
 
@@ -214,17 +280,17 @@ pub fn decayed(entry: HistoryEntry, at_ms: u64) -> f64 {
 
 /// 热度保留小数，避免半次再次使用时被永久进位成一次。
 pub(crate) fn bumped(before: Option<HistoryEntry>, at_ms: u64) -> HistoryEntry {
-    HistoryEntry { count: before.map_or(0.0, |entry| decayed(entry, at_ms)) + 1.0, last_used_ms: at_ms }
+    HistoryEntry {
+        count: before.map_or(0.0, |entry| decayed(entry, at_ms)) + 1.0,
+        last_used_ms: at_ms,
+    }
 }
 
 fn clean_token(s: &str) -> bool {
     !s.trim().is_empty() && !s.contains(['\t', '\n', '\r'])
 }
 
-fn reference_clocks(
-    words: &HashMap<String, HistoryEntry>,
-    pairs: &UserPairs,
-) -> (u64, u64) {
+fn reference_clocks(words: &HashMap<String, HistoryEntry>, pairs: &UserPairs) -> (u64, u64) {
     let mut max_real = 0u64;
     let mut max_synth = 0u64;
     for ts in words
@@ -274,9 +340,7 @@ fn pruned_with_limits(
     let mut kept_words: Vec<(String, HistoryEntry)> = words
         .iter()
         .filter(|(w, e)| {
-            clean_token(w)
-                && e.count > 0.0
-                && entry_heat(**e, max_real, max_synth) >= MIN_KEEP_HEAT
+            clean_token(w) && e.count > 0.0 && entry_heat(**e, max_real, max_synth) >= MIN_KEEP_HEAT
         })
         .map(|(w, e)| (w.clone(), *e))
         .collect();
@@ -339,20 +403,33 @@ impl UserPairs {
     }
 
     pub(crate) fn bump(&mut self, prev: &str, cur: &str, at_ms: u64) -> Option<Change> {
-        if prev.is_empty() || cur.is_empty() { return None; }
+        if prev.is_empty() || cur.is_empty() {
+            return None;
+        }
         let before = self.get(prev, cur);
         let after = bumped(before, at_ms);
         self.insert(prev.to_owned(), cur.to_owned(), after);
         Some(Change::Pair(prev.to_owned(), cur.to_owned(), before, after))
     }
 
-    pub(crate) fn restore(&mut self, prev: String, cur: String, before: Option<HistoryEntry>, after: HistoryEntry) -> bool {
-        if self.get(&prev, &cur) != Some(after) { return false; }
+    pub(crate) fn restore(
+        &mut self,
+        prev: String,
+        cur: String,
+        before: Option<HistoryEntry>,
+        after: HistoryEntry,
+    ) -> bool {
+        if self.get(&prev, &cur) != Some(after) {
+            return false;
+        }
         if let Some(entry) = before {
             self.insert(prev, cur, entry);
-        } else if let std::collections::hash_map::Entry::Occupied(mut words) = self.map.entry(prev) {
+        } else if let std::collections::hash_map::Entry::Occupied(mut words) = self.map.entry(prev)
+        {
             words.get_mut().remove(&cur);
-            if words.get().is_empty() { words.remove(); }
+            if words.get().is_empty() {
+                words.remove();
+            }
         }
         true
     }
@@ -458,33 +535,52 @@ pub(crate) fn history_text(
     for (word, entry) in words {
         out.push_str(&format!(
             "w\t{word}\t{}\t{}\n",
-            heat_text(entry.count), entry.last_used_ms
+            heat_text(entry.count),
+            entry.last_used_ms
         ));
     }
     for (prev, cur, entry) in pairs {
         out.push_str(&format!(
             "p\t{prev}\t{cur}\t{}\t{}\n",
-            heat_text(entry.count), entry.last_used_ms
+            heat_text(entry.count),
+            entry.last_used_ms
         ));
     }
     let now_ms = crate::now_ms();
-    let mut pending: Vec<_> = pending.iter().filter(|(word, record)| {
-        clean_token(word) && clean_token(&record.pinyin)
-            && now_ms.saturating_sub(record.first_ms) <= NEW_WORD_TTL_MS
-    }).collect();
+    let mut pending: Vec<_> = pending
+        .iter()
+        .filter(|(word, record)| {
+            clean_token(word)
+                && clean_token(&record.pinyin)
+                && now_ms.saturating_sub(record.first_ms) <= NEW_WORD_TTL_MS
+        })
+        .collect();
     pending.sort_unstable_by_key(|(word, _)| *word);
     for (word, record) in pending {
-        out.push_str(&format!("n\t{word}\t{}\t{}\n", record.pinyin, record.first_ms));
+        out.push_str(&format!(
+            "n\t{word}\t{}\t{}\n",
+            record.pinyin, record.first_ms
+        ));
     }
     out
 }
 
 fn heat_text(heat: f64) -> String {
-    format!("{heat:.3}").trim_end_matches('0').trim_end_matches('.').to_owned()
+    format!("{heat:.3}")
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_owned()
 }
 
-pub(crate) fn boundary_text(rows:&crate::sentence::Boundaries)->String {
-    if rows.is_empty(){String::new()}else{format!("b\t{}\n",serde_json::to_string(rows).expect("boundary text"))}
+pub(crate) fn boundary_text(rows: &crate::sentence::Boundaries) -> String {
+    if rows.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "b\t{}\n",
+            serde_json::to_string(rows).expect("boundary text")
+        )
+    }
 }
 
 /// 读回输入习惯。允许旧整数热度和新版小数；整份文件无法识别时通知调用方留底。
@@ -507,11 +603,18 @@ pub(crate) fn load_history<P: AsRef<Path>>(
         let parts: Vec<&str> = line.split('\t').collect();
         let entry = |count: &str, last: &str| -> Option<HistoryEntry> {
             let count: f64 = count.parse().ok()?;
-            if !count.is_finite() || !(0.0..=f64::from(u32::MAX)).contains(&count) { return None; }
-            Some(HistoryEntry { count, last_used_ms: last.parse().ok()? })
+            if !count.is_finite() || !(0.0..=f64::from(u32::MAX)).contains(&count) {
+                return None;
+            }
+            Some(HistoryEntry {
+                count,
+                last_used_ms: last.parse().ok()?,
+            })
         };
         match parts.as_slice() {
-            ["b", value] if serde_json::from_str::<crate::sentence::Boundaries>(value).is_ok()=>{loaded+=1;}
+            ["b", value] if serde_json::from_str::<crate::sentence::Boundaries>(value).is_ok() => {
+                loaded += 1;
+            }
             ["w", word, count, last] if !word.is_empty() => {
                 if let Some(e) = entry(count, last) {
                     words.insert((*word).to_string(), e);
@@ -526,8 +629,16 @@ pub(crate) fn load_history<P: AsRef<Path>>(
             }
             ["n", word, pinyin, timestamp] if clean_token(word) && clean_token(pinyin) => {
                 if let Ok(first_ms) = timestamp.parse() {
-                    if pending.len() < MAX_HISTORY_WORDS && now_ms.saturating_sub(first_ms) <= NEW_WORD_TTL_MS {
-                        pending.insert((*word).into(), NewWord { pinyin: (*pinyin).into(), first_ms });
+                    if pending.len() < MAX_HISTORY_WORDS
+                        && now_ms.saturating_sub(first_ms) <= NEW_WORD_TTL_MS
+                    {
+                        pending.insert(
+                            (*word).into(),
+                            NewWord {
+                                pinyin: (*pinyin).into(),
+                                first_ms,
+                            },
+                        );
                     }
                     loaded += 1;
                 }
@@ -588,7 +699,14 @@ mod tests {
         let mut pairs = UserPairs::default();
         pairs.learn("发", "给", 7);
         let at_ms = crate::now_ms();
-        let mut pending: HashMap<String, NewWord> = [("霜频阁".into(), NewWord { pinyin: "shuang pin ge".into(), first_ms: at_ms })].into();
+        let mut pending: HashMap<String, NewWord> = [(
+            "霜频阁".into(),
+            NewWord {
+                pinyin: "shuang pin ge".into(),
+                first_ms: at_ms,
+            },
+        )]
+        .into();
         write_atomic(&path, &history_text(&words, &pairs, &pending)).unwrap();
 
         let mut w2 = HashMap::new();
@@ -665,7 +783,10 @@ mod tests {
         let (kept_w, kept_p) = pruned_history_and_pairs(&words, &pairs);
         let word_names: Vec<_> = kept_w.iter().map(|(w, _)| w.as_str()).collect();
         assert_eq!(word_names, vec!["新词A", "新词B", "高频旧词"]);
-        let pair_names: Vec<_> = kept_p.iter().map(|(p, c, _)| (p.as_str(), c.as_str())).collect();
+        let pair_names: Vec<_> = kept_p
+            .iter()
+            .map(|(p, c, _)| (p.as_str(), c.as_str()))
+            .collect();
         assert_eq!(pair_names, vec![("常", "用"), ("次", "新")]);
 
         // 再验证容量上限裁剪：只保留热度最高的条目
@@ -673,6 +794,9 @@ mod tests {
         let capped_word_names: Vec<_> = capped_w.iter().map(|(w, _)| w.as_str()).collect();
         assert_eq!(capped_word_names, vec!["新词A", "新词B"]);
         assert_eq!(capped_p.len(), 1);
-        assert_eq!((capped_p[0].0.as_str(), capped_p[0].1.as_str()), ("常", "用"));
+        assert_eq!(
+            (capped_p[0].0.as_str(), capped_p[0].1.as_str()),
+            ("常", "用")
+        );
     }
 }

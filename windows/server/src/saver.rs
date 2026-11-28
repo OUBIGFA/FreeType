@@ -29,8 +29,12 @@ impl Saver {
     pub fn enqueue(&mut self, slot: &'static str, job: Job) -> Result<(), String> {
         if self.worker.is_none() {
             let shared = self.shared.clone();
-            self.worker = Some(std::thread::Builder::new().name("freetype-save".into())
-                .spawn(move || run(&shared)).map_err(|error| format!("无法启动保存线程：{error}"))?);
+            self.worker = Some(
+                std::thread::Builder::new()
+                    .name("freetype-save".into())
+                    .spawn(move || run(&shared))
+                    .map_err(|error| format!("无法启动保存线程：{error}"))?,
+            );
         }
         self.shared.state.lock().unwrap().queue.insert(slot, job);
         self.shared.ready.notify_all();
@@ -41,7 +45,11 @@ impl Saver {
     pub fn result(&self, wait: bool) -> Result<(), String> {
         let mut state = self.shared.state.lock().unwrap();
         if wait {
-            state = self.shared.ready.wait_while(state, |state| state.running || !state.queue.is_empty()).unwrap();
+            state = self
+                .shared
+                .ready
+                .wait_while(state, |state| state.running || !state.queue.is_empty())
+                .unwrap();
         }
         state.error.take().map_or(Ok(()), Err)
     }
@@ -62,8 +70,13 @@ fn run(shared: &Shared) {
     loop {
         let job = {
             let state = shared.state.lock().unwrap();
-            let mut state = shared.ready.wait_while(state, |s| s.queue.is_empty() && !s.stop).unwrap();
-            let Some((_, job)) = state.queue.pop_first() else { return; };
+            let mut state = shared
+                .ready
+                .wait_while(state, |s| s.queue.is_empty() && !s.stop)
+                .unwrap();
+            let Some((_, job)) = state.queue.pop_first() else {
+                return;
+            };
             state.running = true;
             job
         };
@@ -71,7 +84,9 @@ fn run(shared: &Shared) {
             .unwrap_or_else(|_| Err("后台保存发生内部错误".into()));
         let mut state = shared.state.lock().unwrap();
         state.running = false;
-        if let Err(error) = result { state.error = Some(error); }
+        if let Err(error) = result {
+            state.error = Some(error);
+        }
         shared.ready.notify_all();
     }
 }
@@ -87,16 +102,29 @@ mod tests {
         let mut saver = Saver::default();
         let (ready_tx, ready_rx) = channel();
         let (go_tx, go_rx) = channel();
-        saver.enqueue("gate", Box::new(move || {
-            ready_tx.send(()).unwrap();
-            go_rx.recv().unwrap();
-            Ok(())
-        })).unwrap();
+        saver
+            .enqueue(
+                "gate",
+                Box::new(move || {
+                    ready_tx.send(()).unwrap();
+                    go_rx.recv().unwrap();
+                    Ok(())
+                }),
+            )
+            .unwrap();
         ready_rx.recv().unwrap();
         let (tx, rx) = channel();
         for n in 1..=3 {
             let tx = tx.clone();
-            saver.enqueue("same", Box::new(move || { tx.send(n).unwrap(); Ok(()) })).unwrap();
+            saver
+                .enqueue(
+                    "same",
+                    Box::new(move || {
+                        tx.send(n).unwrap();
+                        Ok(())
+                    }),
+                )
+                .unwrap();
         }
         go_tx.send(()).unwrap();
         saver.result(true).unwrap();

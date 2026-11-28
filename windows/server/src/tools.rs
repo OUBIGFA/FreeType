@@ -72,10 +72,15 @@ pub enum Outcome {
     English,
     Radical,
     /// 面板还开着（数据可能要重算：搜索词变了、换了页）。
-    Stay { refresh: bool },
+    Stay {
+        refresh: bool,
+    },
     Close,
     /// 上屏这段文字并关掉面板；`emoji`：记进最近用过的 emoji。
-    Commit { text: String, emoji: bool },
+    Commit {
+        text: String,
+        emoji: bool,
+    },
     /// 关掉面板，这个键交给应用。
     Pass,
 }
@@ -143,17 +148,23 @@ impl Tool {
         };
         self.items = match self.page {
             Page::Menu => MENU.iter().map(|m| item(m)).collect(),
-            Page::Clipboard => wowtype_core::clipboard::history().iter().map(|t| item(t)).collect(),
+            Page::Clipboard => wowtype_core::clipboard::history()
+                .iter()
+                .map(|t| item(t))
+                .collect(),
             Page::Phrases => sources.phrases.iter().map(|text| item(text)).collect(),
-            Page::Symbols if self.query.is_empty() => {
-                wowtype_core::symbols::SYMBOLS.iter().map(|s| item(s.text)).collect()
-            }
+            Page::Symbols if self.query.is_empty() => wowtype_core::symbols::SYMBOLS
+                .iter()
+                .map(|s| item(s.text))
+                .collect(),
             Page::Symbols | Page::Emoji => {
                 let mut out: Vec<Item> = Vec::new();
                 if self.page == Page::Emoji && self.query.is_empty() {
                     out.extend(sources.recent.iter().map(|e| item(e)));
                 }
-                for text in wowtype_core::emoji::panel_search(sources.engine, &self.query, MAX_EMOJI) {
+                for text in
+                    wowtype_core::emoji::panel_search(sources.engine, &self.query, MAX_EMOJI)
+                {
                     if !out.iter().any(|i| i.commit == text) {
                         out.push(item(&text));
                     }
@@ -187,8 +198,12 @@ impl Tool {
             return Outcome::Stay { refresh: false };
         };
         if self.page == Page::Menu {
-            if index == 4 { return Outcome::English; }
-            if index == 5 { return Outcome::Radical; }
+            if index == 4 {
+                return Outcome::English;
+            }
+            if index == 5 {
+                return Outcome::Radical;
+            }
             self.page = match index {
                 0 => Page::Clipboard,
                 1 => Page::Phrases,
@@ -263,7 +278,9 @@ impl Tool {
         let sym = key.keysym;
         let digit = match sym {
             0x31..=0x39 => Some((sym - 0x30) as usize),
-            s if (keysym::KP_0 + 1..=keysym::KP_9).contains(&s) => Some((s - keysym::KP_0) as usize),
+            s if (keysym::KP_0 + 1..=keysym::KP_9).contains(&s) => {
+                Some((s - keysym::KP_0) as usize)
+            }
             _ => None,
         };
         let columns = if self.grid() { GRID_COLS } else { 1 };
@@ -314,7 +331,9 @@ impl Tool {
                     return Outcome::Stay { refresh: false };
                 }
                 if self.searchable() {
-                    if let Some(c) = char::from_u32(sym).filter(|c| c.is_ascii_alphabetic() || *c == '\'') {
+                    if let Some(c) =
+                        char::from_u32(sym).filter(|c| c.is_ascii_alphabetic() || *c == '\'')
+                    {
                         self.query.push(c.to_ascii_lowercase());
                         self.refresh(sources);
                         return Outcome::Stay { refresh: true };
@@ -328,10 +347,14 @@ impl Tool {
     fn title(&self) -> String {
         let base = match self.page {
             Page::Menu => "工具栏".to_string(),
-            Page::Clipboard if !self.clipboard_on => "剪贴板 · 在实用功能中开启「记录剪贴板历史」后可用".to_string(),
+            Page::Clipboard if !self.clipboard_on => {
+                "剪贴板 · 在实用功能中开启「记录剪贴板历史」后可用".to_string()
+            }
             Page::Clipboard if self.items.is_empty() => "剪贴板 · 还没有记录".to_string(),
             Page::Clipboard => "剪贴板".to_string(),
-            Page::Phrases if self.items.is_empty() => "常用语 · 请在常用语设置页添加内容".to_string(),
+            Page::Phrases if self.items.is_empty() => {
+                "常用语 · 请在常用语设置页添加内容".to_string()
+            }
             Page::Phrases => "常用语".to_string(),
             Page::Symbols => "符号 · 输入拼音或英文搜索".to_string(),
             Page::Emoji => "表情 · 输入拼音或英文搜索".to_string(),
@@ -339,8 +362,16 @@ impl Tool {
         if self.query.is_empty() {
             base
         } else {
-            let found = if self.items.is_empty() { " · 没有找到" } else { "" };
-            format!("{} · {}{found}", base.split(" · ").next().unwrap_or(""), self.query)
+            let found = if self.items.is_empty() {
+                " · 没有找到"
+            } else {
+                ""
+            };
+            format!(
+                "{} · {}{found}",
+                base.split(" · ").next().unwrap_or(""),
+                self.query
+            )
         }
     }
 
@@ -348,7 +379,10 @@ impl Tool {
         let n = self.items.len();
         let start = self.start().min(n);
         let end = (start + self.per_page()).min(n);
-        let items: Vec<String> = self.items[start..end].iter().map(|i| i.shown.clone()).collect();
+        let items: Vec<String> = self.items[start..end]
+            .iter()
+            .map(|i| i.shown.clone())
+            .collect();
         let cursor = (n > 0 && (start..end).contains(&self.cursor)).then(|| self.cursor - start);
         let (panel, columns, labels) = if self.grid() {
             // 光标所在行标 1–8
@@ -413,9 +447,15 @@ mod tests {
         let s = sources(&phrases, &[]);
         let mut tool = Tool::open(Page::Menu, &s);
         let view = tool.view();
-        assert_eq!(view.items, vec!["剪贴板", "常用语", "符号", "表情", "英文候选", "拆字查字"]);
+        assert_eq!(
+            view.items,
+            vec!["剪贴板", "常用语", "符号", "表情", "英文候选", "拆字查字"]
+        );
         assert_eq!(view.title, "工具栏");
-        assert_eq!(tool.key(&press('2' as u32), &s), Outcome::Stay { refresh: true });
+        assert_eq!(
+            tool.key(&press('2' as u32), &s),
+            Outcome::Stay { refresh: true }
+        );
         assert_eq!(tool.page, Page::Phrases);
         let view = tool.view();
         assert_eq!(view.items, vec!["北京市⏎海淀区"]);
@@ -461,7 +501,10 @@ mod tests {
         // 退格先删搜索词；直接打开的表情面板删完再退格关掉
         let mut tool = Tool::open(Page::Emoji, &s);
         tool.key(&press('a' as u32), &s);
-        assert!(matches!(tool.key(&press(keysym::BACKSPACE), &s), Outcome::Stay { .. }));
+        assert!(matches!(
+            tool.key(&press(keysym::BACKSPACE), &s),
+            Outcome::Stay { .. }
+        ));
         assert_eq!(tool.key(&press(keysym::BACKSPACE), &s), Outcome::Close);
     }
 

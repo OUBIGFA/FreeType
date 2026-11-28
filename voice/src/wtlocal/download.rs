@@ -101,8 +101,14 @@ mod tests {
     fn settings_tool_uses_same_pack() {
         // 设置界面里下载语音模型用的地址、大小、MD5 要和这里一致
         let settings = include_str!("../../../settings/wowtype-config");
-        assert!(settings.contains(pack::URL), "wowtype-config 里的语音模型地址不对");
-        assert!(settings.contains(pack::MD5), "wowtype-config 里的语音模型 MD5 不对");
+        assert!(
+            settings.contains(pack::URL),
+            "wowtype-config 里的语音模型地址不对"
+        );
+        assert!(
+            settings.contains(pack::MD5),
+            "wowtype-config 里的语音模型 MD5 不对"
+        );
         assert!(
             settings.contains(&format!("VOICE_MODEL_SIZE = {}", pack::SIZE)),
             "wowtype-config 里的语音模型大小不对"

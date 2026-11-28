@@ -330,8 +330,7 @@ pub fn first_words(
     .filter(|s| s.word.known && s.word.end < n)
     .map(|s| {
         let cost = s.lexical
-            + (config.typo_cost * s.word.typos as f64
-                - config.swap_discount * s.word.swaps as f64)
+            + (config.typo_cost * s.word.typos as f64 - config.swap_discount * s.word.swaps as f64)
             + abbrev_penalty(graph, &s.word, config);
         (s.word, cost)
     })
@@ -383,8 +382,7 @@ pub fn all_first_words(
     .filter(|s| s.word.known)
     .map(|s| {
         let cost = s.lexical
-            + (config.typo_cost * s.word.typos as f64
-                - config.swap_discount * s.word.swaps as f64)
+            + (config.typo_cost * s.word.typos as f64 - config.swap_discount * s.word.swaps as f64)
             + config.completion_cost * s.word.completion as f64
             + abbrev_penalty(graph, &s.word, config);
         (s.word, cost)
@@ -518,11 +516,25 @@ fn collect_dfs(
         };
         for (lexical, entry) in entries {
             // 非标准模糊输入不能写入学习词库；选词后记住命中的规范读音。
-            let reading = if keys.iter().any(|q| matches!(q, SyllableQuery::Full { id, .. }
-                if usize::from(*id) >= crate::syllable::SYLLABLES.len())) {
-                entry.keys.iter().map(|key| SyllableQuery::Full { id: key.id, erhua: key.erhua }.display())
-                    .collect::<Vec<_>>().join(" ")
-            } else { pinyin.clone() };
+            let reading = if keys.iter().any(|q| {
+                matches!(q, SyllableQuery::Full { id, .. }
+                if usize::from(*id) >= crate::syllable::SYLLABLES.len())
+            }) {
+                entry
+                    .keys
+                    .iter()
+                    .map(|key| {
+                        SyllableQuery::Full {
+                            id: key.id,
+                            erhua: key.erhua,
+                        }
+                        .display()
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            } else {
+                pinyin.clone()
+            };
             out.push(Span {
                 lexical,
                 word: BeamWord {

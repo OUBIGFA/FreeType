@@ -30,7 +30,9 @@ pub fn format_text(text: &str, before: Option<char>, flags: u32) -> String {
     let mut out = String::new();
     let mut previous = before;
     for next in text.chars() {
-        if previous.is_some_and(|prev| needs_space(prev, next, flags)) { out.push(' '); }
+        if previous.is_some_and(|prev| needs_space(prev, next, flags)) {
+            out.push(' ');
+        }
         out.push(next);
         previous = Some(next);
     }
@@ -43,7 +45,11 @@ pub(crate) fn without_boundary_spaces(text: &str) -> String {
     let mut out = String::new();
     let mut previous = None;
     while let Some(next) = chars.next() {
-        if next == ' ' && previous.zip(chars.peek().copied()).is_some_and(|(prev, after)| needs_space(prev, after, LETTERS | DIGITS)) {
+        if next == ' '
+            && previous
+                .zip(chars.peek().copied())
+                .is_some_and(|(prev, after)| needs_space(prev, after, LETTERS | DIGITS))
+        {
             continue;
         }
         out.push(next);

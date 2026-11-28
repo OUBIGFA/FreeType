@@ -4,8 +4,10 @@
 use freetype_protocol::{BrandIcon, Request};
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
-use windows::core::{HSTRING, Interface, Result};
-use windows::Win32::Foundation::{E_FAIL, ERROR_CLASS_HAS_WINDOWS, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+use windows::core::{Interface, Result, HSTRING};
+use windows::Win32::Foundation::{
+    ERROR_CLASS_HAS_WINDOWS, E_FAIL, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM,
+};
 use windows::Win32::Security::Cryptography::{CryptStringToBinaryW, CRYPT_STRING_BASE64};
 use windows::Win32::UI::TextServices::{
     ITfLangBarItemMgr, ITfSystemDeviceTypeLangBarItem, ITfSystemLangBarItem, ITfThreadMgr,
@@ -17,7 +19,11 @@ struct OwnedIcon(HICON);
 
 impl Drop for OwnedIcon {
     fn drop(&mut self) {
-        if !self.0.0.is_null() { unsafe { let _ = DestroyIcon(self.0); } }
+        if !self.0 .0.is_null() {
+            unsafe {
+                let _ = DestroyIcon(self.0);
+            }
+        }
     }
 }
 
@@ -29,10 +35,21 @@ fn native_icon(brand: &BrandIcon, size: i32) -> Result<OwnedIcon> {
         "custom" => {
             let wide: Vec<u16> = brand.custom_png.encode_utf16().collect();
             let mut length = 0;
-            unsafe { CryptStringToBinaryW(&wide, CRYPT_STRING_BASE64, None, &mut length, None, None)?; }
+            unsafe {
+                CryptStringToBinaryW(&wide, CRYPT_STRING_BASE64, None, &mut length, None, None)?;
+            }
             custom = {
                 let mut data = vec![0u8; length as usize];
-                unsafe { CryptStringToBinaryW(&wide, CRYPT_STRING_BASE64, Some(data.as_mut_ptr()), &mut length, None, None)?; }
+                unsafe {
+                    CryptStringToBinaryW(
+                        &wide,
+                        CRYPT_STRING_BASE64,
+                        Some(data.as_mut_ptr()),
+                        &mut length,
+                        None,
+                        None,
+                    )?;
+                }
                 data.truncate(length as usize);
                 data
             };
@@ -41,7 +58,10 @@ fn native_icon(brand: &BrandIcon, size: i32) -> Result<OwnedIcon> {
         _ => return Err(E_FAIL.into()),
     };
     // Vista 及后续 Windows 可直接从 PNG 图像资源生成带透明度的 HICON，并按系统 DPI 缩放。
-    unsafe { CreateIconFromResourceEx(bytes, true, 0x0003_0000, size, size, IMAGE_FLAGS(0)).map(OwnedIcon) }
+    unsafe {
+        CreateIconFromResourceEx(bytes, true, 0x0003_0000, size, size, IMAGE_FLAGS(0))
+            .map(OwnedIcon)
+    }
 }
 
 pub(crate) struct BrandUpdater {
@@ -64,21 +84,34 @@ impl BrandUpdater {
         let mode: ITfSystemDeviceTypeLangBarItem = item.cast()?;
         let original_mode = unsafe { mode.GetIconMode()? };
         Ok(Self {
-            system, mode, original_mode, native: None,
-            client: crate::client::Client::for_brand_icon(), revision: None,
-            image: None, size: 0, had_focus: false,
+            system,
+            mode,
+            original_mode,
+            native: None,
+            client: crate::client::Client::for_brand_icon(),
+            revision: None,
+            image: None,
+            size: 0,
+            had_focus: false,
         })
     }
 
     /// `force` 时整幅图重取并重设；`reapply` 时按已知修订号查询（未变化时应答不带图像），
     /// 再用缓存的图像重设系统图标。
     pub(crate) fn refresh(&mut self, force: bool, reapply: bool) -> Result<()> {
-        let response = self.client.call(&Request::GetBrandIcon {
-            known_revision: if force { None } else { self.revision },
-        }).ok_or_else(|| windows::core::Error::from_hresult(E_FAIL))?;
+        let response = self
+            .client
+            .call(&Request::GetBrandIcon {
+                known_revision: if force { None } else { self.revision },
+            })
+            .ok_or_else(|| windows::core::Error::from_hresult(E_FAIL))?;
         let size = unsafe { GetSystemMetrics(SM_CXSMICON) }.max(16);
         if force || reapply || response.brand_icon.is_some() || self.size != size {
-            let image = response.brand_icon.as_ref().or(self.image.as_ref()).cloned();
+            let image = response
+                .brand_icon
+                .as_ref()
+                .or(self.image.as_ref())
+                .cloned();
             if let Some(image) = image {
                 self.set_image(&image, size)?;
                 self.size = size;
@@ -95,11 +128,15 @@ impl BrandUpdater {
         let icon = native_icon(image, size)?;
         // SetIcon 保留传入句柄：在下一幅图像设置成功或清除覆盖之前必须让它保持有效。
         // 系统菜单发出 TF_LBI_ICON 通知；GetIcon 的调用方取得独立副本。
-        unsafe { self.system.SetIcon(icon.0)?; }
+        unsafe {
+            self.system.SetIcon(icon.0)?;
+        }
         self.native = Some(icon);
         // USEPROFILEICON 会优先显示注册资源；改为运行时图像模式才能真正显示新图标。
         // 停用时恢复 original_mode，保留其他输入法的显示约定。
-        unsafe { self.mode.SetIconMode(LANG_BAR_ITEM_ICON_MODE_FLAGS(0))?; }
+        unsafe {
+            self.mode.SetIconMode(LANG_BAR_ITEM_ICON_MODE_FLAGS(0))?;
+        }
         Ok(())
     }
 }
@@ -110,7 +147,10 @@ impl Drop for BrandUpdater {
         if let Err(error) = unsafe { self.system.SetIcon(HICON::default()) } {
             crate::log::write("恢复语言栏图标失败", &error.to_string());
         }
-        if let Err(error) = unsafe { self.mode.SetIconMode(LANG_BAR_ITEM_ICON_MODE_FLAGS(self.original_mode)) } {
+        if let Err(error) = unsafe {
+            self.mode
+                .SetIconMode(LANG_BAR_ITEM_ICON_MODE_FLAGS(self.original_mode))
+        } {
             crate::log::write("恢复语言栏图标模式失败", &error.to_string());
         }
     }
@@ -132,7 +172,9 @@ pub(crate) struct BrandMonitor {
 fn changed_message() -> u32 {
     static MESSAGE: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
     *MESSAGE.get_or_init(|| unsafe {
-        RegisterWindowMessageW(&HSTRING::from(freetype_protocol::BRAND_ICON_CHANGED_MESSAGE))
+        RegisterWindowMessageW(&HSTRING::from(
+            freetype_protocol::BRAND_ICON_CHANGED_MESSAGE,
+        ))
     })
 }
 
@@ -143,7 +185,9 @@ fn refresh_monitor(state: &Rc<RefCell<MonitorState>>, force: bool) -> Result<()>
     };
     let focused = unsafe { manager.IsThreadFocus() }.is_ok_and(|focus| focus.as_bool());
     if !force && !focused {
-        if let Some(updater) = &mut updater { updater.had_focus = false; }
+        if let Some(updater) = &mut updater {
+            updater.had_focus = false;
+        }
         state.borrow_mut().updater = updater;
         return Ok(());
     }
@@ -165,7 +209,12 @@ fn refresh_monitor(state: &Rc<RefCell<MonitorState>>, force: bool) -> Result<()>
     result
 }
 
-unsafe extern "system" fn monitor(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+unsafe extern "system" fn monitor(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     unsafe {
         if message != 0 && (message == changed_message() || message == WM_TIMER && wparam.0 == 1) {
             let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const Weak<RefCell<MonitorState>>;
@@ -178,7 +227,9 @@ unsafe extern "system" fn monitor(hwnd: HWND, message: u32, wparam: WPARAM, lpar
         }
         if message == WM_NCDESTROY {
             let ptr = SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0) as *mut Weak<RefCell<MonitorState>>;
-            if !ptr.is_null() { drop(Box::from_raw(ptr)); }
+            if !ptr.is_null() {
+                drop(Box::from_raw(ptr));
+            }
         }
         DefWindowProcW(hwnd, message, wparam, lparam)
     }
@@ -186,24 +237,58 @@ unsafe extern "system" fn monitor(hwnd: HWND, message: u32, wparam: WPARAM, lpar
 
 impl BrandMonitor {
     pub(crate) fn new(manager: &ITfThreadMgr) -> Result<Self> {
-        let state = Rc::new(RefCell::new(MonitorState { manager: manager.clone(), updater: None }));
+        let state = Rc::new(RefCell::new(MonitorState {
+            manager: manager.clone(),
+            updater: None,
+        }));
         // 不同 DLL 的窗口类不能共用指向 Rust 状态的回调；类名以本版本函数地址区分。
-        let class = HSTRING::from(format!("{}-{:x}", freetype_protocol::TSF_BRAND_MONITOR_CLASS, monitor as *const () as usize));
+        let class = HSTRING::from(format!(
+            "{}-{:x}",
+            freetype_protocol::TSF_BRAND_MONITOR_CLASS,
+            monitor as *const () as usize
+        ));
         let instance = crate::exports::instance();
         let hwnd = unsafe {
             RegisterClassW(&WNDCLASSW {
-                lpfnWndProc: Some(monitor), hInstance: instance, lpszClassName: windows::core::PCWSTR(class.as_ptr()),
+                lpfnWndProc: Some(monitor),
+                hInstance: instance,
+                lpszClassName: windows::core::PCWSTR(class.as_ptr()),
                 ..Default::default()
             });
-            CreateWindowExW(WINDOW_EX_STYLE(0), &class, &HSTRING::new(), WINDOW_STYLE(0), 0, 0, 0, 0,
-                Some(HWND_MESSAGE), None, Some(instance), None)?
+            CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                &class,
+                &HSTRING::new(),
+                WINDOW_STYLE(0),
+                0,
+                0,
+                0,
+                0,
+                Some(HWND_MESSAGE),
+                None,
+                Some(instance),
+                None,
+            )?
         };
-        let result = Self { hwnd, class, instance, state };
+        let result = Self {
+            hwnd,
+            class,
+            instance,
+            state,
+        };
         unsafe {
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(Box::new(Rc::downgrade(&result.state))) as _);
-            if SetTimer(Some(hwnd), 1, 1000, None) == 0 { return Err(windows::core::Error::from_thread()); }
+            SetWindowLongPtrW(
+                hwnd,
+                GWLP_USERDATA,
+                Box::into_raw(Box::new(Rc::downgrade(&result.state))) as _,
+            );
+            if SetTimer(Some(hwnd), 1, 1000, None) == 0 {
+                return Err(windows::core::Error::from_thread());
+            }
             let message = changed_message();
-            if message == 0 { return Err(windows::core::Error::from_thread()); }
+            if message == 0 {
+                return Err(windows::core::Error::from_thread());
+            }
             // 刷新消息不携带图像或配置；管理员宿主可安全接收普通用户服务的只读通知。
             if let Err(error) = ChangeWindowMessageFilterEx(hwnd, message, MSGFLT_ALLOW, None) {
                 crate::log::write("语言栏图标通知权限设置失败", &error.to_string());

@@ -134,9 +134,9 @@ func statsKeyboard(c *ui.Context, keys map[int]uint64) {
 			}
 		})
 		viewport.Children(func() {
-			ui.Column(c).Shrink(0).Gap(4*scale).Padding(8*scale).Radius(8*scale).Background(p.subtle).Children(func() {
+			ui.Column(c).Shrink(0).Gap(4 * scale).Padding(8 * scale).Radius(8 * scale).Background(p.subtle).Children(func() {
 				for rowIndex, row := range physicalKeyboard {
-					line := ui.Row(c).Gap(4*scale).Shrink(0)
+					line := ui.Row(c).Gap(4 * scale).Shrink(0)
 					if rowIndex == 0 {
 						line.Margin(0, 0, 6*scale, 0)
 					}
@@ -151,9 +151,9 @@ func statsKeyboard(c *ui.Context, keys map[int]uint64) {
 							count := keys[key.scan]
 							bg, fg := keyboardHeatColors(c, keyboardHeatLevel(count, peak))
 							ui.Column(c).Label("键位："+key.label).Size(width, height).Shrink(0).Center().
-								Background(bg).Border(scale, p.border).Radius(5*scale).
+								Background(bg).Border(scale, p.border).Radius(5 * scale).
 								Tooltip(fmt.Sprintf("%s：%d 次", physicalKeyName(key.scan), count)).Children(func() {
-								ui.Text(c, key.label).FontSize(textSize(c, 12)*scale).FontWeight(500).TextColor(fg)
+								ui.Text(c, key.label).FontSize(textSize(c, 12) * scale).FontWeight(500).TextColor(fg)
 							})
 						}
 					})

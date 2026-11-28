@@ -12,10 +12,12 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1_ROUNDED_RECT,
 };
 use windows::Win32::Graphics::DirectWrite::{
-    DWriteCreateFactory, IDWriteFactory, IDWriteFactory2, IDWriteFontCollection, IDWriteFontFallback, IDWriteTextFormat, IDWriteTextLayout, IDWriteTextLayout2, DWRITE_UNICODE_RANGE,
+    DWriteCreateFactory, IDWriteFactory, IDWriteFactory2, IDWriteFontCollection,
+    IDWriteFontFallback, IDWriteTextFormat, IDWriteTextLayout, IDWriteTextLayout2,
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
     DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD,
-    DWRITE_LINE_METRICS, DWRITE_TEXT_METRICS, DWRITE_TEXT_RANGE, DWRITE_WORD_WRAPPING_NO_WRAP,
+    DWRITE_LINE_METRICS, DWRITE_TEXT_METRICS, DWRITE_TEXT_RANGE, DWRITE_UNICODE_RANGE,
+    DWRITE_WORD_WRAPPING_NO_WRAP,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::HDC;
@@ -40,14 +42,24 @@ impl Fonts {
         Self::styled(size, family, 0.0, "", 0.0)
     }
 
-    pub fn styled(size: f32, family: &str, preedit_size: f32, fallbacks: &str, caption_size: f32) -> Result<Self> {
+    pub fn styled(
+        size: f32,
+        family: &str,
+        preedit_size: f32,
+        fallbacks: &str,
+        caption_size: f32,
+    ) -> Result<Self> {
         let factory: IDWriteFactory = unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)? };
         let family = if family.trim().is_empty() {
             freetype_protocol::DEFAULT_FONT
         } else {
             family
         };
-        let fallback = if fallbacks.is_empty() { None } else { Some(font_fallback(&factory, fallbacks)?) };
+        let fallback = if fallbacks.is_empty() {
+            None
+        } else {
+            Some(font_fallback(&factory, fallbacks)?)
+        };
         let make = |size, weight: DWRITE_FONT_WEIGHT| -> Result<Font> {
             let format = unsafe {
                 factory.CreateTextFormat(
@@ -72,9 +84,23 @@ impl Fonts {
         Ok(Self {
             main: make(size, DWRITE_FONT_WEIGHT_NORMAL)?,
             small: make((size * 0.78).round(), DWRITE_FONT_WEIGHT_NORMAL)?,
-            preedit: make(if preedit_size > 0.0 { preedit_size } else { (size * 0.78).round() }, DWRITE_FONT_WEIGHT_NORMAL)?,
+            preedit: make(
+                if preedit_size > 0.0 {
+                    preedit_size
+                } else {
+                    (size * 0.78).round()
+                },
+                DWRITE_FONT_WEIGHT_NORMAL,
+            )?,
             hint: make(size, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
-            caption: make(if caption_size > 0.0 { caption_size } else { size * 0.72 }, DWRITE_FONT_WEIGHT_NORMAL)?,
+            caption: make(
+                if caption_size > 0.0 {
+                    caption_size
+                } else {
+                    size * 0.72
+                },
+                DWRITE_FONT_WEIGHT_NORMAL,
+            )?,
         })
     }
 }
@@ -87,7 +113,14 @@ fn font_fallback(factory: &IDWriteFactory, families: &str) -> Result<IDWriteFont
         .map(|(first, last)| DWRITE_UNICODE_RANGE { first, last });
     unsafe {
         let builder = factory.CreateFontFallbackBuilder()?;
-        builder.AddMapping(&ranges, &names, None::<&IDWriteFontCollection>, PCWSTR::null(), PCWSTR::null(), 1.0)?;
+        builder.AddMapping(
+            &ranges,
+            &names,
+            None::<&IDWriteFontCollection>,
+            PCWSTR::null(),
+            PCWSTR::null(),
+            1.0,
+        )?;
         builder.AddMappings(&factory.GetSystemFontFallback()?)?;
         builder.CreateFontFallback()
     }
@@ -143,7 +176,10 @@ impl Text {
 
         let mut metrics = vec![DWRITE_CLUSTER_METRICS::default(); capacity];
         let mut count = 0;
-        unsafe { self.layout.GetClusterMetrics(Some(&mut metrics), &mut count)? };
+        unsafe {
+            self.layout
+                .GetClusterMetrics(Some(&mut metrics), &mut count)?
+        };
         metrics.truncate(count as usize);
         Ok(metrics.into_iter().map(|cluster| cluster.length).collect())
     }
@@ -159,7 +195,9 @@ impl Font {
                 32768.0,
             )?;
             if let Some(fallback) = &self.fallback {
-                layout.cast::<IDWriteTextLayout2>()?.SetFontFallback(fallback)?;
+                layout
+                    .cast::<IDWriteTextLayout2>()?
+                    .SetFontFallback(fallback)?;
             }
             // 部分中文字体也收录数字和组合框；系统默认回退会把 8 + VS16 + keycap
             // 分到不同字体。按完整字素指定 Emoji 字体，正文仍保留用户选择的字体。
@@ -184,7 +222,10 @@ impl Font {
             }
             let mut metrics = DWRITE_TEXT_METRICS::default();
             layout.GetMetrics(&mut metrics)?;
-            let (width, height) = (metrics.widthIncludingTrailingWhitespace.max(1.0), metrics.height.max(1.0));
+            let (width, height) = (
+                metrics.widthIncludingTrailingWhitespace.max(1.0),
+                metrics.height.max(1.0),
+            );
             layout.SetMaxWidth(width)?;
             layout.SetMaxHeight(height)?;
             let overhang = layout.GetOverhangMetrics()?;
@@ -212,7 +253,12 @@ impl Font {
                 size,
                 offset: Vector2 { X: left, Y: top },
                 ink: if blank {
-                    RECT { left: 0, top: 0, right: size.cx, bottom: size.cy }
+                    RECT {
+                        left: 0,
+                        top: 0,
+                        right: size.cx,
+                        bottom: size.cy,
+                    }
                 } else {
                     RECT {
                         left: ink.left.floor() as i32,
@@ -222,7 +268,11 @@ impl Font {
                     }
                 },
                 baseline,
-                middle: if blank { size.cy as f32 / 2.0 } else { (ink.top + ink.bottom) / 2.0 },
+                middle: if blank {
+                    size.cy as f32 / 2.0
+                } else {
+                    (ink.top + ink.bottom) / 2.0
+                },
             })
         }
     }

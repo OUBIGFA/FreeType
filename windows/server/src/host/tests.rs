@@ -34,9 +34,24 @@ fn configure(host: &mut Host, change: impl FnOnce(&mut Config)) {
 #[test]
 fn status_reports_whole_seconds_since_actual_input_only() {
     let mut host = host("input-idle");
-    let idle = |host: &mut Host| host.handle(1, Request::Status).status.unwrap().input_idle_seconds;
+    let idle = |host: &mut Host| {
+        host.handle(1, Request::Status)
+            .status
+            .unwrap()
+            .input_idle_seconds
+    };
     assert_eq!(idle(&mut host), None, "启动后没打字时不能谎报刚有输入");
-    host.handle(1, Request::Key { key: Key { keysym: 'n' as u32, modifiers: 0, test: true }, before: None });
+    host.handle(
+        1,
+        Request::Key {
+            key: Key {
+                keysym: 'n' as u32,
+                modifiers: 0,
+                test: true,
+            },
+            before: None,
+        },
+    );
     assert_eq!(idle(&mut host), None, "按键预判不是实际输入");
     typing(&mut host, "ni");
     assert_eq!(idle(&mut host), Some(0));
@@ -51,17 +66,40 @@ fn sync_work_runs_beside_typing_and_merges_apply_only_if_local_data_is_unchanged
     let mut b = host("sync-beside-b");
     let (af, bf) = (a.data_dir().join("a.json"), b.data_dir().join("b.json"));
     let path = |path: &std::path::Path| path.display().to_string();
-    assert!(a.handle(1, Request::SetCommonPhrases { phrases: vec!["来自另一台".into()] }).ok);
-    assert!(a.handle(1, Request::ExportSyncSettings { path: path(&af) }).ok);
+    assert!(
+        a.handle(
+            1,
+            Request::SetCommonPhrases {
+                phrases: vec!["来自另一台".into()]
+            }
+        )
+        .ok
+    );
+    assert!(
+        a.handle(1, Request::ExportSyncSettings { path: path(&af) })
+            .ok
+    );
     let (apply_tx, apply_rx) = channel();
     b.set_apply_channel(apply_tx);
 
     // 占住后台线程，相当于开机时慢到数秒的同步计算：按键照常出候选，同步应答在后面排队。
     let (release, blocked) = channel::<()>();
-    b.tasks.submit(Box::new(move || { let _ = blocked.recv(); Step::Done }), None);
+    b.tasks.submit(
+        Box::new(move || {
+            let _ = blocked.recv();
+            Step::Done
+        }),
+        None,
+    );
     let (reply, export) = channel();
     b.dispatch(1, Request::ExportSyncSettings { path: path(&bf) }, reply);
-    assert_eq!(typing(&mut b, "nihao").candidates.first().map(String::as_str), Some("你好"));
+    assert_eq!(
+        typing(&mut b, "nihao")
+            .candidates
+            .first()
+            .map(String::as_str),
+        Some("你好")
+    );
     assert!(export.try_recv().is_err(), "同步导出不应在引擎线程里完成");
     release.send(()).unwrap();
     assert!(export.recv_timeout(Duration::from_secs(10)).unwrap().ok);
@@ -69,28 +107,71 @@ fn sync_work_runs_beside_typing_and_merges_apply_only_if_local_data_is_unchanged
 
     // 合并在后台比较，回到引擎线程应用后才应答。
     let (reply, merged) = channel();
-    b.dispatch(1, Request::MergeSyncSettings { path: path(&af), expected_path: path(&bf) }, reply);
+    b.dispatch(
+        1,
+        Request::MergeSyncSettings {
+            path: path(&af),
+            expected_path: path(&bf),
+        },
+        reply,
+    );
     let apply = apply_rx.recv_timeout(Duration::from_secs(10)).unwrap();
     assert!(merged.try_recv().is_err());
     apply(&mut b);
     let response = merged.recv_timeout(Duration::from_secs(10)).unwrap();
     assert!(response.ok, "{:?}", response.error);
-    assert_eq!(b.handle(1, Request::ListCommonPhrases).common_phrases.unwrap(), ["来自另一台"]);
+    assert_eq!(
+        b.handle(1, Request::ListCommonPhrases)
+            .common_phrases
+            .unwrap(),
+        ["来自另一台"]
+    );
 
     // 后台比较期间本机又改了：放弃这次合并，保留刚做的修改，由同步重新比较。
-    assert!(a.handle(1, Request::SetCommonPhrases { phrases: vec!["另一台又改了".into()] }).ok);
-    assert!(a.handle(1, Request::ExportSyncSettings { path: path(&af) }).ok);
+    assert!(
+        a.handle(
+            1,
+            Request::SetCommonPhrases {
+                phrases: vec!["另一台又改了".into()]
+            }
+        )
+        .ok
+    );
+    assert!(
+        a.handle(1, Request::ExportSyncSettings { path: path(&af) })
+            .ok
+    );
     let (reply, export) = channel();
     b.dispatch(1, Request::ExportSyncSettings { path: path(&bf) }, reply);
     assert!(export.recv_timeout(Duration::from_secs(10)).unwrap().ok);
     let (reply, merged) = channel();
-    b.dispatch(1, Request::MergeSyncSettings { path: path(&af), expected_path: path(&bf) }, reply);
+    b.dispatch(
+        1,
+        Request::MergeSyncSettings {
+            path: path(&af),
+            expected_path: path(&bf),
+        },
+        reply,
+    );
     let apply = apply_rx.recv_timeout(Duration::from_secs(10)).unwrap();
-    assert!(b.handle(1, Request::SetCommonPhrases { phrases: vec!["本机刚改的".into()] }).ok);
+    assert!(
+        b.handle(
+            1,
+            Request::SetCommonPhrases {
+                phrases: vec!["本机刚改的".into()]
+            }
+        )
+        .ok
+    );
     apply(&mut b);
     let response = merged.recv_timeout(Duration::from_secs(10)).unwrap();
     assert!(!response.ok);
-    assert_eq!(b.handle(1, Request::ListCommonPhrases).common_phrases.unwrap(), ["本机刚改的"]);
+    assert_eq!(
+        b.handle(1, Request::ListCommonPhrases)
+            .common_phrases
+            .unwrap(),
+        ["本机刚改的"]
+    );
 
     // 手动重置同步记录排在后台登记之后，回到引擎线程执行，不会互相等待。
     let (reply, reset) = channel();
@@ -104,43 +185,119 @@ fn sync_work_runs_beside_typing_and_merges_apply_only_if_local_data_is_unchanged
 #[test]
 fn lagging_surrounding_text_cannot_change_chinese_punctuation_after_commit() {
     let mut host = host("lagging-punctuation");
-    host.handle(1, Request::Focus { active: true, before: Some("1:1".into()) });
+    host.handle(
+        1,
+        Request::Focus {
+            active: true,
+            before: Some("1:1".into()),
+        },
+    );
     typing(&mut host, "nihao");
     assert_eq!(press(&mut host, 0x20).commit.as_deref(), Some(" 你好"));
-    let dot = host.handle(1, Request::Key { key: Key { keysym: '.' as u32, modifiers: 0, test: false }, before: Some("1:1".into()) }).frame.unwrap();
-    assert_eq!(dot.commit.as_deref(), Some("。"), "宿主迟报的数字不能盖掉刚上屏的汉字");
-    let dot = host.handle(1, Request::Key { key: Key { keysym: '.' as u32, modifiers: 0, test: false }, before: Some("3".into()) }).frame.unwrap();
-    assert!(dot.commit.as_deref() == Some(".") || !dot.handled, "真挪到其他数字后仍输出半角");
+    let dot = host
+        .handle(
+            1,
+            Request::Key {
+                key: Key {
+                    keysym: '.' as u32,
+                    modifiers: 0,
+                    test: false,
+                },
+                before: Some("1:1".into()),
+            },
+        )
+        .frame
+        .unwrap();
+    assert_eq!(
+        dot.commit.as_deref(),
+        Some("。"),
+        "宿主迟报的数字不能盖掉刚上屏的汉字"
+    );
+    let dot = host
+        .handle(
+            1,
+            Request::Key {
+                key: Key {
+                    keysym: '.' as u32,
+                    modifiers: 0,
+                    test: false,
+                },
+                before: Some("3".into()),
+            },
+        )
+        .frame
+        .unwrap();
+    assert!(
+        dot.commit.as_deref() == Some(".") || !dot.handled,
+        "真挪到其他数字后仍输出半角"
+    );
     cleanup(&host);
 }
 
 #[test]
 fn lookup_modes_commit_only_selected_text_and_keep_raw_enter_unchanged() {
-    let Some(resources) = std::env::var_os("FREETYPE_TEST_INPUT_TOOLS") else { return; };
+    let Some(resources) = std::env::var_os("FREETYPE_TEST_INPUT_TOOLS") else {
+        return;
+    };
     let mut host = host("lookup-modes");
-    host.engine_ref().unwrap().load_input_tools(resources).unwrap();
+    host.engine_ref()
+        .unwrap()
+        .load_input_tools(resources)
+        .unwrap();
     let open = |host: &mut Host, command: &str| {
-        let request = serde_json::from_value(serde_json::json!({"op":"command","command":command})).expect("查询模式入口");
+        let request = serde_json::from_value(serde_json::json!({"op":"command","command":command}))
+            .expect("查询模式入口");
         let response = host.handle(1, request);
         assert!(response.ok);
         response.frame.unwrap()
     };
-    assert!(open(&mut host, "english_candidates").title.as_deref().unwrap().contains("英文"));
+    assert!(open(&mut host, "english_candidates")
+        .title
+        .as_deref()
+        .unwrap()
+        .contains("英文"));
     let frame = typing(&mut host, "inspiteof");
-    assert!(frame.vertical, "带音标和释义的候选按行显示，不能撑成超长横条");
+    assert!(
+        frame.vertical,
+        "带音标和释义的候选按行显示，不能撑成超长横条"
+    );
     assert!(frame.annotations.iter().any(|text| !text.is_empty()));
-    let index = frame.candidates.iter().position(|text| text == "in spite of").expect("短语候选");
+    let index = frame
+        .candidates
+        .iter()
+        .position(|text| text == "in spite of")
+        .expect("短语候选");
     let selected = host.handle(1, Request::Select { index }).frame.unwrap();
     assert_eq!(selected.commit.as_deref(), Some("in spite of "));
-    assert!(selected.title.as_deref().unwrap().contains("英文"), "英文模式持续输入，Esc 或快捷键退出");
+    assert!(
+        selected.title.as_deref().unwrap().contains("英文"),
+        "英文模式持续输入，Esc 或快捷键退出"
+    );
     typing(&mut host, "conectivity");
-    assert_eq!(press(&mut host, keysym::RETURN).commit.as_deref(), Some("conectivity"));
+    assert_eq!(
+        press(&mut host, keysym::RETURN).commit.as_deref(),
+        Some("conectivity")
+    );
     press(&mut host, keysym::ESCAPE);
     open(&mut host, "radical_lookup");
     let frame = typing(&mut host, "ririri");
-    let index = frame.candidates.iter().position(|text| text == "晶").unwrap();
-    assert_eq!(host.handle(1, Request::Select { index }).frame.unwrap().commit.as_deref(), Some("晶"));
-    assert!(press(&mut host, 'n' as u32).preedit.starts_with('n'), "查字上屏后返回普通拼音");
+    let index = frame
+        .candidates
+        .iter()
+        .position(|text| text == "晶")
+        .unwrap();
+    assert_eq!(
+        host.handle(1, Request::Select { index })
+            .frame
+            .unwrap()
+            .commit
+            .as_deref(),
+        Some("晶")
+    );
+    assert!(
+        press(&mut host, 'n' as u32).preedit.starts_with('n'),
+        "查字上屏后返回普通拼音"
+    );
     cleanup(&host);
 }
 
@@ -151,7 +308,16 @@ fn dictionary_catalog_controls_sources_queries_pages_and_removes_only_selected_e
     std::fs::create_dir_all(host.data_dir()).unwrap();
     std::fs::write(&path, "韵酒\tyun jiu\t10000\n韵茶\tyun cha\t9000\n").unwrap();
     for name in ["甲", "乙"] {
-        assert!(host.handle(1, Request::ImportDictionary { path: path.display().to_string(), name: name.into() }).ok);
+        assert!(
+            host.handle(
+                1,
+                Request::ImportDictionary {
+                    path: path.display().to_string(),
+                    name: name.into()
+                }
+            )
+            .ok
+        );
     }
     let call = |host: &mut Host, value| {
         let request: Request = serde_json::from_value(value).expect("词库管理协议应可用");
@@ -159,24 +325,77 @@ fn dictionary_catalog_controls_sources_queries_pages_and_removes_only_selected_e
         assert!(response.ok, "{:?}", response.error);
         serde_json::to_value(response).unwrap()
     };
-    let page = call(&mut host, serde_json::json!({"op":"query_dictionary","name":"甲","query":"韵","offset":0,"limit":1}));
+    let page = call(
+        &mut host,
+        serde_json::json!({"op":"query_dictionary","name":"甲","query":"韵","offset":0,"limit":1}),
+    );
     assert_eq!(page["dictionary_page"]["total"], 2);
-    assert_eq!(page["dictionary_page"]["entries"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        page["dictionary_page"]["entries"].as_array().unwrap().len(),
+        1
+    );
     for name in ["甲", "乙"] {
-        call(&mut host, serde_json::json!({"op":"update_dictionary","name":name,"new_name":name,"enabled":false,"description":"本地专业词库"}));
-        if name == "甲" { assert!(host.engine_ref().unwrap().input("yunjiu").iter().any(|c| c.text == "韵酒")); }
+        call(
+            &mut host,
+            serde_json::json!({"op":"update_dictionary","name":name,"new_name":name,"enabled":false,"description":"本地专业词库"}),
+        );
+        if name == "甲" {
+            assert!(host
+                .engine_ref()
+                .unwrap()
+                .input("yunjiu")
+                .iter()
+                .any(|c| c.text == "韵酒"));
+        }
     }
-    assert!(!host.engine_ref().unwrap().input("yunjiu").iter().any(|c| c.text == "韵酒"));
-    call(&mut host, serde_json::json!({"op":"update_dictionary","name":"甲","new_name":"饮品","enabled":true,"description":"茶与酒"}));
-    assert!(host.engine_ref().unwrap().input("yunjiu").iter().any(|c| c.text == "韵酒"));
-    call(&mut host, serde_json::json!({"op":"delete_dictionary_entries","name":"饮品","entries":[{"word":"韵酒","pinyin":"yun jiu"}]}));
-    assert!(!host.engine_ref().unwrap().input("yunjiu").iter().any(|c| c.text == "韵酒"));
-    assert!(host.engine_ref().unwrap().input("yuncha").iter().any(|c| c.text == "韵茶"));
+    assert!(!host
+        .engine_ref()
+        .unwrap()
+        .input("yunjiu")
+        .iter()
+        .any(|c| c.text == "韵酒"));
+    call(
+        &mut host,
+        serde_json::json!({"op":"update_dictionary","name":"甲","new_name":"饮品","enabled":true,"description":"茶与酒"}),
+    );
+    assert!(host
+        .engine_ref()
+        .unwrap()
+        .input("yunjiu")
+        .iter()
+        .any(|c| c.text == "韵酒"));
+    call(
+        &mut host,
+        serde_json::json!({"op":"delete_dictionary_entries","name":"饮品","entries":[{"word":"韵酒","pinyin":"yun jiu"}]}),
+    );
+    assert!(!host
+        .engine_ref()
+        .unwrap()
+        .input("yunjiu")
+        .iter()
+        .any(|c| c.text == "韵酒"));
+    assert!(host
+        .engine_ref()
+        .unwrap()
+        .input("yuncha")
+        .iter()
+        .any(|c| c.text == "韵茶"));
     let listed = call(&mut host, serde_json::json!({"op":"list_dictionaries"}));
-    let renamed = listed["dictionaries"].as_array().unwrap().iter().find(|d| d["name"] == "饮品").unwrap();
+    let renamed = listed["dictionaries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["name"] == "饮品")
+        .unwrap();
     assert_eq!(renamed["description"], "茶与酒");
     assert_eq!(renamed["enabled"], true);
-    assert_eq!(Store::new(host.data_dir().to_path_buf()).load_dictionaries().len(), 1, "停用状态需在重启后保留");
+    assert_eq!(
+        Store::new(host.data_dir().to_path_buf())
+            .load_dictionaries()
+            .len(),
+        1,
+        "停用状态需在重启后保留"
+    );
     cleanup(&host);
 }
 
@@ -188,8 +407,16 @@ fn inline_space_separator_changes_only_display_and_preserves_selection() {
     assert_eq!(frame.inline_preedit.as_deref(), Some("ni hao"));
     assert_eq!(frame.preedit, "ni'hao", "候选窗仍展示原来的拼音分词");
     assert_eq!(frame.inline_cursor, 6);
-    assert_eq!(key_with(&mut host, 1, 0x20, 0).commit.as_deref(), Some("你好"));
-    assert_eq!(Host::new(Store::new(host.data_dir().to_path_buf())).config().inline_preedit, "spaces");
+    assert_eq!(
+        key_with(&mut host, 1, 0x20, 0).commit.as_deref(),
+        Some("你好")
+    );
+    assert_eq!(
+        Host::new(Store::new(host.data_dir().to_path_buf()))
+            .config()
+            .inline_preedit,
+        "spaces"
+    );
     cleanup(&host);
 }
 
@@ -198,24 +425,63 @@ fn vim_escape_switches_only_on_real_unmodified_idle_press_for_configured_app() {
     let mut host = host("vim-escape");
     let mut config = serde_json::to_value(host.config()).unwrap();
     config["vim_mode_apps"] = serde_json::json!(["NOTEPAD.EXE"]);
-    assert!(host.handle(1, Request::SetConfig { config: serde_json::from_value(config).unwrap() }).ok);
+    assert!(
+        host.handle(
+            1,
+            Request::SetConfig {
+                config: serde_json::from_value(config).unwrap()
+            }
+        )
+        .ok
+    );
     typing(&mut host, "ni");
     let cancelled = key_with(&mut host, 1, keysym::ESCAPE, 0);
     assert!(cancelled.handled && cancelled.preedit.is_empty());
     assert_eq!(cancelled.mode, Mode::Chinese);
     // Bit 5 is the Windows physical-repeat hint; holding the cancellation Esc must not switch.
-    assert_eq!(key_with(&mut host, 1, keysym::ESCAPE, 1 << 5).mode, Mode::Chinese);
-    for mods in [modifier::SHIFT, modifier::CTRL, modifier::ALT, modifier::SUPER] {
-        assert_eq!(key_with(&mut host, 1, keysym::ESCAPE, mods).mode, Mode::Chinese);
+    assert_eq!(
+        key_with(&mut host, 1, keysym::ESCAPE, 1 << 5).mode,
+        Mode::Chinese
+    );
+    for mods in [
+        modifier::SHIFT,
+        modifier::CTRL,
+        modifier::ALT,
+        modifier::SUPER,
+    ] {
+        assert_eq!(
+            key_with(&mut host, 1, keysym::ESCAPE, mods).mode,
+            Mode::Chinese
+        );
     }
-    let preview = host.handle(1, Request::Key { key: Key { keysym: keysym::ESCAPE, modifiers: 0, test: true }, before: None }).frame.unwrap();
+    let preview = host
+        .handle(
+            1,
+            Request::Key {
+                key: Key {
+                    keysym: keysym::ESCAPE,
+                    modifiers: 0,
+                    test: true,
+                },
+                before: None,
+            },
+        )
+        .frame
+        .unwrap();
     assert!(preview.handled, "预判需保留实际处理机会");
-    assert_eq!(host.handle(1, Request::Status).status.unwrap().mode, Mode::Chinese, "预判不切换模式");
+    assert_eq!(
+        host.handle(1, Request::Status).status.unwrap().mode,
+        Mode::Chinese,
+        "预判不切换模式"
+    );
     let actual = key_with(&mut host, 1, keysym::ESCAPE, 0);
     assert!(!actual.handled, "Esc 交给编辑器退出 insert 模式");
     assert_eq!(actual.mode, Mode::English);
     let restarted = Host::new(Store::new(host.data_dir().to_path_buf()));
-    assert_eq!(serde_json::to_value(restarted.config()).unwrap()["vim_mode_apps"], serde_json::json!(["notepad.exe"]));
+    assert_eq!(
+        serde_json::to_value(restarted.config()).unwrap()["vim_mode_apps"],
+        serde_json::json!(["notepad.exe"])
+    );
     cleanup(&host);
 }
 
@@ -234,18 +500,29 @@ fn brand_icon_changes_persist_without_interrupting_composition() {
 #[test]
 fn language_bar_reads_only_changed_brand_images_without_an_input_session() {
     let mut host = host("language-bar-brand");
-    let request = |known: Option<u64>| serde_json::from_value(serde_json::json!({
-        "op": "get_brand_icon", "known_revision": known
-    })).expect("语言栏必须能单独读取用于显示的品牌图像");
+    let request = |known: Option<u64>| {
+        serde_json::from_value(serde_json::json!({
+            "op": "get_brand_icon", "known_revision": known
+        }))
+        .expect("语言栏必须能单独读取用于显示的品牌图像")
+    };
     let first = serde_json::to_value(host.handle(99, request(None))).unwrap();
     assert_eq!(first["brand_icon"]["appearance"], "default");
     assert!(first.get("config").is_none(), "图标读取不能暴露其他设置");
     assert!(!host.clients.contains_key(&99), "读取图像不创建输入会话");
     let revision = first["brand_icon"]["revision"].as_u64().unwrap();
     let unchanged = serde_json::to_value(host.handle(99, request(Some(revision)))).unwrap();
-    assert!(unchanged.get("brand_icon").is_none(), "未变图标不能反复传输或解码");
+    assert!(
+        unchanged.get("brand_icon").is_none(),
+        "未变图标不能反复传输或解码"
+    );
     configure(&mut host, |config| config.font_size = 20);
-    assert!(serde_json::to_value(host.handle(99, request(Some(revision)))).unwrap().get("brand_icon").is_none());
+    assert!(
+        serde_json::to_value(host.handle(99, request(Some(revision))))
+            .unwrap()
+            .get("brand_icon")
+            .is_none()
+    );
     configure(&mut host, |config| config.brand_icon = "white".into());
     let white = serde_json::to_value(host.handle(99, request(Some(revision)))).unwrap();
     assert_eq!(white["brand_icon"]["appearance"], "white");
@@ -265,21 +542,31 @@ fn language_bar_is_notified_only_when_the_displayed_brand_changes() {
     impl Desktop for Display {
         fn update(&self, _: &BarState) {}
         fn open_settings(&self) {}
-        fn brand_icon_changed(&self) { self.0.set(self.0.get() + 1); }
+        fn brand_icon_changed(&self) {
+            self.0.set(self.0.get() + 1);
+        }
     }
     let notifications = std::rc::Rc::new(std::cell::Cell::new(0));
     let mut host = host("brand-notify");
     host.set_desktop(Box::new(Display(notifications.clone())));
     configure(&mut host, |config| config.font_size = 20);
-    configure(&mut host, |config| config.custom_brand_icon = "saved-png".into());
-    assert_eq!(notifications.get(), 0, "普通设置和未选中的自定义图像不应刷新语言栏");
+    configure(&mut host, |config| {
+        config.custom_brand_icon = "saved-png".into()
+    });
+    assert_eq!(
+        notifications.get(),
+        0,
+        "普通设置和未选中的自定义图像不应刷新语言栏"
+    );
     configure(&mut host, |config| config.brand_icon = "white".into());
     assert_eq!(notifications.get(), 1);
     configure(&mut host, |config| config.brand_icon = "white".into());
     assert_eq!(notifications.get(), 1, "同一外观不重复通知");
     configure(&mut host, |config| config.brand_icon = "custom".into());
     assert_eq!(notifications.get(), 2);
-    configure(&mut host, |config| config.custom_brand_icon = "new-png".into());
+    configure(&mut host, |config| {
+        config.custom_brand_icon = "new-png".into()
+    });
     assert_eq!(notifications.get(), 3, "重新导入自定义图标也应立即刷新");
     cleanup(&host);
 }
@@ -290,7 +577,9 @@ fn key_with(host: &mut Host, id: ClientId, sym: u32, modifiers: u32) -> Frame {
         modifiers,
         test: false,
     };
-    host.handle(id, Request::Key { key, before: None }).frame.unwrap()
+    host.handle(id, Request::Key { key, before: None })
+        .frame
+        .unwrap()
 }
 
 fn press(host: &mut Host, sym: u32) -> Frame {
@@ -316,16 +605,31 @@ fn long_word_completion_shows_plain_candidates_commits_and_persists_its_switch()
         std::sync::Arc::new(wowtype_core::MemoryLexicon::from_tsv_str(
             "zhong hua ren min\t中华人民\t3000\nzhong hua ren min gong he guo\t中华人民共和国\t6000\n").unwrap()),
         std::sync::Arc::new(wowtype_core::BigramLm::default()))));
-    configure(&mut host, |config| { config.typo_mark = false; config.pin_badge = "off".into(); });
+    configure(&mut host, |config| {
+        config.typo_mark = false;
+        config.pin_badge = "off".into();
+    });
     let frame = typing(&mut host, "zhonghuarenmin");
     assert_eq!(frame.candidates[0], "中华人民");
     assert_eq!(frame.candidates[1], "中华人民共和国");
-    assert!(frame.badges.is_empty(), "补全候选应和普通候选一样显示，不附加标记");
+    assert!(
+        frame.badges.is_empty(),
+        "补全候选应和普通候选一样显示，不附加标记"
+    );
     assert!(frame.pin_slots[1].is_none());
-    assert_eq!(press(&mut host, '2' as u32).commit.as_deref(), Some("中华人民共和国"));
+    assert_eq!(
+        press(&mut host, '2' as u32).commit.as_deref(),
+        Some("中华人民共和国")
+    );
     configure(&mut host, |config| config.long_word_completion = false);
-    assert!(!typing(&mut host, "zhonghuarenmin").candidates.contains(&"中华人民共和国".into()));
-    assert!(!Host::new(Store::new(host.data_dir().to_path_buf())).config().long_word_completion);
+    assert!(!typing(&mut host, "zhonghuarenmin")
+        .candidates
+        .contains(&"中华人民共和国".into()));
+    assert!(
+        !Host::new(Store::new(host.data_dir().to_path_buf()))
+            .config()
+            .long_word_completion
+    );
     cleanup(&host);
 }
 
@@ -354,7 +658,10 @@ fn learning_backup_restores_unsaved_words_history_and_pairs_after_restart() {
     engine.input("nihao");
     engine.record_selection_with_pinyin("你好", Some("ni hao"));
     assert!(engine.pair_count() > 0);
-    assert!(!source.store.user_dict_path().exists(), "导出必须包含尚未定时存盘的学习");
+    assert!(
+        !source.store.user_dict_path().exists(),
+        "导出必须包含尚未定时存盘的学习"
+    );
     let backup = source.data_dir().join("学习备份.json");
     let response = source.handle(1, learning_request("export_learning", &backup));
     assert!(response.ok, "{:?}", response.error);
@@ -366,17 +673,28 @@ fn learning_backup_restores_unsaved_words_history_and_pairs_after_restart() {
     let mut restored = learning_host("learning-restored");
     let response = restored.handle(1, learning_request("import_learning", &backup));
     assert!(response.ok, "{:?}", response.error);
-    assert!(response.user_words.unwrap().iter().any(|word| word.word == "阿特"));
+    assert!(response
+        .user_words
+        .unwrap()
+        .iter()
+        .any(|word| word.word == "阿特"));
     let restarted = Engine::new(
         std::sync::Arc::new(wowtype_core::MemoryLexicon::new()),
         std::sync::Arc::new(wowtype_core::BigramLm::default()),
     );
-    restarted.load_user_dict(restored.store.user_dict_path()).unwrap();
-    restarted.load_history(restored.store.history_path()).unwrap();
+    restarted
+        .load_user_dict(restored.store.user_dict_path())
+        .unwrap();
+    restarted
+        .load_history(restored.store.history_path())
+        .unwrap();
     assert_eq!(restarted.history_count("阿特"), 3);
     assert_eq!(restarted.history_count("你好"), 1);
     assert!(restarted.pair_count() > 0);
-    assert!(restarted.input("ate").iter().any(|candidate| candidate.text == "阿特"));
+    assert!(restarted
+        .input("ate")
+        .iter()
+        .any(|candidate| candidate.text == "阿特"));
     cleanup(&source);
     cleanup(&restored);
 }
@@ -391,22 +709,45 @@ fn learning_backup_merge_preserves_current_learning_and_is_idempotent() {
     for _ in 0..3 {
         engine.record_selection_with_pinyin("霜频阁", Some("shuang pin ge"));
     }
-    assert!(engine.user_words().iter().any(|(_, word, _)| word == "霜频阁"));
+    assert!(engine
+        .user_words()
+        .iter()
+        .any(|(_, word, _)| word == "霜频阁"));
     let backup = target.data_dir().join("backup.json");
-    std::fs::write(&backup, serde_json::to_vec(&serde_json::json!({
-        "format": "freetype-learning", "version": 1,
-        "words": [["a te", "阿特", 3000.0]],
-        "history": [["阿特", 3, 1234], ["你好", 1, 1234]],
-        "pairs": [["阿特", "你好", 2, 1234]]
-    })).unwrap()).unwrap();
-    assert!(target.handle(1, learning_request("import_learning", &backup)).ok);
+    std::fs::write(
+        &backup,
+        serde_json::to_vec(&serde_json::json!({
+            "format": "freetype-learning", "version": 1,
+            "words": [["a te", "阿特", 3000.0]],
+            "history": [["阿特", 3, 1234], ["你好", 1, 1234]],
+            "pairs": [["阿特", "你好", 2, 1234]]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        target
+            .handle(1, learning_request("import_learning", &backup))
+            .ok
+    );
     let first = std::fs::read(target.store.history_path()).unwrap();
-    assert!(target.handle(1, learning_request("import_learning", &backup)).ok);
+    assert!(
+        target
+            .handle(1, learning_request("import_learning", &backup))
+            .ok
+    );
     assert_eq!(std::fs::read(target.store.history_path()).unwrap(), first);
     let engine = target.engine.as_ref().unwrap();
-    assert_eq!(engine.history_count("你好"), 5, "旧备份不能覆盖较新的使用记录");
+    assert_eq!(
+        engine.history_count("你好"),
+        5,
+        "旧备份不能覆盖较新的使用记录"
+    );
     assert_eq!(engine.history_count("阿特"), 3, "重复导入不能累加次数");
-    assert!(engine.user_words().iter().any(|(_, word, _)| word == "霜频阁"));
+    assert!(engine
+        .user_words()
+        .iter()
+        .any(|(_, word, _)| word == "霜频阁"));
     assert_eq!(engine.pair_count(), 1);
     cleanup(&target);
 }
@@ -414,7 +755,11 @@ fn learning_backup_merge_preserves_current_learning_and_is_idempotent() {
 #[test]
 fn learning_backup_rejects_invalid_records_without_partial_import() {
     let mut target = learning_host("learning-invalid");
-    target.engine.as_ref().unwrap().record_selection_with_pinyin("你好", Some("ni hao"));
+    target
+        .engine
+        .as_ref()
+        .unwrap()
+        .record_selection_with_pinyin("你好", Some("ni hao"));
     let backup = target.data_dir().join("invalid.json");
     let valid = serde_json::json!({
         "format": "freetype-learning", "version": 1,
@@ -424,7 +769,10 @@ fn learning_backup_rejects_invalid_records_without_partial_import() {
     for (field, value) in [
         ("version", serde_json::json!(2)),
         ("format", serde_json::json!("other-app")),
-        ("words", serde_json::json!([["a te", "阿特", 3000], ["bad-code!", "坏词", 3]])),
+        (
+            "words",
+            serde_json::json!([["a te", "阿特", 3000], ["bad-code!", "坏词", 3]]),
+        ),
         ("history", serde_json::json!([["阿特", -1, 1234]])),
         ("pairs", serde_json::json!([["你好", "", 1, 1234]])),
         ("words", serde_json::Value::Null),
@@ -437,7 +785,10 @@ fn learning_backup_rejects_invalid_records_without_partial_import() {
         let engine = target.engine.as_ref().unwrap();
         assert_eq!(engine.history_count("你好"), 1);
         assert_eq!(engine.history_count("阿特"), 0, "校验完全部记录后才能导入");
-        assert!(!engine.user_words().iter().any(|(_, word, _)| word == "阿特"));
+        assert!(!engine
+            .user_words()
+            .iter()
+            .any(|(_, word, _)| word == "阿特"));
     }
     cleanup(&target);
 }
@@ -446,12 +797,28 @@ fn learning_backup_rejects_invalid_records_without_partial_import() {
 fn learning_backup_reports_io_failures() {
     let mut target = learning_host("learning-io");
     let missing = target.data_dir().join("missing.json");
-    assert!(!target.handle(1, learning_request("import_learning", &missing)).ok);
+    assert!(
+        !target
+            .handle(1, learning_request("import_learning", &missing))
+            .ok
+    );
     let directory = target.data_dir().to_path_buf();
-    assert!(!target.handle(1, learning_request("export_learning", &directory)).ok);
+    assert!(
+        !target
+            .handle(1, learning_request("export_learning", &directory))
+            .ok
+    );
     let backup = target.data_dir().join("backup.json");
-    target.engine.as_ref().unwrap().record_selection_with_pinyin("阿特", Some("a te"));
-    assert!(target.handle(1, learning_request("export_learning", &backup)).ok);
+    target
+        .engine
+        .as_ref()
+        .unwrap()
+        .record_selection_with_pinyin("阿特", Some("a te"));
+    assert!(
+        target
+            .handle(1, learning_request("export_learning", &backup))
+            .ok
+    );
     std::fs::create_dir(target.store.history_path()).unwrap();
     let response = target.handle(1, learning_request("import_learning", &backup));
     assert!(!response.ok, "无法持久化时不能声称恢复成功");
@@ -467,7 +834,10 @@ fn letters_compose_and_space_commits() {
     assert_eq!(frame.candidates[0], "你好");
     assert!(frame.forgettable);
     assert_eq!(frame.font_family, freetype_protocol::DEFAULT_FONT);
-    assert_eq!(frame.candidate_style, "pink", "候选窗拿到设置里的强调色，默认粉色");
+    assert_eq!(
+        frame.candidate_style, "pink",
+        "候选窗拿到设置里的强调色，默认粉色"
+    );
     assert_eq!(frame.candidate_skin, None, "内置样式不下发自定义皮肤颜色");
     let frame = press(&mut host, 0x20);
     assert_eq!(frame.commit.as_deref(), Some("你好"));
@@ -493,7 +863,9 @@ fn custom_candidate_skin_is_sent_only_when_selected_and_preserved_in_config() {
     });
     let frame = typing(&mut host, "ni");
     assert_eq!(frame.candidate_style, "custom");
-    let skin = frame.candidate_skin.expect("选择自定义配色时应下发皮肤颜色");
+    let skin = frame
+        .candidate_skin
+        .expect("选择自定义配色时应下发皮肤颜色");
     assert_eq!(skin.background, "#fbf8f1");
     assert_eq!(skin.accent, "#b45309");
     assert!(!skin.accent_fill);
@@ -502,7 +874,10 @@ fn custom_candidate_skin_is_sent_only_when_selected_and_preserved_in_config() {
     let frame = typing(&mut host, "h");
     assert_eq!(frame.candidate_style, "blue");
     assert_eq!(frame.candidate_skin, None);
-    assert_eq!(host.config.candidate_skin.background, "#fbf8f1", "切回内置样式后应保留自定义配色");
+    assert_eq!(
+        host.config.candidate_skin.background, "#fbf8f1",
+        "切回内置样式后应保留自定义配色"
+    );
     cleanup(&host);
 }
 
@@ -516,9 +891,17 @@ fn punctuation_commits_candidate_then_mark() {
     assert_eq!(press(&mut host, '.' as u32).commit.as_deref(), Some("。"));
     let frame = press(&mut host, '1' as u32);
     assert!(!frame.handled, "没在组字时数字交给应用");
-    assert_eq!(press(&mut host, '.' as u32).commit.as_deref(), Some("."), "数字后面原样");
+    assert_eq!(
+        press(&mut host, '.' as u32).commit.as_deref(),
+        Some("."),
+        "数字后面原样"
+    );
     press(&mut host, '1' as u32);
-    assert_eq!(press(&mut host, '\\' as u32).commit.as_deref(), Some("、"), "数字后面顿号默认仍为全角");
+    assert_eq!(
+        press(&mut host, '\\' as u32).commit.as_deref(),
+        Some("、"),
+        "数字后面顿号默认仍为全角"
+    );
     cleanup(&host);
 }
 
@@ -539,9 +922,16 @@ fn digit_punctuation_options_and_exceptions() {
     assert_eq!(press(&mut host, ':' as u32).commit.as_deref(), Some("："));
     press(&mut host, '2' as u32);
     let frame = press(&mut host, '(' as u32);
-    assert_eq!((frame.commit.as_deref(), frame.caret_back), (Some("（）"), 1));
+    assert_eq!(
+        (frame.commit.as_deref(), frame.caret_back),
+        (Some("（）"), 1)
+    );
     press(&mut host, '3' as u32);
-    assert_eq!(press(&mut host, '.' as u32).commit.as_deref(), Some("."), "未勾选的句号仍保持半角");
+    assert_eq!(
+        press(&mut host, '.' as u32).commit.as_deref(),
+        Some("."),
+        "未勾选的句号仍保持半角"
+    );
 
     // 关掉例外开关：数字后面的顿号、冒号也全部保持半角
     configure(&mut host, |c| c.digit_punct_exceptions = false);
@@ -564,14 +954,23 @@ fn corner_quotes_replace_curved_double_quotes() {
     let mut host = host("corner-quotes");
     configure(&mut host, |c| c.corner_quotes = true);
     let frame = press(&mut host, '"' as u32);
-    assert_eq!((frame.commit.as_deref(), frame.caret_back), (Some("「」"), 1));
+    assert_eq!(
+        (frame.commit.as_deref(), frame.caret_back),
+        (Some("「」"), 1)
+    );
     let single = press(&mut host, '\'' as u32);
-    assert_eq!((single.commit.as_deref(), single.caret_back), (Some("‘’"), 1));
+    assert_eq!(
+        (single.commit.as_deref(), single.caret_back),
+        (Some("‘’"), 1)
+    );
 
     configure(&mut host, |c| c.auto_pair = false);
     assert_eq!(press(&mut host, '"' as u32).commit.as_deref(), Some("「"));
     typing(&mut host, "nihao");
-    assert_eq!(press(&mut host, '"' as u32).commit.as_deref(), Some("你好」"));
+    assert_eq!(
+        press(&mut host, '"' as u32).commit.as_deref(),
+        Some("你好」")
+    );
     assert_eq!(press(&mut host, '"' as u32).commit.as_deref(), Some("「"));
 
     configure(&mut host, |c| c.fullwidth_punct = false);
@@ -594,7 +993,11 @@ fn auto_pair_puts_caret_inside() {
 
     configure(&mut host, |c| c.auto_pair = false);
     assert_eq!(press(&mut host, '"' as u32).commit.as_deref(), Some("“"));
-    assert_eq!(press(&mut host, '"' as u32).commit.as_deref(), Some("”"), "左右交替");
+    assert_eq!(
+        press(&mut host, '"' as u32).commit.as_deref(),
+        Some("”"),
+        "左右交替"
+    );
     let frame = press(&mut host, '(' as u32);
     assert_eq!((frame.commit.as_deref(), frame.caret_back), (Some("（"), 0));
     configure(&mut host, |c| c.fullwidth_punct = false);
@@ -610,7 +1013,10 @@ fn test_then_real_key_uses_one_result() {
         modifiers: 0,
         test: true,
     };
-    let tested = host.handle(1, Request::Key { key, before: None }).frame.unwrap();
+    let tested = host
+        .handle(1, Request::Key { key, before: None })
+        .frame
+        .unwrap();
     assert!(tested.handled);
     let real = host
         .handle(
@@ -624,7 +1030,13 @@ fn test_then_real_key_uses_one_result() {
         .unwrap();
     assert_eq!(tested.page_revision, 0, "按键预判不能发布候选页");
     assert_ne!(real.page_revision, 0);
-    assert_eq!(Frame { page_revision: 0, ..real }, tested);
+    assert_eq!(
+        Frame {
+            page_revision: 0,
+            ..real
+        },
+        tested
+    );
     assert_eq!(press(&mut host, 'i' as u32).candidates[0], "你");
     cleanup(&host);
 }
@@ -665,7 +1077,10 @@ fn test_alone_does_not_change_state() {
     };
     host.handle(1, Request::Key { key, before: None });
     assert!(host.handle(1, Request::Status).ok);
-    assert!(!press(&mut host, keysym::ESCAPE).handled, "没有真的进编辑区，Esc 交给应用");
+    assert!(
+        !press(&mut host, keysym::ESCAPE).handled,
+        "没有真的进编辑区，Esc 交给应用"
+    );
     cleanup(&host);
 }
 
@@ -673,12 +1088,18 @@ fn test_alone_does_not_change_state() {
 fn english_mode_passes_keys_and_toggle_commits_letters() {
     let mut host = host("mode");
     typing(&mut host, "nih");
-    let frame = host.handle(1, Request::ToggleMode { shift: None }).frame.unwrap();
+    let frame = host
+        .handle(1, Request::ToggleMode { shift: None })
+        .frame
+        .unwrap();
     assert_eq!(frame.mode, Mode::English);
     assert_eq!(frame.hint.as_deref(), Some("英"));
     assert_eq!(frame.commit.as_deref(), Some("nih"));
     assert!(!press(&mut host, 'a' as u32).handled);
-    let frame = host.handle(1, Request::ToggleMode { shift: None }).frame.unwrap();
+    let frame = host
+        .handle(1, Request::ToggleMode { shift: None })
+        .frame
+        .unwrap();
     assert_eq!(frame.mode, Mode::Chinese);
     assert!(press(&mut host, 'a' as u32).handled);
     cleanup(&host);
@@ -692,12 +1113,22 @@ fn shift_side_follows_setting_and_hint_can_be_off() {
         c.hint_on_toggle = false;
     });
     let frame = host
-        .handle(1, Request::ToggleMode { shift: Some("right".into()) })
+        .handle(
+            1,
+            Request::ToggleMode {
+                shift: Some("right".into()),
+            },
+        )
         .frame
         .unwrap();
     assert_eq!(frame.mode, Mode::Chinese, "右 Shift 不切");
     let frame = host
-        .handle(1, Request::ToggleMode { shift: Some("left".into()) })
+        .handle(
+            1,
+            Request::ToggleMode {
+                shift: Some("left".into()),
+            },
+        )
         .frame
         .unwrap();
     assert_eq!(frame.mode, Mode::English);
@@ -718,7 +1149,10 @@ fn per_app_mode_scope() {
     );
     host.handle(1, Request::ToggleMode { shift: None });
     assert!(!press(&mut host, 'a' as u32).handled, "记事本切成英文");
-    assert!(key_with(&mut host, 2, 'a' as u32, 0).handled, "另一个应用还是中文");
+    assert!(
+        key_with(&mut host, 2, 'a' as u32, 0).handled,
+        "另一个应用还是中文"
+    );
     configure(&mut host, |c| c.default_mode = DefaultMode::English);
     host.handle(
         3,
@@ -727,7 +1161,10 @@ fn per_app_mode_scope() {
             app: "new.exe".into(),
         },
     );
-    assert!(!key_with(&mut host, 3, 'a' as u32, 0).handled, "新应用用默认的英文");
+    assert!(
+        !key_with(&mut host, 3, 'a' as u32, 0).handled,
+        "新应用用默认的英文"
+    );
     cleanup(&host);
 }
 
@@ -737,29 +1174,74 @@ fn global_default_keeps_manual_mode_across_apps_settings_and_restart() {
     // 配置经由真实 JSON 协议读取，旧的中文、英文写法继续兼容。
     let parsed = serde_json::from_str::<Config>(r#"{"default_mode":"global","mode_scope":"app"}"#);
     assert!(parsed.is_ok(), "默认状态必须接受全局选项：{parsed:?}");
-    let response = host.handle(1, Request::SetConfig { config: parsed.unwrap() });
+    let response = host.handle(
+        1,
+        Request::SetConfig {
+            config: parsed.unwrap(),
+        },
+    );
     assert!(response.ok, "{response:?}");
-    let frame = host.handle(1, Request::ToggleMode { shift: None }).frame.unwrap();
+    let frame = host
+        .handle(1, Request::ToggleMode { shift: None })
+        .frame
+        .unwrap();
     assert_eq!(frame.mode, Mode::English);
-    host.handle(1, Request::Focus { active: false, before: None });
-    host.handle(2, Request::Hello { session: true, app: "browser.exe".into() });
-    let focused = host.handle(2, Request::Focus { active: true, before: None }).frame.unwrap();
-    assert_eq!(focused.mode, Mode::English, "全局模式不受旧的按应用设置影响");
+    host.handle(
+        1,
+        Request::Focus {
+            active: false,
+            before: None,
+        },
+    );
+    host.handle(
+        2,
+        Request::Hello {
+            session: true,
+            app: "browser.exe".into(),
+        },
+    );
+    let focused = host
+        .handle(
+            2,
+            Request::Focus {
+                active: true,
+                before: None,
+            },
+        )
+        .frame
+        .unwrap();
+    assert_eq!(
+        focused.mode,
+        Mode::English,
+        "全局模式不受旧的按应用设置影响"
+    );
     assert!(!key_with(&mut host, 2, 'a' as u32, 0).handled);
     configure(&mut host, |c| c.font_size = 22);
-    assert_eq!(host.handle(2, Request::Status).status.unwrap().mode, Mode::English);
+    assert_eq!(
+        host.handle(2, Request::Status).status.unwrap().mode,
+        Mode::English
+    );
 
     let dir = host.data_dir();
     drop(host);
     let mut restarted = Host::new(Store::new(dir));
     restarted.connect(3, "new.exe".into());
-    assert_eq!(restarted.handle(3, Request::Status).status.unwrap().mode, Mode::English);
-    let frame = restarted.handle(3, Request::ToggleMode { shift: None }).frame.unwrap();
+    assert_eq!(
+        restarted.handle(3, Request::Status).status.unwrap().mode,
+        Mode::English
+    );
+    let frame = restarted
+        .handle(3, Request::ToggleMode { shift: None })
+        .frame
+        .unwrap();
     assert_eq!(frame.mode, Mode::Chinese);
     let dir = restarted.data_dir();
     drop(restarted);
     let mut restarted = Host::new(Store::new(dir));
-    assert_eq!(restarted.handle(3, Request::Status).status.unwrap().mode, Mode::Chinese);
+    assert_eq!(
+        restarted.handle(3, Request::Status).status.unwrap().mode,
+        Mode::Chinese
+    );
     cleanup(&restarted);
 }
 
@@ -768,17 +1250,37 @@ fn selecting_global_default_keeps_the_active_apps_current_mode() {
     let mut host = host("enable-global");
     configure(&mut host, |c| c.mode_scope = "app".into());
     host.handle(1, Request::ToggleMode { shift: None });
-    host.handle(1, Request::Focus { active: true, before: None });
+    host.handle(
+        1,
+        Request::Focus {
+            active: true,
+            before: None,
+        },
+    );
     let mut json = serde_json::to_value(host.config()).unwrap();
     json["default_mode"] = serde_json::json!("global");
     let config = serde_json::from_value::<Config>(json);
     assert!(config.is_ok(), "默认状态必须接受全局选项");
-    assert!(host.handle(1, Request::SetConfig { config: config.unwrap() }).ok);
-    assert_eq!(host.handle(1, Request::Status).status.unwrap().mode, Mode::English);
+    assert!(
+        host.handle(
+            1,
+            Request::SetConfig {
+                config: config.unwrap()
+            }
+        )
+        .ok
+    );
+    assert_eq!(
+        host.handle(1, Request::Status).status.unwrap().mode,
+        Mode::English
+    );
     let dir = host.data_dir();
     drop(host);
     let mut restarted = Host::new(Store::new(dir));
-    assert_eq!(restarted.handle(1, Request::Status).status.unwrap().mode, Mode::English);
+    assert_eq!(
+        restarted.handle(1, Request::Status).status.unwrap().mode,
+        Mode::English
+    );
     cleanup(&restarted);
 }
 
@@ -786,15 +1288,30 @@ fn selecting_global_default_keeps_the_active_apps_current_mode() {
 fn selecting_global_in_settings_after_focus_leaves_keeps_last_manual_mode() {
     let mut host = host("global-after-blur");
     configure(&mut host, |c| c.mode_scope = "app".into());
-    host.handle(1, Request::Focus { active: true, before: None });
+    host.handle(
+        1,
+        Request::Focus {
+            active: true,
+            before: None,
+        },
+    );
     host.handle(1, Request::ToggleMode { shift: None });
     // 打开设置窗口会让原来的文本框失焦，设置连接本身没有输入会话。
-    host.handle(1, Request::Focus { active: false, before: None });
+    host.handle(
+        1,
+        Request::Focus {
+            active: false,
+            before: None,
+        },
+    );
     let mut config = host.config().clone();
     config.default_mode = DefaultMode::Global;
     assert!(host.handle(90, Request::SetConfig { config }).ok);
-    assert_eq!(host.handle(90, Request::Status).status.unwrap().mode, Mode::English,
-        "从设置启用全局不能因原应用已失焦而丢掉最后手动选择的英文");
+    assert_eq!(
+        host.handle(90, Request::Status).status.unwrap().mode,
+        Mode::English,
+        "从设置启用全局不能因原应用已失焦而丢掉最后手动选择的英文"
+    );
     cleanup(&host);
 }
 
@@ -803,24 +1320,68 @@ fn key_test_does_not_learn_or_forget_before_the_key_is_accepted() {
     let mut host = host("test-learning");
     typing(&mut host, "nihao");
     let before = host.engine.as_ref().unwrap().export_learning().unwrap();
-    let preview = Key { keysym: 0x20, test: true, ..Key::default() };
+    let preview = Key {
+        keysym: 0x20,
+        test: true,
+        ..Key::default()
+    };
     for _ in 0..3 {
-        assert!(host.handle(1, Request::Key { key: preview, before: None }).frame.unwrap().handled);
-        assert_eq!(host.engine.as_ref().unwrap().export_learning().unwrap(), before, "反复预判不能提前学习");
+        assert!(
+            host.handle(
+                1,
+                Request::Key {
+                    key: preview,
+                    before: None
+                }
+            )
+            .frame
+            .unwrap()
+            .handled
+        );
+        assert_eq!(
+            host.engine.as_ref().unwrap().export_learning().unwrap(),
+            before,
+            "反复预判不能提前学习"
+        );
     }
     let result = press(&mut host, 0x20);
     assert_eq!(result.commit.as_deref(), Some("你好"));
     let learned = host.engine.as_ref().unwrap().export_learning().unwrap();
     assert_ne!(learned, before, "真正接受按键后才学习");
     let records: serde_json::Value = serde_json::from_str(&learned).unwrap();
-    assert_eq!(records["history"][0][1], 1, "重复预判之后一次上屏仍然只学习一次");
+    assert_eq!(
+        records["history"][0][1], 1,
+        "重复预判之后一次上屏仍然只学习一次"
+    );
 
     typing(&mut host, "nihao");
-    let preview = Key { keysym: keysym::DELETE, modifiers: modifier::CTRL, test: true };
-    assert!(host.handle(1, Request::Key { key: preview, before: None }).frame.unwrap().handled);
-    assert_eq!(host.engine.as_ref().unwrap().export_learning().unwrap(), learned, "预判删除键不能删除用户记录");
+    let preview = Key {
+        keysym: keysym::DELETE,
+        modifiers: modifier::CTRL,
+        test: true,
+    };
+    assert!(
+        host.handle(
+            1,
+            Request::Key {
+                key: preview,
+                before: None
+            }
+        )
+        .frame
+        .unwrap()
+        .handled
+    );
+    assert_eq!(
+        host.engine.as_ref().unwrap().export_learning().unwrap(),
+        learned,
+        "预判删除键不能删除用户记录"
+    );
     key_with(&mut host, 1, keysym::DELETE, modifier::CTRL);
-    assert_ne!(host.engine.as_ref().unwrap().export_learning().unwrap(), learned);
+    assert_ne!(
+        host.engine.as_ref().unwrap().export_learning().unwrap(),
+        learned
+    );
     cleanup(&host);
 }
 
@@ -828,12 +1389,24 @@ fn key_test_does_not_learn_or_forget_before_the_key_is_accepted() {
 fn global_mode_toggle_invalidates_other_clients_key_predictions() {
     let mut host = host("global-prediction");
     host.connect(2, "browser.exe".into());
-    let key = Key { keysym: 'n' as u32, test: true, ..Key::default() };
-    assert!(host.handle(1, Request::Key { key, before: None }).frame.unwrap().handled);
+    let key = Key {
+        keysym: 'n' as u32,
+        test: true,
+        ..Key::default()
+    };
+    assert!(
+        host.handle(1, Request::Key { key, before: None })
+            .frame
+            .unwrap()
+            .handled
+    );
     host.handle(2, Request::ToggleMode { shift: None });
     let frame = press(&mut host, 'n' as u32);
     assert_eq!(frame.mode, Mode::English);
-    assert!(!frame.handled && frame.preedit.is_empty(), "切换全局状态后不能接纳旧中文状态的按键预判");
+    assert!(
+        !frame.handled && frame.preedit.is_empty(),
+        "切换全局状态后不能接纳旧中文状态的按键预判"
+    );
     cleanup(&host);
 }
 
@@ -844,11 +1417,17 @@ fn emoji_shortcut_toggles_the_panel_like_upstream() {
     let modifiers = modifier::CTRL | modifier::SHIFT;
     let opened = key_with(&mut host, 1, 'e' as u32, modifiers);
     assert!(!opened.candidates.is_empty());
-    let key = Key { keysym: 'e' as u32, modifiers, test: true };
+    let key = Key {
+        keysym: 'e' as u32,
+        modifiers,
+        test: true,
+    };
     host.handle(1, Request::Key { key, before: None });
     let closed = key_with(&mut host, 1, 'e' as u32, modifiers);
-    assert!(closed.preedit.is_empty() && closed.candidates.is_empty() && closed.title.is_none(),
-        "与上游一样，再按一次表情快捷键应关闭面板");
+    assert!(
+        closed.preedit.is_empty() && closed.candidates.is_empty() && closed.title.is_none(),
+        "与上游一样，再按一次表情快捷键应关闭面板"
+    );
     cleanup(&host);
 }
 
@@ -878,20 +1457,38 @@ fn caps_lock_letters_go_to_app() {
 #[test]
 fn caps_lock_types_english_and_restores_the_remembered_mode() {
     let mut host = host("caps-english");
-    let on = host.handle(1, Request::CapsLock { on: true }).frame.unwrap();
+    let on = host
+        .handle(1, Request::CapsLock { on: true })
+        .frame
+        .unwrap();
     assert_eq!(on.mode, Mode::English, "大写锁定开着：显示和输入都是英文");
     assert_eq!(on.hint.as_deref(), Some("A"));
-    assert_eq!(host.handle(1, Request::Status).status.unwrap().mode, Mode::English);
+    assert_eq!(
+        host.handle(1, Request::Status).status.unwrap().mode,
+        Mode::English
+    );
     for sym in [',' as u32, '1' as u32, 'A' as u32] {
         let frame = key_with(&mut host, 1, sym, modifier::CAPS);
-        assert!(!frame.handled && frame.commit.is_none(), "标点、数字、字母都原样交给应用");
+        assert!(
+            !frame.handled && frame.commit.is_none(),
+            "标点、数字、字母都原样交给应用"
+        );
     }
-    let off = host.handle(1, Request::CapsLock { on: false }).frame.unwrap();
+    let off = host
+        .handle(1, Request::CapsLock { on: false })
+        .frame
+        .unwrap();
     assert_eq!(off.mode, Mode::Chinese, "关掉后回到原来的中文");
     assert_eq!(off.hint.as_deref(), Some("中"));
     assert_eq!(press(&mut host, ',' as u32).commit.as_deref(), Some("，"));
     // 重复报同一个状态（输入框得到焦点时也报）不提示
-    assert_eq!(host.handle(1, Request::CapsLock { on: false }).frame.unwrap().hint, None);
+    assert_eq!(
+        host.handle(1, Request::CapsLock { on: false })
+            .frame
+            .unwrap()
+            .hint,
+        None
+    );
     cleanup(&host);
 }
 
@@ -899,8 +1496,15 @@ fn caps_lock_types_english_and_restores_the_remembered_mode() {
 fn caps_lock_commits_half_typed_letters() {
     let mut host = host("caps-composing");
     assert_eq!(typing(&mut host, "ni").preedit, "ni");
-    let frame = host.handle(1, Request::CapsLock { on: true }).frame.unwrap();
-    assert_eq!(frame.commit.as_deref(), Some("ni"), "打到一半的字母原样上屏");
+    let frame = host
+        .handle(1, Request::CapsLock { on: true })
+        .frame
+        .unwrap();
+    assert_eq!(
+        frame.commit.as_deref(),
+        Some("ni"),
+        "打到一半的字母原样上屏"
+    );
     assert!(frame.preedit.is_empty() && frame.candidates.is_empty());
     cleanup(&host);
 }
@@ -912,8 +1516,16 @@ fn caps_lock_state_follows_key_modifiers_without_a_notification() {
     let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     host.set_desktop(Box::new(Recorder(log.clone())));
     assert!(!key_with(&mut host, 1, ',' as u32, modifier::CAPS).handled);
-    assert_eq!(log.borrow().last().unwrap().mode, Mode::English, "状态栏跟着变");
-    assert_eq!(press(&mut host, ',' as u32).commit.as_deref(), Some("，"), "下一个键没带大写锁定：回到中文");
+    assert_eq!(
+        log.borrow().last().unwrap().mode,
+        Mode::English,
+        "状态栏跟着变"
+    );
+    assert_eq!(
+        press(&mut host, ',' as u32).commit.as_deref(),
+        Some("，"),
+        "下一个键没带大写锁定：回到中文"
+    );
     assert_eq!(log.borrow().last().unwrap().mode, Mode::Chinese);
     cleanup(&host);
 }
@@ -923,7 +1535,12 @@ fn caps_lock_keeps_the_remembered_mode_from_being_toggled() {
     let mut host = host("caps-toggle");
     host.handle(1, Request::CapsLock { on: true });
     let frame = host
-        .handle(1, Request::ToggleMode { shift: Some("left".into()) })
+        .handle(
+            1,
+            Request::ToggleMode {
+                shift: Some("left".into()),
+            },
+        )
         .frame
         .unwrap();
     assert_eq!(frame.mode, Mode::English);
@@ -943,12 +1560,18 @@ impl Desktop for Foreground {
         self.0.borrow().clone()
     }
     fn open_apps(&self) -> Vec<freetype_protocol::AppWindow> {
-        vec![freetype_protocol::AppWindow { app: "code.exe".into(), title: "main.rs".into() }]
+        vec![freetype_protocol::AppWindow {
+            app: "code.exe".into(),
+            title: "main.rs".into(),
+        }]
     }
 }
 
 fn preset(app: &str, mode: Mode) -> freetype_protocol::AppPreset {
-    freetype_protocol::AppPreset { app: app.into(), mode }
+    freetype_protocol::AppPreset {
+        app: app.into(),
+        mode,
+    }
 }
 
 fn status_mode(host: &mut Host) -> Mode {
@@ -961,21 +1584,40 @@ fn app_preset_applies_once_when_switching_into_the_app() {
     configure(&mut host, |c| {
         c.app_presets = true;
         // 规则里的大小写不影响匹配
-        c.app_preset_rules = vec![preset("Code.EXE", Mode::English), preset("wechat.exe", Mode::Chinese)];
+        c.app_preset_rules = vec![
+            preset("Code.EXE", Mode::English),
+            preset("wechat.exe", Mode::Chinese),
+        ];
     });
     host.foreground("notepad.exe");
     assert_eq!(status_mode(&mut host), Mode::Chinese, "没有规则的程序不动");
     host.connect(2, "code.exe".into());
     host.foreground("code.exe");
-    assert_eq!(status_mode(&mut host), Mode::English, "切进规则里的程序：切一次");
+    assert_eq!(
+        status_mode(&mut host),
+        Mode::English,
+        "切进规则里的程序：切一次"
+    );
     // 在这个程序里手动切回中文，再换它自己的窗口（查找框、对话框）：不重置
     host.handle(2, Request::ToggleMode { shift: None });
     host.foreground("code.exe");
-    assert_eq!(status_mode(&mut host), Mode::Chinese, "同一个程序里不再干预");
+    assert_eq!(
+        status_mode(&mut host),
+        Mode::Chinese,
+        "同一个程序里不再干预"
+    );
     host.foreground("explorer.exe");
-    assert_eq!(status_mode(&mut host), Mode::Chinese, "没有规则的程序恢复原状态");
+    assert_eq!(
+        status_mode(&mut host),
+        Mode::Chinese,
+        "没有规则的程序恢复原状态"
+    );
     host.foreground("code.exe");
-    assert_eq!(status_mode(&mut host), Mode::English, "离开后再切回来：重新套用一次");
+    assert_eq!(
+        status_mode(&mut host),
+        Mode::English,
+        "离开后再切回来：重新套用一次"
+    );
     host.foreground("wechat.exe");
     assert_eq!(status_mode(&mut host), Mode::Chinese, "规则也可以指定中文");
     cleanup(&host);
@@ -984,16 +1626,31 @@ fn app_preset_applies_once_when_switching_into_the_app() {
 #[test]
 fn app_preset_does_nothing_when_switched_off_or_already_in_that_mode() {
     let mut host = host("preset-off");
-    configure(&mut host, |c| c.app_preset_rules = vec![preset("code.exe", Mode::English)]);
+    configure(&mut host, |c| {
+        c.app_preset_rules = vec![preset("code.exe", Mode::English)]
+    });
     host.foreground("code.exe");
-    assert_eq!(status_mode(&mut host), Mode::Chinese, "总开关关着：规则不生效");
+    assert_eq!(
+        status_mode(&mut host),
+        Mode::Chinese,
+        "总开关关着：规则不生效"
+    );
     // 打开开关只管之后的切入，不追溯现在所在的程序
     configure(&mut host, |c| c.app_presets = true);
     assert_eq!(status_mode(&mut host), Mode::Chinese);
     host.foreground("notepad.exe");
     host.handle(1, Request::ToggleMode { shift: None });
     host.foreground("code.exe");
-    let frame = host.handle(1, Request::Focus { active: true, before: None }).frame.unwrap();
+    let frame = host
+        .handle(
+            1,
+            Request::Focus {
+                active: true,
+                before: None,
+            },
+        )
+        .frame
+        .unwrap();
     assert_eq!(frame.mode, Mode::English);
     assert_eq!(frame.hint, None, "已经是英文：不切换，也不提示");
     cleanup(&host);
@@ -1008,19 +1665,56 @@ fn app_preset_is_applied_by_focus_and_hints_once() {
     });
     let foreground = std::rc::Rc::new(std::cell::RefCell::new(None));
     host.set_desktop(Box::new(Foreground(foreground.clone())));
-    host.handle(2, Request::Hello { session: true, app: "Code.exe".into() });
+    host.handle(
+        2,
+        Request::Hello {
+            session: true,
+            app: "Code.exe".into(),
+        },
+    );
     // 前台事件还没到，输入框先得到了焦点：焦点这一步自己查前台程序
     *foreground.borrow_mut() = Some("code.exe".to_string());
-    let frame = host.handle(2, Request::Focus { active: true, before: None }).frame.unwrap();
+    let frame = host
+        .handle(
+            2,
+            Request::Focus {
+                active: true,
+                before: None,
+            },
+        )
+        .frame
+        .unwrap();
     assert_eq!(frame.mode, Mode::English);
-    assert_eq!(frame.hint.as_deref(), Some("英"), "预设切换了状态：提示一次");
-    let frame = host.handle(2, Request::Focus { active: true, before: None }).frame.unwrap();
+    assert_eq!(
+        frame.hint.as_deref(),
+        Some("英"),
+        "预设切换了状态：提示一次"
+    );
+    let frame = host
+        .handle(
+            2,
+            Request::Focus {
+                active: true,
+                before: None,
+            },
+        )
+        .frame
+        .unwrap();
     assert_eq!(frame.hint, None, "同一个程序里换输入框：不再提示");
     assert!(!key_with(&mut host, 2, 'a' as u32, 0).handled);
     // FreeType 自己的窗口（桌面报 None）不算离开
     *foreground.borrow_mut() = None;
     host.handle(2, Request::ToggleMode { shift: None });
-    let frame = host.handle(2, Request::Focus { active: true, before: None }).frame.unwrap();
+    let frame = host
+        .handle(
+            2,
+            Request::Focus {
+                active: true,
+                before: None,
+            },
+        )
+        .frame
+        .unwrap();
     assert_eq!(frame.mode, Mode::Chinese, "手动切换的结果留着");
     let apps = host.handle(9, Request::ListApps).apps.unwrap();
     assert_eq!(apps[0].app, "code.exe");
@@ -1035,10 +1729,22 @@ fn app_preset_sets_the_apps_own_mode_when_modes_are_per_app() {
         c.app_presets = true;
         c.app_preset_rules = vec![preset("code.exe", Mode::English)];
     });
-    host.handle(2, Request::Hello { session: true, app: "code.exe".into() });
+    host.handle(
+        2,
+        Request::Hello {
+            session: true,
+            app: "code.exe".into(),
+        },
+    );
     host.foreground("code.exe");
-    assert!(!key_with(&mut host, 2, 'a' as u32, 0).handled, "规则里的程序切成英文");
-    assert!(press(&mut host, 'n' as u32).handled, "记事本各记各的，还是中文");
+    assert!(
+        !key_with(&mut host, 2, 'a' as u32, 0).handled,
+        "规则里的程序切成英文"
+    );
+    assert!(
+        press(&mut host, 'n' as u32).handled,
+        "记事本各记各的，还是中文"
+    );
     cleanup(&host);
 }
 
@@ -1058,16 +1764,50 @@ fn app_preset_restores_normal_mode_after_leaving() {
         });
         host.connect(2, "code.exe".into());
         host.foreground("notepad.exe");
-        host.handle(1, Request::Focus { active: true, before: None });
+        host.handle(
+            1,
+            Request::Focus {
+                active: true,
+                before: None,
+            },
+        );
         for _ in 0..3 {
             host.foreground("code.exe");
-            assert_eq!(host.handle(2, Request::Focus { active: true, before: None }).frame.unwrap().mode, Mode::English);
+            assert_eq!(
+                host.handle(
+                    2,
+                    Request::Focus {
+                        active: true,
+                        before: None
+                    }
+                )
+                .frame
+                .unwrap()
+                .mode,
+                Mode::English
+            );
             assert!(!key_with(&mut host, 2, 'n' as u32, 0).handled);
             host.foreground("notepad.exe");
             // 前台通知先于旧输入框失焦到达时，状态也必须已经恢复。
-            assert_eq!(status_mode(&mut host), Mode::Chinese, "{name}: 规则不能污染原状态");
-            host.handle(1, Request::Focus { active: true, before: None });
-            host.handle(2, Request::Focus { active: false, before: None });
+            assert_eq!(
+                status_mode(&mut host),
+                Mode::Chinese,
+                "{name}: 规则不能污染原状态"
+            );
+            host.handle(
+                1,
+                Request::Focus {
+                    active: true,
+                    before: None,
+                },
+            );
+            host.handle(
+                2,
+                Request::Focus {
+                    active: false,
+                    before: None,
+                },
+            );
             assert!(press(&mut host, 'n' as u32).handled);
             press(&mut host, keysym::ESCAPE);
         }
@@ -1080,20 +1820,37 @@ fn app_preset_same_mode_still_isolates_manual_changes_and_chained_rules() {
     let mut host = host("preset-same-mode");
     configure(&mut host, |c| {
         c.app_presets = true;
-        c.app_preset_rules = vec![preset("code.exe", Mode::English), preset("chat.exe", Mode::Chinese)];
+        c.app_preset_rules = vec![
+            preset("code.exe", Mode::English),
+            preset("chat.exe", Mode::Chinese),
+        ];
     });
     host.connect(2, "code.exe".into());
     host.connect(3, "chat.exe".into());
     host.foreground("notepad.exe");
     host.handle(1, Request::ToggleMode { shift: None });
     host.foreground("code.exe");
-    assert_eq!(host.handle(2, Request::ToggleMode { shift: None }).frame.unwrap().mode, Mode::Chinese);
+    assert_eq!(
+        host.handle(2, Request::ToggleMode { shift: None })
+            .frame
+            .unwrap()
+            .mode,
+        Mode::Chinese
+    );
     host.foreground("code.exe");
-    assert_eq!(key_with(&mut host, 2, 'n' as u32, 0).mode, Mode::Chinese, "软件内部手动切换必须保留");
+    assert_eq!(
+        key_with(&mut host, 2, 'n' as u32, 0).mode,
+        Mode::Chinese,
+        "软件内部手动切换必须保留"
+    );
     host.foreground("chat.exe");
     assert_eq!(status_mode(&mut host), Mode::Chinese);
     host.foreground("notepad.exe");
-    assert_eq!(status_mode(&mut host), Mode::English, "连续经过多条规则后仍恢复原英文");
+    assert_eq!(
+        status_mode(&mut host),
+        Mode::English,
+        "连续经过多条规则后仍恢复原英文"
+    );
     assert!(!press(&mut host, 'n' as u32).handled);
     cleanup(&host);
 }
@@ -1108,13 +1865,27 @@ fn app_preset_does_not_persist_temporary_mode_when_saving_settings_or_restarting
     });
     host.connect(2, "code.exe".into());
     host.foreground("code.exe");
-    host.handle(2, Request::Focus { active: true, before: None });
+    host.handle(
+        2,
+        Request::Focus {
+            active: true,
+            before: None,
+        },
+    );
     host.handle(2, Request::ToggleMode { shift: None });
     host.handle(2, Request::ToggleMode { shift: None });
     configure(&mut host, |c| c.font_size = 22);
-    assert_eq!(status_mode(&mut host), Mode::English, "保存无关设置不能重置软件内状态");
+    assert_eq!(
+        status_mode(&mut host),
+        Mode::English,
+        "保存无关设置不能重置软件内状态"
+    );
     let mut restarted = Host::new(Store::new(host.data_dir()));
-    assert_eq!(status_mode(&mut restarted), Mode::Chinese, "临时规则及软件内切换不能写成全局记忆");
+    assert_eq!(
+        status_mode(&mut restarted),
+        Mode::Chinese,
+        "临时规则及软件内切换不能写成全局记忆"
+    );
     host.foreground("notepad.exe");
     assert_eq!(status_mode(&mut host), Mode::Chinese);
     cleanup(&host);
@@ -1130,15 +1901,37 @@ fn app_preset_rejects_delayed_foreground_and_background_focus_notifications() {
     host.connect(2, "code.exe".into());
     let foreground = std::rc::Rc::new(std::cell::RefCell::new(Some("code.exe".into())));
     host.set_desktop(Box::new(Foreground(foreground.clone())));
-    host.handle(2, Request::Focus { active: true, before: None });
+    host.handle(
+        2,
+        Request::Focus {
+            active: true,
+            before: None,
+        },
+    );
     host.handle(2, Request::ToggleMode { shift: None });
     // 输入框已查询到 Code 是前台，旧的 Notepad 通知才从另一个队列送达。
     host.foreground("notepad.exe");
     host.foreground("code.exe");
-    assert_eq!(status_mode(&mut host), Mode::Chinese, "延迟通知不能重新套用英文规则");
+    assert_eq!(
+        status_mode(&mut host),
+        Mode::Chinese,
+        "延迟通知不能重新套用英文规则"
+    );
     *foreground.borrow_mut() = Some("notepad.exe".into());
-    host.handle(1, Request::Focus { active: true, before: None });
-    host.handle(2, Request::Focus { active: true, before: None });
+    host.handle(
+        1,
+        Request::Focus {
+            active: true,
+            before: None,
+        },
+    );
+    host.handle(
+        2,
+        Request::Focus {
+            active: true,
+            before: None,
+        },
+    );
     host.foreground("code.exe");
     assert_eq!(status_mode(&mut host), Mode::Chinese);
     // 状态栏按钮必须操作当前软件，不能被后台输入框抢走。
@@ -1158,11 +1951,25 @@ fn app_preset_disabling_or_removing_rule_restores_base_mode() {
         });
         host.connect(2, "code.exe".into());
         host.foreground("code.exe");
-        host.handle(2, Request::Focus { active: true, before: None });
+        host.handle(
+            2,
+            Request::Focus {
+                active: true,
+                before: None,
+            },
+        );
         configure(&mut host, |c| {
-            if remove { c.app_preset_rules.clear(); } else { c.app_presets = false; }
+            if remove {
+                c.app_preset_rules.clear();
+            } else {
+                c.app_presets = false;
+            }
         });
-        assert_eq!(status_mode(&mut host), Mode::Chinese, "关闭或移除规则后恢复原状态");
+        assert_eq!(
+            status_mode(&mut host),
+            Mode::Chinese,
+            "关闭或移除规则后恢复原状态"
+        );
         cleanup(&host);
     }
 }
@@ -1177,16 +1984,43 @@ fn app_preset_first_key_observes_foreground_before_delayed_events() {
     host.connect(2, "code.exe".into());
     let foreground = std::rc::Rc::new(std::cell::RefCell::new(Some("code.exe".into())));
     host.set_desktop(Box::new(Foreground(foreground.clone())));
-    assert!(!key_with(&mut host, 2, 'n' as u32, 0).handled, "首键先于焦点与桌面事件到达仍用预设");
+    assert!(
+        !key_with(&mut host, 2, 'n' as u32, 0).handled,
+        "首键先于焦点与桌面事件到达仍用预设"
+    );
     host.handle(2, Request::ToggleMode { shift: None });
-    let preview = Key { keysym: 'n' as u32, test: true, ..Key::default() };
-    assert!(host.handle(2, Request::Key { key: preview, before: None }).frame.unwrap().handled);
+    let preview = Key {
+        keysym: 'n' as u32,
+        test: true,
+        ..Key::default()
+    };
+    assert!(
+        host.handle(
+            2,
+            Request::Key {
+                key: preview,
+                before: None
+            }
+        )
+        .frame
+        .unwrap()
+        .handled
+    );
     *foreground.borrow_mut() = Some("notepad.exe".into());
-    host.handle(1, Request::Focus { active: true, before: None });
+    host.handle(
+        1,
+        Request::Focus {
+            active: true,
+            before: None,
+        },
+    );
     *foreground.borrow_mut() = Some("code.exe".into());
     let frame = key_with(&mut host, 2, 'n' as u32, 0);
     assert_eq!(frame.mode, Mode::English);
-    assert!(!frame.handled && frame.preedit.is_empty(), "重入后旧中文按键预判必须失效");
+    assert!(
+        !frame.handled && frame.preedit.is_empty(),
+        "重入后旧中文按键预判必须失效"
+    );
     cleanup(&host);
 }
 
@@ -1203,7 +2037,11 @@ fn app_preset_keeps_caps_lock_separate_from_restored_mode() {
     host.foreground("notepad.exe");
     assert_eq!(status_mode(&mut host), Mode::English);
     host.handle(1, Request::CapsLock { on: false });
-    assert_eq!(status_mode(&mut host), Mode::Chinese, "关闭大写锁定后恢复规则之前的中文");
+    assert_eq!(
+        status_mode(&mut host),
+        Mode::Chinese,
+        "关闭大写锁定后恢复规则之前的中文"
+    );
     cleanup(&host);
 }
 
@@ -1242,11 +2080,17 @@ fn quick_phrases_and_dictionaries_change_candidates() {
         },
     );
     assert!(response.ok, "{:?}", response.error);
-    assert!(typing(&mut host, "shilici").candidates.iter().any(|c| c == "示例词"));
+    assert!(typing(&mut host, "shilici")
+        .candidates
+        .iter()
+        .any(|c| c == "示例词"));
 
     configure(&mut host, |c| c.quick_phrases = false);
     press(&mut host, keysym::ESCAPE);
-    assert!(!typing(&mut host, "yyjq").candidates.iter().any(|c| c == "韵酒"));
+    assert!(!typing(&mut host, "yyjq")
+        .candidates
+        .iter()
+        .any(|c| c == "韵酒"));
     let _ = std::fs::remove_file(file);
     cleanup(&host);
 }
@@ -1259,7 +2103,10 @@ fn select_and_page_and_reset() {
     let frame = host.handle(1, Request::Select { index: 0 }).frame.unwrap();
     assert_eq!(frame.commit.as_deref(), Some("你"));
     typing(&mut host, "hao");
-    let frame = host.handle(1, Request::Reset { commit: true }).frame.unwrap();
+    let frame = host
+        .handle(1, Request::Reset { commit: true })
+        .frame
+        .unwrap();
     assert_eq!(frame.commit.as_deref(), Some("hao"));
     assert!(host.handle(1, Request::Page { next: true }).ok);
     cleanup(&host);
@@ -1294,7 +2141,10 @@ fn v_space_opens_toolbar_and_phrases_commit() {
     let frame = press(&mut host, 0x20);
     assert!(frame.handled);
     assert_eq!(frame.title.as_deref(), Some("工具栏"));
-    assert_eq!(frame.candidates, vec!["剪贴板", "常用语", "符号", "表情", "英文候选", "拆字查字"]);
+    assert_eq!(
+        frame.candidates,
+        vec!["剪贴板", "常用语", "符号", "表情", "英文候选", "拆字查字"]
+    );
     assert!(!frame.forgettable);
     let frame = press(&mut host, '2' as u32);
     assert_eq!(frame.panel, Panel::List);
@@ -1322,19 +2172,40 @@ fn common_phrases_round_trip_preserves_multiline_and_merges_without_duplicates()
     })));
     assert!(response.ok, "{response:?}");
     let exported = source.data_dir().join("common.json");
-    assert!(source.handle(1, learning_request("export_common_phrases", &exported)).ok);
+    assert!(
+        source
+            .handle(1, learning_request("export_common_phrases", &exported))
+            .ok
+    );
     let mut target = learning_host("common-target");
     for _ in 0..2 {
-        let response = target.handle(1, settings_request(serde_json::json!({
-            "op": "import_common_phrases", "path": exported, "replace": false,
-        })));
+        let response = target.handle(
+            1,
+            settings_request(serde_json::json!({
+                "op": "import_common_phrases", "path": exported, "replace": false,
+            })),
+        );
         assert!(response.ok, "{response:?}");
     }
-    let listed = serde_json::to_value(target.handle(1, settings_request(serde_json::json!({"op": "list_common_phrases"})))).unwrap();
-    assert_eq!(listed["common_phrases"], serde_json::json!(["您好FreeType", "第一行\n第二行"]));
+    let listed = serde_json::to_value(target.handle(
+        1,
+        settings_request(serde_json::json!({"op": "list_common_phrases"})),
+    ))
+    .unwrap();
+    assert_eq!(
+        listed["common_phrases"],
+        serde_json::json!(["您好FreeType", "第一行\n第二行"])
+    );
     let mut restarted = Host::new(Store::new(target.data_dir()));
-    let listed = serde_json::to_value(restarted.handle(1, settings_request(serde_json::json!({"op": "list_common_phrases"})))).unwrap();
-    assert_eq!(listed["common_phrases"], serde_json::json!(["您好FreeType", "第一行\n第二行"]));
+    let listed = serde_json::to_value(restarted.handle(
+        1,
+        settings_request(serde_json::json!({"op": "list_common_phrases"})),
+    ))
+    .unwrap();
+    assert_eq!(
+        listed["common_phrases"],
+        serde_json::json!(["您好FreeType", "第一行\n第二行"])
+    );
     cleanup(&source);
     cleanup(&target);
 }
@@ -1342,17 +2213,36 @@ fn common_phrases_round_trip_preserves_multiline_and_merges_without_duplicates()
 #[test]
 fn common_phrases_toolbar_excludes_quick_phrases_while_codes_still_work() {
     let mut host = host("common-toolbar");
-    assert!(host.handle(1, settings_request(serde_json::json!({
-        "op": "set_common_phrases", "phrases": ["欢迎FreeType第5版"],
-    }))).ok);
-    assert!(host.handle(1, Request::SetQuickPhrases {
-        phrases: vec![freetype_protocol::QuickPhrase { code: "dz".into(), text: "海淀区".into(), weight: 10 }],
-    }).ok);
+    assert!(
+        host.handle(
+            1,
+            settings_request(serde_json::json!({
+                "op": "set_common_phrases", "phrases": ["欢迎FreeType第5版"],
+            }))
+        )
+        .ok
+    );
+    assert!(
+        host.handle(
+            1,
+            Request::SetQuickPhrases {
+                phrases: vec![freetype_protocol::QuickPhrase {
+                    code: "dz".into(),
+                    text: "海淀区".into(),
+                    weight: 10
+                }],
+            }
+        )
+        .ok
+    );
     typing(&mut host, "v");
     press(&mut host, 0x20);
     let frame = press(&mut host, '2' as u32);
     assert_eq!(frame.candidates, vec!["欢迎FreeType第5版"]);
-    assert_eq!(press(&mut host, '1' as u32).commit.as_deref(), Some("欢迎 FreeType 第 5 版"));
+    assert_eq!(
+        press(&mut host, '1' as u32).commit.as_deref(),
+        Some("欢迎 FreeType 第 5 版")
+    );
     typing(&mut host, "dz");
     assert_eq!(press(&mut host, 0x20).commit.as_deref(), Some("海淀区"));
     cleanup(&host);
@@ -1361,14 +2251,31 @@ fn common_phrases_toolbar_excludes_quick_phrases_while_codes_still_work() {
 #[test]
 fn empty_common_phrases_toolbar_does_not_fall_back_to_quick_phrases() {
     let mut host = host("empty-common-toolbar");
-    assert!(host.handle(1, Request::SetQuickPhrases {
-        phrases: vec![freetype_protocol::QuickPhrase { code: "dz".into(), text: "海淀区".into(), weight: 10 }],
-    }).ok);
+    assert!(
+        host.handle(
+            1,
+            Request::SetQuickPhrases {
+                phrases: vec![freetype_protocol::QuickPhrase {
+                    code: "dz".into(),
+                    text: "海淀区".into(),
+                    weight: 10
+                }],
+            }
+        )
+        .ok
+    );
     typing(&mut host, "v");
     press(&mut host, 0x20);
     let frame = press(&mut host, '2' as u32);
-    assert!(frame.candidates.is_empty(), "没有常用语时不能用快捷短语填充：{:?}", frame.candidates);
-    assert_eq!(frame.title.as_deref(), Some("常用语 · 请在常用语设置页添加内容"));
+    assert!(
+        frame.candidates.is_empty(),
+        "没有常用语时不能用快捷短语填充：{:?}",
+        frame.candidates
+    );
+    assert_eq!(
+        frame.title.as_deref(),
+        Some("常用语 · 请在常用语设置页添加内容")
+    );
     press(&mut host, keysym::ESCAPE);
     typing(&mut host, "dz");
     assert_eq!(press(&mut host, 0x20).commit.as_deref(), Some("海淀区"));
@@ -1378,26 +2285,56 @@ fn empty_common_phrases_toolbar_does_not_fall_back_to_quick_phrases() {
 #[test]
 fn common_phrases_invalid_import_preserves_data_and_text_import_supports_utf8() {
     let mut host = learning_host("common-invalid");
-    assert!(host.handle(1, settings_request(serde_json::json!({
-        "op": "set_common_phrases", "phrases": ["保留"],
-    }))).ok);
+    assert!(
+        host.handle(
+            1,
+            settings_request(serde_json::json!({
+                "op": "set_common_phrases", "phrases": ["保留"],
+            }))
+        )
+        .ok
+    );
     let path = host.data_dir().join("import.json");
-    for contents in ["{bad", r#"{"format":"freetype-common-phrases","version":9,"phrases":["覆盖"]}"#,
-        r#"{"format":"freetype-common-phrases","version":1,"phrases":["有效"," "]}"#] {
+    for contents in [
+        "{bad",
+        r#"{"format":"freetype-common-phrases","version":9,"phrases":["覆盖"]}"#,
+        r#"{"format":"freetype-common-phrases","version":1,"phrases":["有效"," "]}"#,
+    ] {
         std::fs::write(&path, contents).unwrap();
-        assert!(!host.handle(1, settings_request(serde_json::json!({
-            "op": "import_common_phrases", "path": path, "replace": true,
-        }))).ok);
-        let listed = serde_json::to_value(host.handle(1, settings_request(serde_json::json!({"op": "list_common_phrases"})))).unwrap();
+        assert!(
+            !host
+                .handle(
+                    1,
+                    settings_request(serde_json::json!({
+                        "op": "import_common_phrases", "path": path, "replace": true,
+                    }))
+                )
+                .ok
+        );
+        let listed = serde_json::to_value(host.handle(
+            1,
+            settings_request(serde_json::json!({"op": "list_common_phrases"})),
+        ))
+        .unwrap();
         assert_eq!(listed["common_phrases"], serde_json::json!(["保留"]));
     }
     std::fs::write(&path, "\u{feff}第一条\r\n\r\n第二条\r\n第一条\r\n").unwrap();
-    let response = host.handle(1, settings_request(serde_json::json!({
-        "op": "import_common_phrases", "path": path, "replace": true,
-    })));
+    let response = host.handle(
+        1,
+        settings_request(serde_json::json!({
+            "op": "import_common_phrases", "path": path, "replace": true,
+        })),
+    );
     assert!(response.ok, "{response:?}");
-    let listed = serde_json::to_value(host.handle(1, settings_request(serde_json::json!({"op": "list_common_phrases"})))).unwrap();
-    assert_eq!(listed["common_phrases"], serde_json::json!(["第一条", "第二条"]));
+    let listed = serde_json::to_value(host.handle(
+        1,
+        settings_request(serde_json::json!({"op": "list_common_phrases"})),
+    ))
+    .unwrap();
+    assert_eq!(
+        listed["common_phrases"],
+        serde_json::json!(["第一条", "第二条"])
+    );
     cleanup(&host);
 }
 
@@ -1405,9 +2342,28 @@ fn common_phrases_invalid_import_preserves_data_and_text_import_supports_utf8() 
 fn common_phrases_empty_backup_can_restore_an_empty_list() {
     let mut host = learning_host("common-empty");
     let path = host.data_dir().join("empty.json");
-    assert!(host.handle(1, learning_request("export_common_phrases", &path)).ok);
-    assert!(host.handle(1, settings_request(serde_json::json!({"op": "set_common_phrases", "phrases": ["待替换"]}))).ok);
-    assert!(host.handle(1, settings_request(serde_json::json!({"op": "import_common_phrases", "path": path, "replace": true}))).ok);
+    assert!(
+        host.handle(1, learning_request("export_common_phrases", &path))
+            .ok
+    );
+    assert!(
+        host.handle(
+            1,
+            settings_request(
+                serde_json::json!({"op": "set_common_phrases", "phrases": ["待替换"]})
+            )
+        )
+        .ok
+    );
+    assert!(
+        host.handle(
+            1,
+            settings_request(
+                serde_json::json!({"op": "import_common_phrases", "path": path, "replace": true})
+            )
+        )
+        .ok
+    );
     assert!(host.store.load_common_phrases().unwrap().is_empty());
     cleanup(&host);
 }
@@ -1439,16 +2395,42 @@ fn settings_backup_restores_all_data_including_unsaved_learning_and_custom_lexic
         c.default_mode = DefaultMode::Global;
     });
     source.mode = Mode::English;
-    assert!(source.handle(1, Request::SetQuickPhrases {
-        phrases: vec![freetype_protocol::QuickPhrase { code: "dz".into(), text: "第一行\n第二行".into(), weight: 20 }],
-    }).ok);
-    assert!(source.handle(1, settings_request(serde_json::json!({"op": "set_common_phrases", "phrases": ["常用FreeType"]}))).ok);
+    assert!(
+        source
+            .handle(
+                1,
+                Request::SetQuickPhrases {
+                    phrases: vec![freetype_protocol::QuickPhrase {
+                        code: "dz".into(),
+                        text: "第一行\n第二行".into(),
+                        weight: 20
+                    }],
+                }
+            )
+            .ok
+    );
+    assert!(
+        source
+            .handle(
+                1,
+                settings_request(
+                    serde_json::json!({"op": "set_common_phrases", "phrases": ["常用FreeType"]})
+                )
+            )
+            .ok
+    );
     std::fs::create_dir_all(source.data_dir().join("dicts")).unwrap();
-    std::fs::write(source.data_dir().join("dicts/人名.txt"), "阿特\ta te\t800\n").unwrap();
+    std::fs::write(
+        source.data_dir().join("dicts/人名.txt"),
+        "阿特\ta te\t800\n",
+    )
+    .unwrap();
     source.recent_emoji = vec!["😊".into()];
     std::fs::write(source.data_dir().join("statusbar.txt"), "100,200\n").unwrap();
     let engine = source.engine.as_ref().unwrap();
-    for _ in 0..3 { engine.record_selection_with_pinyin("阿特", Some("a te")); }
+    for _ in 0..3 {
+        engine.record_selection_with_pinyin("阿特", Some("a te"));
+    }
     engine.set_context("阿特");
     engine.input("nihao");
     engine.record_selection_with_pinyin("你好", Some("ni hao"));
@@ -1456,22 +2438,34 @@ fn settings_backup_restores_all_data_including_unsaved_learning_and_custom_lexic
     let exported = source.data_dir().join("all.json");
     let result = source.handle(1, learning_request("export_settings", &exported));
     assert!(result.ok, "{result:?}");
-    let data: serde_json::Value = serde_json::from_slice(&std::fs::read(&exported).unwrap()).unwrap();
+    let data: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&exported).unwrap()).unwrap();
     assert_eq!(data["format"], "freetype-settings");
     assert_eq!(data["version"], 1);
     assert_eq!(data["config"]["lexicon"], "", "备份不依赖来源机器的路径");
     assert_eq!(data["config"]["auto_update"], true);
     assert_eq!(data["config"]["show_settings_after_update"], true);
     assert_eq!(data["config"]["brand_icon"], "custom");
-    assert_eq!(data["config"]["custom_brand_icon"], source.config.custom_brand_icon);
+    assert_eq!(
+        data["config"]["custom_brand_icon"],
+        source.config.custom_brand_icon
+    );
     assert_eq!(data["config"]["candidate_style"], "custom");
     assert_eq!(data["config"]["candidate_skin"]["background"], "#24262b");
     assert_eq!(data["config"]["candidate_skin"]["accent_fill"], false);
 
     let mut target = learning_host("settings-target");
-    target.engine.as_ref().unwrap().record_selection_with_pinyin("旧词", Some("jiu ci"));
+    target
+        .engine
+        .as_ref()
+        .unwrap()
+        .record_selection_with_pinyin("旧词", Some("jiu ci"));
     std::fs::create_dir_all(target.data_dir().join("dicts")).unwrap();
-    std::fs::write(target.data_dir().join("dicts/旧词库.txt"), "旧词\tjiu ci\t100\n").unwrap();
+    std::fs::write(
+        target.data_dir().join("dicts/旧词库.txt"),
+        "旧词\tjiu ci\t100\n",
+    )
+    .unwrap();
     let inspected = target.handle(1, learning_request("inspect_settings_backup", &exported));
     assert!(inspected.ok, "{inspected:?}");
     assert_eq!(target.config.page_size, 7, "预览不能修改设置");
@@ -1479,36 +2473,68 @@ fn settings_backup_restores_all_data_including_unsaved_learning_and_custom_lexic
     assert!(result.ok, "{result:?}");
     assert_eq!(target.config.page_size, 9);
     assert!(!target.config.autospace_digits && !target.config.tray_icon);
-    assert!(target.config.auto_update, "全部设置备份也应恢复自动更新开关");
-    assert!(target.config.show_settings_after_update, "全部设置备份也应恢复安装后显示设置页的开关");
+    assert!(
+        target.config.auto_update,
+        "全部设置备份也应恢复自动更新开关"
+    );
+    assert!(
+        target.config.show_settings_after_update,
+        "全部设置备份也应恢复安装后显示设置页的开关"
+    );
     assert_eq!(target.config.brand_icon, "custom");
-    assert_eq!(target.config.custom_brand_icon, source.config.custom_brand_icon);
+    assert_eq!(
+        target.config.custom_brand_icon,
+        source.config.custom_brand_icon
+    );
     assert_eq!(target.config.candidate_style, "custom");
     assert_eq!(target.config.candidate_skin, source.config.candidate_skin);
     assert_eq!(target.mode, Mode::English);
     assert_eq!(target.store.list_quick_phrases()[0].text, "第一行\n第二行");
-    assert_eq!(target.store.load_common_phrases().unwrap(), vec!["常用FreeType"]);
+    assert_eq!(
+        target.store.load_common_phrases().unwrap(),
+        vec!["常用FreeType"]
+    );
     assert_eq!(target.store.list_dictionaries()[0].name, "人名");
-    assert_eq!(target.store.list_dictionaries().len(), 1, "恢复快照不应残留旧词库");
+    assert_eq!(
+        target.store.list_dictionaries().len(),
+        1,
+        "恢复快照不应残留旧词库"
+    );
     assert_eq!(target.recent_emoji, vec!["😊"]);
-    assert_eq!(std::fs::read_to_string(target.data_dir().join("statusbar.txt")).unwrap(), "100,200\n");
-    assert_eq!(std::fs::read_to_string(&target.config.lexicon).unwrap(), "ni hao\t你好\t1000\na te\t阿特\t900\n");
+    assert_eq!(
+        std::fs::read_to_string(target.data_dir().join("statusbar.txt")).unwrap(),
+        "100,200\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&target.config.lexicon).unwrap(),
+        "ni hao\t你好\t1000\na te\t阿特\t900\n"
+    );
     assert!(Path::new(&target.config.lexicon).starts_with(target.data_dir()));
     assert_eq!(target.engine.as_ref().unwrap().history_count("阿特"), 3);
     assert_eq!(target.engine.as_ref().unwrap().history_count("旧词"), 0);
-    let restarted = Engine::new(std::sync::Arc::new(wowtype_core::MemoryLexicon::new()), std::sync::Arc::new(wowtype_core::BigramLm::default()));
-    restarted.load_user_dict(target.store.user_dict_path()).unwrap();
+    let restarted = Engine::new(
+        std::sync::Arc::new(wowtype_core::MemoryLexicon::new()),
+        std::sync::Arc::new(wowtype_core::BigramLm::default()),
+    );
+    restarted
+        .load_user_dict(target.store.user_dict_path())
+        .unwrap();
     restarted.load_history(target.store.history_path()).unwrap();
     assert_eq!(restarted.history_count("阿特"), 3);
     assert!(restarted.pair_count() > 0);
-    assert!(restarted.input("ate").iter().any(|candidate| candidate.text == "阿特"));
+    assert!(restarted
+        .input("ate")
+        .iter()
+        .any(|candidate| candidate.text == "阿特"));
     cleanup(&source);
     cleanup(&target);
 }
 
 /// 只导出其中几类数据的请求。
 fn export_parts_request(path: &Path, parts: &[&str]) -> Request {
-    settings_request(serde_json::json!({"op": "export_settings", "path": path.to_string_lossy(), "parts": parts}))
+    settings_request(
+        serde_json::json!({"op": "export_settings", "path": path.to_string_lossy(), "parts": parts}),
+    )
 }
 
 /// 每一类数据都有内容的一台「旧电脑」。
@@ -1522,15 +2548,45 @@ fn full_profile_host(name: &str) -> Host {
         c.default_mode = DefaultMode::Global;
     });
     source.mode = Mode::English;
-    assert!(source.handle(1, Request::SetQuickPhrases {
-        phrases: vec![freetype_protocol::QuickPhrase { code: "dz".into(), text: "远端地址".into(), weight: 20 }],
-    }).ok);
-    assert!(source.handle(1, settings_request(serde_json::json!({"op": "set_common_phrases", "phrases": ["远端常用语"]}))).ok);
+    assert!(
+        source
+            .handle(
+                1,
+                Request::SetQuickPhrases {
+                    phrases: vec![freetype_protocol::QuickPhrase {
+                        code: "dz".into(),
+                        text: "远端地址".into(),
+                        weight: 20
+                    }],
+                }
+            )
+            .ok
+    );
+    assert!(
+        source
+            .handle(
+                1,
+                settings_request(
+                    serde_json::json!({"op": "set_common_phrases", "phrases": ["远端常用语"]})
+                )
+            )
+            .ok
+    );
     std::fs::create_dir_all(source.data_dir().join("dicts")).unwrap();
-    std::fs::write(source.data_dir().join("dicts/人名.txt"), "阿特\ta te\t800\n").unwrap();
+    std::fs::write(
+        source.data_dir().join("dicts/人名.txt"),
+        "阿特\ta te\t800\n",
+    )
+    .unwrap();
     source.recent_emoji = vec!["😊".into()];
     std::fs::write(source.data_dir().join("statusbar.txt"), "100,200\n").unwrap();
-    for _ in 0..3 { source.engine.as_ref().unwrap().record_selection_with_pinyin("私密词", Some("si mi ci")); }
+    for _ in 0..3 {
+        source
+            .engine
+            .as_ref()
+            .unwrap()
+            .record_selection_with_pinyin("私密词", Some("si mi ci"));
+    }
     source
 }
 
@@ -1543,15 +2599,43 @@ fn local_profile_host(name: &str) -> Host {
         c.page_size = 8;
         c.lexicon = main_lexicon.to_string_lossy().into();
     });
-    assert!(target.handle(1, Request::SetQuickPhrases {
-        phrases: vec![freetype_protocol::QuickPhrase { code: "yx".into(), text: "本机邮箱".into(), weight: 10 }],
-    }).ok);
-    assert!(target.handle(1, settings_request(serde_json::json!({"op": "set_common_phrases", "phrases": ["本机常用语"]}))).ok);
+    assert!(
+        target
+            .handle(
+                1,
+                Request::SetQuickPhrases {
+                    phrases: vec![freetype_protocol::QuickPhrase {
+                        code: "yx".into(),
+                        text: "本机邮箱".into(),
+                        weight: 10
+                    }],
+                }
+            )
+            .ok
+    );
+    assert!(
+        target
+            .handle(
+                1,
+                settings_request(
+                    serde_json::json!({"op": "set_common_phrases", "phrases": ["本机常用语"]})
+                )
+            )
+            .ok
+    );
     std::fs::create_dir_all(target.data_dir().join("dicts")).unwrap();
-    std::fs::write(target.data_dir().join("dicts/旧词库.txt"), "旧词\tjiu ci\t100\n").unwrap();
+    std::fs::write(
+        target.data_dir().join("dicts/旧词库.txt"),
+        "旧词\tjiu ci\t100\n",
+    )
+    .unwrap();
     target.recent_emoji = vec!["🎉".into()];
     std::fs::write(target.data_dir().join("statusbar.txt"), "1,2\n").unwrap();
-    target.engine.as_ref().unwrap().record_selection_with_pinyin("旧词", Some("jiu ci"));
+    target
+        .engine
+        .as_ref()
+        .unwrap()
+        .record_selection_with_pinyin("旧词", Some("jiu ci"));
     target
 }
 
@@ -1565,46 +2649,120 @@ fn settings_backup_exports_only_the_chosen_parts() {
     let mut source = full_profile_host("parts-export");
     let path = source.data_dir().join("part.json");
     // 没选的类别整个不在文件里：字段没有，内容也搜不到
-    let response = source.handle(1, export_parts_request(&path, &["quick_phrases", "dictionaries"]));
+    let response = source.handle(
+        1,
+        export_parts_request(&path, &["quick_phrases", "dictionaries"]),
+    );
     assert!(response.ok, "{response:?}");
-    assert_eq!(backup_keys(&path), ["dictionaries", "format", "main_lexicon", "quick_phrases", "version"]);
+    assert_eq!(
+        backup_keys(&path),
+        [
+            "dictionaries",
+            "format",
+            "main_lexicon",
+            "quick_phrases",
+            "version"
+        ]
+    );
     let text = std::fs::read_to_string(&path).unwrap();
     for private in ["私密词", "远端常用语", "😊", "page_size"] {
         assert!(!text.contains(private), "没选的数据进了备份：{private}");
     }
-    assert_eq!(response.report.unwrap().note.as_deref(), Some("1 份词库、1 条快捷短语；不含设置、常用语、学习记录"));
+    assert_eq!(
+        response.report.unwrap().note.as_deref(),
+        Some("1 份词库、1 条快捷短语；不含设置、常用语、学习记录")
+    );
     // 一类一类地导出：每次只有那一类的字段
     for (part, keys) in [
-        ("settings", vec!["config", "format", "mode", "status_bar_position", "version"]),
-        ("common_phrases", vec!["common_phrases", "format", "version"]),
-        ("learning", vec!["format", "learning", "recent_emoji", "version"]),
+        (
+            "settings",
+            vec!["config", "format", "mode", "status_bar_position", "version"],
+        ),
+        (
+            "common_phrases",
+            vec!["common_phrases", "format", "version"],
+        ),
+        (
+            "learning",
+            vec!["format", "learning", "recent_emoji", "version"],
+        ),
     ] {
         assert!(source.handle(1, export_parts_request(&path, &[part])).ok);
         assert_eq!(backup_keys(&path), keys, "{part}");
     }
     // 没选的数据读不了也不妨碍导出：快捷短语文件坏了，只导出设置照样成功
-    std::fs::write(source.data_dir().join("quick_phrases.txt"), "这一行不是快捷短语\n").unwrap();
-    assert!(source.handle(1, export_parts_request(&path, &["settings"])).ok);
-    assert!(!source.handle(1, export_parts_request(&path, &["quick_phrases"])).ok);
+    std::fs::write(
+        source.data_dir().join("quick_phrases.txt"),
+        "这一行不是快捷短语\n",
+    )
+    .unwrap();
+    assert!(
+        source
+            .handle(1, export_parts_request(&path, &["settings"]))
+            .ok
+    );
+    assert!(
+        !source
+            .handle(1, export_parts_request(&path, &["quick_phrases"]))
+            .ok
+    );
     cleanup(&source);
 }
 
 #[test]
 fn settings_backup_with_all_parts_is_the_same_file_as_before() {
     let mut source = full_profile_host("parts-all");
-    let (plain, chosen) = (source.data_dir().join("plain.json"), source.data_dir().join("chosen.json"));
-    assert!(source.handle(1, learning_request("export_settings", &plain)).ok);
-    let all = ["learning", "common_phrases", "quick_phrases", "dictionaries", "settings"];
+    let (plain, chosen) = (
+        source.data_dir().join("plain.json"),
+        source.data_dir().join("chosen.json"),
+    );
+    assert!(
+        source
+            .handle(1, learning_request("export_settings", &plain))
+            .ok
+    );
+    let all = [
+        "learning",
+        "common_phrases",
+        "quick_phrases",
+        "dictionaries",
+        "settings",
+    ];
     assert!(source.handle(1, export_parts_request(&chosen, &all)).ok);
     let text = std::fs::read_to_string(&plain).unwrap();
-    assert_eq!(text, std::fs::read_to_string(&chosen).unwrap(), "全选和不写 parts 是同一份文件");
+    assert_eq!(
+        text,
+        std::fs::read_to_string(&chosen).unwrap(),
+        "全选和不写 parts 是同一份文件"
+    );
     // 字段顺序和内容保持原来的格式：自动同步按整份内容比较，旧版本也要能导入；学习记录压为单行紧凑 JSON
-    assert!(text.starts_with("{\n  \"format\": \"freetype-settings\",\n  \"version\": 1,\n  \"config\": {"), "{}", &text[..80]);
-    let learning_lines: Vec<_> = text.lines().filter(|line| line.starts_with("  \"learning\": ")).collect();
+    assert!(
+        text.starts_with(
+            "{\n  \"format\": \"freetype-settings\",\n  \"version\": 1,\n  \"config\": {"
+        ),
+        "{}",
+        &text[..80]
+    );
+    let learning_lines: Vec<_> = text
+        .lines()
+        .filter(|line| line.starts_with("  \"learning\": "))
+        .collect();
     assert_eq!(learning_lines.len(), 1);
-    assert!(learning_lines[0].contains("\"freetype-learning\"") && learning_lines[0].ends_with("},"), "学习记录应保持在单行内：{}", learning_lines[0]);
-    let note = source.handle(1, learning_request("inspect_settings_backup", &plain)).report.unwrap().note.unwrap();
-    assert_eq!(note, "全部设置、1 份词库、1 条快捷短语、1 条常用语、1 条学到的词及使用记录");
+    assert!(
+        learning_lines[0].contains("\"freetype-learning\"") && learning_lines[0].ends_with("},"),
+        "学习记录应保持在单行内：{}",
+        learning_lines[0]
+    );
+    let note = source
+        .handle(1, learning_request("inspect_settings_backup", &plain))
+        .report
+        .unwrap()
+        .note
+        .unwrap();
+    assert_eq!(
+        note,
+        "全部设置、1 份词库、1 条快捷短语、1 条常用语、1 条学到的词及使用记录"
+    );
     cleanup(&source);
 }
 
@@ -1612,31 +2770,67 @@ fn settings_backup_with_all_parts_is_the_same_file_as_before() {
 fn importing_a_partial_backup_replaces_only_its_parts() {
     let mut source = full_profile_host("parts-source");
     let path = source.data_dir().join("part.json");
-    assert!(source.handle(1, export_parts_request(&path, &["quick_phrases", "dictionaries"])).ok);
+    assert!(
+        source
+            .handle(
+                1,
+                export_parts_request(&path, &["quick_phrases", "dictionaries"])
+            )
+            .ok
+    );
 
     let mut target = local_profile_host("parts-target");
     let inspected = target.handle(1, learning_request("inspect_settings_backup", &path));
-    assert_eq!(inspected.report.unwrap().note.as_deref(), Some("1 份词库、1 条快捷短语；不含设置、常用语、学习记录"));
+    assert_eq!(
+        inspected.report.unwrap().note.as_deref(),
+        Some("1 份词库、1 条快捷短语；不含设置、常用语、学习记录")
+    );
     let response = target.handle(1, learning_request("import_settings", &path));
     assert!(response.ok, "{response:?}");
     // 备份里有的两类：整类换成备份里的
-    let phrases: Vec<String> = target.store.list_quick_phrases().into_iter().map(|p| p.code).collect();
+    let phrases: Vec<String> = target
+        .store
+        .list_quick_phrases()
+        .into_iter()
+        .map(|p| p.code)
+        .collect();
     assert_eq!(phrases, ["dz"]);
-    let dictionaries: Vec<String> = target.store.list_dictionaries().into_iter().map(|d| d.name).collect();
+    let dictionaries: Vec<String> = target
+        .store
+        .list_dictionaries()
+        .into_iter()
+        .map(|d| d.name)
+        .collect();
     assert_eq!(dictionaries, ["人名"], "词库整类替换，不残留本机原来的");
-    assert_eq!(std::fs::read_to_string(&target.config.lexicon).unwrap(), "ni hao\t你好\t1000\na te\t阿特\t900\n");
+    assert_eq!(
+        std::fs::read_to_string(&target.config.lexicon).unwrap(),
+        "ni hao\t你好\t1000\na te\t阿特\t900\n"
+    );
     assert!(Path::new(&target.config.lexicon).starts_with(target.data_dir()));
-    assert_eq!(typing(&mut target, "dz").candidates[0], "远端地址", "换进来的快捷短语马上能用");
+    assert_eq!(
+        typing(&mut target, "dz").candidates[0],
+        "远端地址",
+        "换进来的快捷短语马上能用"
+    );
     press(&mut target, keysym::ESCAPE);
     // 备份里没有的三类：本机的原样留着
     assert_eq!(target.config.page_size, 8);
     assert_eq!(target.mode, Mode::Chinese);
-    assert_eq!(std::fs::read_to_string(target.data_dir().join("statusbar.txt")).unwrap(), "1,2\n");
+    assert_eq!(
+        std::fs::read_to_string(target.data_dir().join("statusbar.txt")).unwrap(),
+        "1,2\n"
+    );
     assert_eq!(target.store.load_common_phrases().unwrap(), ["本机常用语"]);
-    assert_eq!(response.common_phrases.as_deref(), Some(&["本机常用语".to_string()][..]));
+    assert_eq!(
+        response.common_phrases.as_deref(),
+        Some(&["本机常用语".to_string()][..])
+    );
     assert_eq!(target.recent_emoji, ["🎉"]);
     let engine = target.engine.as_ref().unwrap();
-    assert_eq!((engine.history_count("旧词"), engine.history_count("私密词")), (1, 0));
+    assert_eq!(
+        (engine.history_count("旧词"), engine.history_count("私密词")),
+        (1, 0)
+    );
     // 重新启动以后也是这样
     let restarted = Host::new(Store::new(target.data_dir()));
     assert_eq!(restarted.config.page_size, 8);
@@ -1648,18 +2842,39 @@ fn importing_a_partial_backup_replaces_only_its_parts() {
 #[test]
 fn importing_settings_or_learning_alone_keeps_everything_else() {
     let mut source = full_profile_host("parts-single-source");
-    let (settings, learning) = (source.data_dir().join("settings.json"), source.data_dir().join("learning.json"));
-    assert!(source.handle(1, export_parts_request(&settings, &["settings"])).ok);
-    assert!(source.handle(1, export_parts_request(&learning, &["learning"])).ok);
+    let (settings, learning) = (
+        source.data_dir().join("settings.json"),
+        source.data_dir().join("learning.json"),
+    );
+    assert!(
+        source
+            .handle(1, export_parts_request(&settings, &["settings"]))
+            .ok
+    );
+    assert!(
+        source
+            .handle(1, export_parts_request(&learning, &["learning"]))
+            .ok
+    );
 
     // 只有设置：选项、中英文状态、状态栏位置换掉；本机的主词库、短语、词库、学习记录不动
     let mut target = local_profile_host("parts-single-settings");
     let local_lexicon = target.config.lexicon.clone();
-    assert!(target.handle(1, learning_request("import_settings", &settings)).ok);
+    assert!(
+        target
+            .handle(1, learning_request("import_settings", &settings))
+            .ok
+    );
     assert_eq!((target.config.page_size, target.mode), (9, Mode::English));
-    assert_eq!(std::fs::read_to_string(target.data_dir().join("statusbar.txt")).unwrap(), "100,200\n");
+    assert_eq!(
+        std::fs::read_to_string(target.data_dir().join("statusbar.txt")).unwrap(),
+        "100,200\n"
+    );
     assert_eq!(target.config.lexicon, local_lexicon, "主词库属于词库这一类");
-    assert_eq!(std::fs::read_to_string(&local_lexicon).unwrap(), "ben ji\t本机\t1000\n");
+    assert_eq!(
+        std::fs::read_to_string(&local_lexicon).unwrap(),
+        "ben ji\t本机\t1000\n"
+    );
     assert_eq!(target.store.list_quick_phrases()[0].code, "yx");
     assert_eq!(target.store.list_dictionaries()[0].name, "旧词库");
     assert_eq!(target.engine.as_ref().unwrap().history_count("旧词"), 1);
@@ -1668,17 +2883,34 @@ fn importing_settings_or_learning_alone_keeps_everything_else() {
 
     // 只有学习记录：学到的词和最近的表情换掉，别的不动
     let mut target = local_profile_host("parts-single-learning");
-    assert!(target.handle(1, learning_request("import_settings", &learning)).ok);
+    assert!(
+        target
+            .handle(1, learning_request("import_settings", &learning))
+            .ok
+    );
     let engine = target.engine.as_ref().unwrap();
-    assert_eq!((engine.history_count("旧词"), engine.history_count("私密词")), (0, 3));
+    assert_eq!(
+        (engine.history_count("旧词"), engine.history_count("私密词")),
+        (0, 3)
+    );
     assert_eq!(target.recent_emoji, ["😊"]);
     assert_eq!((target.config.page_size, target.mode), (8, Mode::Chinese));
-    assert_eq!(target.config.lexicon, target.data_dir().join("local-lexicon.tsv").to_string_lossy());
+    assert_eq!(
+        target.config.lexicon,
+        target
+            .data_dir()
+            .join("local-lexicon.tsv")
+            .to_string_lossy()
+    );
     assert_eq!(target.store.list_quick_phrases()[0].code, "yx");
     assert_eq!(target.store.load_common_phrases().unwrap(), ["本机常用语"]);
     assert_eq!(target.store.list_dictionaries()[0].name, "旧词库");
     // 合并（云端恢复用的那种）遇到没有学习记录的文件也不出错
-    assert!(target.handle(1, learning_request("merge_settings", &settings)).ok);
+    assert!(
+        target
+            .handle(1, learning_request("merge_settings", &settings))
+            .ok
+    );
     assert_eq!(target.engine.as_ref().unwrap().history_count("私密词"), 3);
     cleanup(&source);
     cleanup(&target);
@@ -1692,16 +2924,44 @@ fn backup_with_no_parts_or_half_a_part_changes_nothing() {
     assert!(host.handle(1, export_parts_request(&path, &[])).ok);
     assert_eq!(backup_keys(&path), ["format", "version"]);
     let inspected = host.handle(1, learning_request("inspect_settings_backup", &path));
-    assert_eq!(inspected.report.unwrap().note.as_deref(), Some("没有输入法数据"));
-    assert!(host.handle(1, learning_request("import_settings", &path)).ok);
-    assert_eq!((host.config.page_size, host.store.list_quick_phrases().len()), (8, 1));
+    assert_eq!(
+        inspected.report.unwrap().note.as_deref(),
+        Some("没有输入法数据")
+    );
+    assert!(
+        host.handle(1, learning_request("import_settings", &path))
+            .ok
+    );
+    assert_eq!(
+        (host.config.page_size, host.store.list_quick_phrases().len()),
+        (8, 1)
+    );
     assert_eq!(host.engine.as_ref().unwrap().history_count("旧词"), 1);
     // 一类数据只有一半字段：拒绝，不当成「没有这一类」
-    std::fs::write(&path, r#"{"format":"freetype-settings","version":1,"recent_emoji":[]}"#).unwrap();
+    std::fs::write(
+        &path,
+        r#"{"format":"freetype-settings","version":1,"recent_emoji":[]}"#,
+    )
+    .unwrap();
     let response = host.handle(1, learning_request("import_settings", &path));
-    assert!(!response.ok && response.error.as_deref().is_some_and(|e| e.contains("学习记录")), "{response:?}");
-    std::fs::write(&path, r#"{"format":"freetype-settings","version":1,"mode":"english"}"#).unwrap();
-    assert!(!host.handle(1, learning_request("import_settings", &path)).ok);
+    assert!(
+        !response.ok
+            && response
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("学习记录")),
+        "{response:?}"
+    );
+    std::fs::write(
+        &path,
+        r#"{"format":"freetype-settings","version":1,"mode":"english"}"#,
+    )
+    .unwrap();
+    assert!(
+        !host
+            .handle(1, learning_request("import_settings", &path))
+            .ok
+    );
     assert_eq!(host.mode, Mode::Chinese);
     cleanup(&host);
 }
@@ -1711,20 +2971,36 @@ fn settings_backup_rejects_invalid_records_before_changing_any_data() {
     let mut host = learning_host("settings-invalid");
     let original = host.engine.as_ref().unwrap().export_learning().unwrap();
     let path = host.data_dir().join("all.json");
-    assert!(host.handle(1, learning_request("export_settings", &path)).ok);
+    assert!(
+        host.handle(1, learning_request("export_settings", &path))
+            .ok
+    );
     let data: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     let mut corruptions = Vec::new();
-    let mut bad = data.clone(); bad["version"] = serde_json::json!(99); corruptions.push(bad);
-    let mut bad = data.clone(); bad["common_phrases"] = serde_json::json!(["有效", " "]); corruptions.push(bad);
-    let mut bad = data.clone(); bad["dictionaries"] = serde_json::json!([{"name": "../escape", "text": "词\tci\t100\n"}]); corruptions.push(bad);
-    let mut bad = data.clone(); bad["learning"]["history"] = serde_json::json!([["", 1, 1]]); corruptions.push(bad);
-    let mut bad = data.clone(); bad["config"]["page_size"] = serde_json::json!(999); corruptions.push(bad);
+    let mut bad = data.clone();
+    bad["version"] = serde_json::json!(99);
+    corruptions.push(bad);
+    let mut bad = data.clone();
+    bad["common_phrases"] = serde_json::json!(["有效", " "]);
+    corruptions.push(bad);
+    let mut bad = data.clone();
+    bad["dictionaries"] = serde_json::json!([{"name": "../escape", "text": "词\tci\t100\n"}]);
+    corruptions.push(bad);
+    let mut bad = data.clone();
+    bad["learning"]["history"] = serde_json::json!([["", 1, 1]]);
+    corruptions.push(bad);
+    let mut bad = data.clone();
+    bad["config"]["page_size"] = serde_json::json!(999);
+    corruptions.push(bad);
     for bad in corruptions {
         std::fs::write(&path, serde_json::to_vec(&bad).unwrap()).unwrap();
         let result = host.handle(1, learning_request("import_settings", &path));
         assert!(!result.ok, "{result:?}");
         assert_eq!(host.config.page_size, 7);
-        assert_eq!(host.engine.as_ref().unwrap().export_learning().unwrap(), original);
+        assert_eq!(
+            host.engine.as_ref().unwrap().export_learning().unwrap(),
+            original
+        );
         assert!(!host.store.user_dict_path().exists());
     }
     cleanup(&host);
@@ -1734,15 +3010,26 @@ fn settings_backup_rejects_invalid_records_before_changing_any_data() {
 fn restoring_learning_drains_the_previous_background_save() {
     let mut host = learning_host("restore-pending-save");
     let backup = host.data_dir().join("saved.json");
-    assert!(host.handle(1, learning_request("export_settings", &backup)).ok);
+    assert!(
+        host.handle(1, learning_request("export_settings", &backup))
+            .ok
+    );
     let path = host.store.user_dict_path();
     let old_path = path.clone();
-    host.saver.enqueue("learning", Box::new(move || {
-        // 模拟被磁盘延迟的旧快照。恢复必须在该写入结束后才替换文件。
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        std::fs::write(old_path, "old snapshot").map_err(|error| error.to_string())
-    })).unwrap();
-    assert!(host.handle(1, learning_request("import_settings", &backup)).ok);
+    host.saver
+        .enqueue(
+            "learning",
+            Box::new(move || {
+                // 模拟被磁盘延迟的旧快照。恢复必须在该写入结束后才替换文件。
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                std::fs::write(old_path, "old snapshot").map_err(|error| error.to_string())
+            }),
+        )
+        .unwrap();
+    assert!(
+        host.handle(1, learning_request("import_settings", &backup))
+            .ok
+    );
     host.saver.result(true).unwrap();
     assert_ne!(std::fs::read_to_string(path).unwrap(), "old snapshot");
     cleanup(&host);
@@ -1752,14 +3039,24 @@ fn restoring_learning_drains_the_previous_background_save() {
 fn settings_backup_io_failures_preserve_current_profile() {
     let mut host = learning_host("settings-io");
     let path = host.data_dir().join("all.json");
-    assert!(host.handle(1, learning_request("export_settings", &path)).ok);
-    assert!(!host.handle(1, learning_request("export_settings", &host.data_dir())).ok);
+    assert!(
+        host.handle(1, learning_request("export_settings", &path))
+            .ok
+    );
+    assert!(
+        !host
+            .handle(1, learning_request("export_settings", &host.data_dir()))
+            .ok
+    );
     let config_path = host.data_dir().join("config.json");
     std::fs::create_dir(&config_path).unwrap();
     let result = host.handle(1, learning_request("import_settings", &path));
     assert!(!result.ok, "目标位置不可写时应报告失败");
     assert_eq!(host.config.page_size, 7);
-    assert!(!host.store.user_dict_path().exists(), "不应留下半份恢复结果");
+    assert!(
+        !host.store.user_dict_path().exists(),
+        "不应留下半份恢复结果"
+    );
     cleanup(&host);
 }
 
@@ -1769,20 +3066,39 @@ fn settings_backup_rolls_back_files_if_a_later_file_is_locked() {
     use std::os::windows::fs::OpenOptionsExt;
     let mut host = learning_host("settings-locked");
     let path = host.data_dir().join("all.json");
-    assert!(host.handle(1, learning_request("export_settings", &path)).ok);
+    assert!(
+        host.handle(1, learning_request("export_settings", &path))
+            .ok
+    );
     configure(&mut host, |c| c.page_size = 9);
-    host.engine.as_ref().unwrap().record_selection_with_pinyin("保留词", Some("bao liu ci"));
+    host.engine
+        .as_ref()
+        .unwrap()
+        .record_selection_with_pinyin("保留词", Some("bao liu ci"));
     host.save_learning().unwrap();
     let config_before = std::fs::read(host.data_dir().join("config.json")).unwrap();
     let history_before = std::fs::read(host.store.history_path()).unwrap();
     let learning_before = host.engine.as_ref().unwrap().export_learning().unwrap();
     // 允许读取和检查属性，但阻止改名；user.tsv 在其他文件替换之后才处理。
-    let locked = std::fs::OpenOptions::new().read(true).share_mode(1).open(host.store.user_dict_path()).unwrap();
+    let locked = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(1)
+        .open(host.store.user_dict_path())
+        .unwrap();
     let response = host.handle(1, learning_request("import_settings", &path));
     assert!(!response.ok);
-    assert_eq!(std::fs::read(host.data_dir().join("config.json")).unwrap(), config_before);
-    assert_eq!(std::fs::read(host.store.history_path()).unwrap(), history_before);
-    assert_eq!(host.engine.as_ref().unwrap().export_learning().unwrap(), learning_before);
+    assert_eq!(
+        std::fs::read(host.data_dir().join("config.json")).unwrap(),
+        config_before
+    );
+    assert_eq!(
+        std::fs::read(host.store.history_path()).unwrap(),
+        history_before
+    );
+    assert_eq!(
+        host.engine.as_ref().unwrap().export_learning().unwrap(),
+        learning_before
+    );
     assert_eq!(host.config.page_size, 9);
     drop(locked);
     cleanup(&host);
@@ -1794,24 +3110,47 @@ fn settings_backup_rollback_preserves_case_of_existing_dictionary_names() {
     use std::os::windows::fs::OpenOptionsExt;
     let mut source = learning_host("settings-case-source");
     std::fs::create_dir_all(source.data_dir().join("dicts")).unwrap();
-    std::fs::write(source.data_dir().join("dicts/terms.txt"), "你好\tni hao\t100\n").unwrap();
+    std::fs::write(
+        source.data_dir().join("dicts/terms.txt"),
+        "你好\tni hao\t100\n",
+    )
+    .unwrap();
     let backup = source.data_dir().join("all.json");
-    assert!(source.handle(1, learning_request("export_settings", &backup)).ok);
+    assert!(
+        source
+            .handle(1, learning_request("export_settings", &backup))
+            .ok
+    );
     let mut target = learning_host("settings-case-target");
     configure(&mut target, |c| c.page_size = 9);
     std::fs::create_dir_all(target.data_dir().join("dicts")).unwrap();
     let dictionary = target.data_dir().join("dicts/Terms.txt");
     std::fs::write(&dictionary, "原词\tyuan ci\t500\n").unwrap();
     target.save_learning().unwrap();
-    let locked = std::fs::OpenOptions::new().read(true).share_mode(1).open(target.store.user_dict_path()).unwrap();
+    let locked = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(1)
+        .open(target.store.user_dict_path())
+        .unwrap();
     let response = target.handle(1, learning_request("import_settings", &backup));
     assert!(!response.ok);
-    assert_eq!(std::fs::read_to_string(&dictionary).unwrap(), "原词\tyuan ci\t500\n");
-    assert_eq!(target.store.list_dictionaries()[0].name, "Terms", "失败回滚应保留原来的词库名称");
+    assert_eq!(
+        std::fs::read_to_string(&dictionary).unwrap(),
+        "原词\tyuan ci\t500\n"
+    );
+    assert_eq!(
+        target.store.list_dictionaries()[0].name,
+        "Terms",
+        "失败回滚应保留原来的词库名称"
+    );
     drop(locked);
     let response = target.handle(1, learning_request("import_settings", &backup));
     assert!(response.ok, "{response:?}");
-    assert_eq!(target.store.list_dictionaries()[0].name, "terms", "成功恢复应使用备份中的名称");
+    assert_eq!(
+        target.store.list_dictionaries()[0].name,
+        "terms",
+        "成功恢复应使用备份中的名称"
+    );
     cleanup(&source);
     cleanup(&target);
 }
@@ -1819,26 +3158,68 @@ fn settings_backup_rollback_preserves_case_of_existing_dictionary_names() {
 #[test]
 fn mixed_learning_is_visible_and_restored_by_all_settings_backup() {
     let mut source = learning_host("mixed-profile-source");
-    let lexicon = wowtype_core::MemoryLexicon::from_tsv_str("da\t打\t1000\nda\t大\t800\nta\t他\t700\nge\t个\t600\n").unwrap();
-    let engine = Engine::new(std::sync::Arc::new(lexicon), std::sync::Arc::new(wowtype_core::BigramLm::default()));
+    let lexicon = wowtype_core::MemoryLexicon::from_tsv_str(
+        "da\t打\t1000\nda\t大\t800\nta\t他\t700\nge\t个\t600\n",
+    )
+    .unwrap();
+    let engine = Engine::new(
+        std::sync::Arc::new(lexicon),
+        std::sync::Arc::new(wowtype_core::BigramLm::default()),
+    );
     engine.load_english_str("tag\n");
     source.install_engine(Ok(engine));
     for trial in 1..=2 {
         let frame = typing(&mut source, "datag");
-        let index = frame.candidates.iter().position(|word| word == "打").unwrap();
+        let index = frame
+            .candidates
+            .iter()
+            .position(|word| word == "打")
+            .unwrap();
         let frame = source.handle(1, Request::Select { index }).frame.unwrap();
-        let index = frame.candidates.iter().position(|word| word == "tag").unwrap();
-        assert_eq!(source.handle(1, Request::Select { index }).frame.unwrap().commit.as_deref().map(str::trim_start), Some("打 tag"));
-        assert_eq!(source.user_words().iter().any(|word| word.word == "打tag"), trial == 2);
+        let index = frame
+            .candidates
+            .iter()
+            .position(|word| word == "tag")
+            .unwrap();
+        assert_eq!(
+            source
+                .handle(1, Request::Select { index })
+                .frame
+                .unwrap()
+                .commit
+                .as_deref()
+                .map(str::trim_start),
+            Some("打 tag")
+        );
+        assert_eq!(
+            source.user_words().iter().any(|word| word.word == "打tag"),
+            trial == 2
+        );
     }
     let listed = serde_json::to_value(source.handle(1, Request::ListUserWords)).unwrap();
-    let word = listed["user_words"].as_array().unwrap().iter().find(|word| word["word"] == "打tag").unwrap();
-    assert_eq!(word["display"], "打 tag", "设置列表应显示实际的混输格式，同时保留删除用的词条标识");
+    let word = listed["user_words"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|word| word["word"] == "打tag")
+        .unwrap();
+    assert_eq!(
+        word["display"], "打 tag",
+        "设置列表应显示实际的混输格式，同时保留删除用的词条标识"
+    );
     assert_eq!(word["pinyin"], "datag");
     let path = source.data_dir().join("all.json");
-    assert!(source.handle(1, learning_request("export_settings", &path)).ok);
+    assert!(
+        source
+            .handle(1, learning_request("export_settings", &path))
+            .ok
+    );
     let mut target = learning_host("mixed-profile-target");
-    assert!(target.handle(1, learning_request("import_settings", &path)).ok);
+    assert!(
+        target
+            .handle(1, learning_request("import_settings", &path))
+            .ok
+    );
     assert_eq!(typing(&mut target, "datag").candidates[0], "打tag");
     assert_eq!(press(&mut target, 0x20).commit.as_deref(), Some("打 tag"));
     cleanup(&source);
@@ -1864,13 +3245,31 @@ fn chinese_enter_learns_raw_letters_and_confirmed_delete_undoes_only_last_use() 
 #[test]
 fn personal_english_and_mixed_words_can_be_added_with_input_codes() {
     let mut host = learning_host("mixed-manual-add");
-    let response = host.handle(1, Request::AddUserWord { word: "打tag".into(), pinyin: "datag".into() });
+    let response = host.handle(
+        1,
+        Request::AddUserWord {
+            word: "打tag".into(),
+            pinyin: "datag".into(),
+        },
+    );
     assert!(response.ok, "手动添加混输词应接受实际输入码：{response:?}");
     assert_eq!(typing(&mut host, "datag").candidates[0], "打tag");
     assert_eq!(press(&mut host, 0x20).commit.as_deref(), Some("打 tag"));
-    let response = host.handle(1, Request::AddUserWord { word: "FreeType".into(), pinyin: String::new() });
+    let response = host.handle(
+        1,
+        Request::AddUserWord {
+            word: "FreeType".into(),
+            pinyin: String::new(),
+        },
+    );
     assert!(response.ok, "纯英文词应可以直接按原词输入：{response:?}");
-    assert!(host.engine.as_ref().unwrap().user_words().iter().any(|(input, word, _)| input == "freetype" && word == "FreeType"));
+    assert!(host
+        .engine
+        .as_ref()
+        .unwrap()
+        .user_words()
+        .iter()
+        .any(|(input, word, _)| input == "freetype" && word == "FreeType"));
     cleanup(&host);
 }
 
@@ -1883,7 +3282,16 @@ fn emoji_panel_hotkey_records_recent() {
         modifiers: modifier::CTRL | modifier::SHIFT,
         test: true,
     };
-    let frame = host.handle(1, Request::Key { key: test, before: None }).frame.unwrap();
+    let frame = host
+        .handle(
+            1,
+            Request::Key {
+                key: test,
+                before: None,
+            },
+        )
+        .frame
+        .unwrap();
     assert!(frame.handled && frame.title.is_none(), "test 只说要这个键");
     let frame = key_with(&mut host, 1, 'E' as u32, modifier::CTRL | modifier::SHIFT);
     assert_eq!(frame.panel, Panel::Grid);
@@ -1891,7 +3299,12 @@ fn emoji_panel_hotkey_records_recent() {
     let frame = press(&mut host, '1' as u32);
     assert_eq!(frame.commit.as_deref(), Some(first.as_str()));
     let frame = host
-        .handle(1, Request::Command { command: Command::EmojiPanel })
+        .handle(
+            1,
+            Request::Command {
+                command: Command::EmojiPanel,
+            },
+        )
         .frame
         .unwrap();
     assert_eq!(frame.candidates[0], first, "最近用过的排最前");
@@ -1916,7 +3329,10 @@ fn at_sign_offers_mail_domains() {
     assert_eq!(frame.preedit, "ni@");
     let frame = typing(&mut host, "123");
     assert_eq!(frame.preedit, "ni@123", "数字进编辑区");
-    assert_eq!(press(&mut host, keysym::RETURN).commit.as_deref(), Some("ni@123"));
+    assert_eq!(
+        press(&mut host, keysym::RETURN).commit.as_deref(),
+        Some("ni@123")
+    );
     cleanup(&host);
 }
 
@@ -1936,7 +3352,10 @@ fn site_name_then_period_completes_tld() {
     press(&mut host, keysym::ESCAPE);
     // 普通拼音照常是句号
     typing(&mut host, "nihao");
-    assert_eq!(press(&mut host, '.' as u32).commit.as_deref(), Some("你好。"));
+    assert_eq!(
+        press(&mut host, '.' as u32).commit.as_deref(),
+        Some("你好。")
+    );
 
     configure(&mut host, |c| c.email_completion = false);
     let frame = press(&mut host, '@' as u32);
@@ -1977,11 +3396,19 @@ fn calculator_decimals_do_not_start_address_completion() {
                     typed.push(c);
                     let frame = press(&mut host, sym);
                     assert!(frame.handled, "{input}, numpad={numpad}, at {typed}");
-                    assert!(frame.commit.is_none(), "{input} committed early at {typed}: {:?}", frame.commit);
+                    assert!(
+                        frame.commit.is_none(),
+                        "{input} committed early at {typed}: {:?}",
+                        frame.commit
+                    );
                     assert_eq!(frame.preedit, typed);
                 }
                 let frame = press(&mut host, '=' as u32);
-                assert_eq!(frame.commit.as_deref(), Some(expected), "{input}, numpad={numpad}");
+                assert_eq!(
+                    frame.commit.as_deref(),
+                    Some(expected),
+                    "{input}, numpad={numpad}"
+                );
             }
         }
     }
@@ -1992,28 +3419,62 @@ fn calculator_decimals_do_not_start_address_completion() {
 fn calculator_labels_and_preview_match_letter_selection() {
     let mut host = host("calculator-letters");
     for shuangpin in [false, true] {
-        configure(&mut host, |c| { c.shuangpin = shuangpin; c.autospace = false; });
+        configure(&mut host, |c| {
+            c.shuangpin = shuangpin;
+            c.autospace = false;
+        });
         let prefix = if shuangpin { "V" } else { "v" };
         let frame = typing(&mut host, &format!("{prefix}1+2"));
         assert_eq!(frame.labels[..3], ["a", "b", "c"]);
-        let key = Key { keysym: 'b' as u32, test: true, ..Key::default() };
-        let preview = host.handle(1, Request::Key { key: key.clone(), before: None }).frame.unwrap();
+        let key = Key {
+            keysym: 'b' as u32,
+            test: true,
+            ..Key::default()
+        };
+        let preview = host
+            .handle(
+                1,
+                Request::Key {
+                    key: key.clone(),
+                    before: None,
+                },
+            )
+            .frame
+            .unwrap();
         assert_eq!(preview.commit.as_deref(), Some("1+2=3"));
-        let actual = host.handle(1, Request::Key { key: Key { test: false, ..key }, before: None }).frame.unwrap();
+        let actual = host
+            .handle(
+                1,
+                Request::Key {
+                    key: Key { test: false, ..key },
+                    before: None,
+                },
+            )
+            .frame
+            .unwrap();
         assert_eq!(actual.commit, preview.commit);
         let frame = typing(&mut host, &format!("{prefix}123.456"));
         assert!(!frame.labels.is_empty());
-        assert_eq!(press(&mut host, '$' as u32).commit.as_deref(), Some("壹佰贰拾叁元肆角陆分"));
+        assert_eq!(
+            press(&mut host, '$' as u32).commit.as_deref(),
+            Some("壹佰贰拾叁元肆角陆分")
+        );
     }
     typing(&mut host, "nihao");
-    assert!(press(&mut host, keysym::LEFT).labels.is_empty(), "ordinary candidates retain numeric labels");
+    assert!(
+        press(&mut host, keysym::LEFT).labels.is_empty(),
+        "ordinary candidates retain numeric labels"
+    );
     cleanup(&host);
 }
 
 #[test]
 fn numpad_dot_is_plain_or_starts_completion() {
     let mut host = host("numpad");
-    assert_eq!(press(&mut host, keysym::KP_DECIMAL).commit.as_deref(), Some("."));
+    assert_eq!(
+        press(&mut host, keysym::KP_DECIMAL).commit.as_deref(),
+        Some(".")
+    );
     typing(&mut host, "qq");
     let frame = press(&mut host, keysym::KP_DECIMAL);
     assert_eq!(frame.preedit, "qq.");
@@ -2045,7 +3506,13 @@ fn hotkeys_toggle_punct_and_traditional_only_when_set() {
     assert_eq!(press(&mut host, ',' as u32).commit.as_deref(), Some(","));
     let frame = key_with(&mut host, 1, 'F' as u32, modifier::CTRL | modifier::SHIFT);
     assert_eq!(frame.hint.as_deref(), Some("繁體"));
-    assert!(host.handle(1, Request::GetConfig).config.unwrap().traditional, "存进了设置");
+    assert!(
+        host.handle(1, Request::GetConfig)
+            .config
+            .unwrap()
+            .traditional,
+        "存进了设置"
+    );
     cleanup(&host);
 }
 
@@ -2054,8 +3521,22 @@ fn ctrl_space_from_system_toggle_switches_mode_only_when_set() {
     // TSF 在系统吃掉 Ctrl+空格 时补发的就是这个请求：没有上文、没有候选窗代次
     let mut host = host("ctrl-space");
     let ctrl_space = |host: &mut Host| {
-        let key = Key { keysym: 0x20, modifiers: modifier::CTRL, test: false };
-        host.handle(1, Request::PhysicalKey { key, before: None, scan: 0, shown_revision: None }).frame.unwrap()
+        let key = Key {
+            keysym: 0x20,
+            modifiers: modifier::CTRL,
+            test: false,
+        };
+        host.handle(
+            1,
+            Request::PhysicalKey {
+                key,
+                before: None,
+                scan: 0,
+                shown_revision: None,
+            },
+        )
+        .frame
+        .unwrap()
     };
     let start = host.handle(1, Request::Status).status.unwrap().mode;
     assert!(!ctrl_space(&mut host).handled, "默认没设快捷键，不切换");
@@ -2111,7 +3592,11 @@ fn learned_words_list_forget_and_clear() {
     assert!(response.ok);
     let response = host.handle(1, Request::ClearLearned);
     assert_eq!(response.user_words, Some(Vec::new()));
-    assert!(host.handle(1, Request::ListUserWords).user_words.unwrap().is_empty());
+    assert!(host
+        .handle(1, Request::ListUserWords)
+        .user_words
+        .unwrap()
+        .is_empty());
     cleanup(&host);
 }
 
@@ -2127,7 +3612,10 @@ fn autospace_between_han_and_ascii() {
     let frame = press(&mut host, 'a' as u32);
     assert!(frame.handled);
     assert_eq!(frame.commit.as_deref(), Some(" a"));
-    assert!(!press(&mut host, 'b' as u32).handled, "字母后面的字母照常交给应用");
+    assert!(
+        !press(&mut host, 'b' as u32).handled,
+        "字母后面的字母照常交给应用"
+    );
     host.handle(1, Request::ToggleMode { shift: None });
     typing(&mut host, "shijie");
     assert_eq!(press(&mut host, 0x20).commit.as_deref(), Some(" 世界"));
@@ -2153,11 +3641,29 @@ fn autospace_between_han_and_ascii() {
 fn autospace_formats_boundaries_inside_a_single_commit() {
     // 一条中英混合候选会整段上屏，不能只检查它与光标前文字的交界。
     let cases = [
-        (true, true, true, "自由输入法FreeType第5版", "自由输入法 FreeType 第 5 版"),
+        (
+            true,
+            true,
+            true,
+            "自由输入法FreeType第5版",
+            "自由输入法 FreeType 第 5 版",
+        ),
         (true, true, false, "FreeType第5版", "FreeType 第5版"),
         (true, false, true, "FreeType第5版", "FreeType第 5 版"),
-        (false, true, true, "自由输入法FreeType第5版", "自由输入法FreeType第5版"),
-        (true, true, true, "你好 FreeType\n第 5 版\tOK，𠀀A", "你好 FreeType\n第 5 版\tOK，𠀀 A"),
+        (
+            false,
+            true,
+            true,
+            "自由输入法FreeType第5版",
+            "自由输入法FreeType第5版",
+        ),
+        (
+            true,
+            true,
+            true,
+            "你好 FreeType\n第 5 版\tOK，𠀀A",
+            "你好 FreeType\n第 5 版\tOK，𠀀 A",
+        ),
     ];
     for (i, (enabled, letters, digits, text, expected)) in cases.into_iter().enumerate() {
         let mut host = host(&format!("autospace-inside-{i}"));
@@ -2166,9 +3672,19 @@ fn autospace_formats_boundaries_inside_a_single_commit() {
             c.autospace_letters = letters;
             c.autospace_digits = digits;
         });
-        assert!(host.handle(1, Request::SetQuickPhrases {
-            phrases: vec![freetype_protocol::QuickPhrase { code: "dz".into(), text: text.into(), weight: 10 }],
-        }).ok);
+        assert!(
+            host.handle(
+                1,
+                Request::SetQuickPhrases {
+                    phrases: vec![freetype_protocol::QuickPhrase {
+                        code: "dz".into(),
+                        text: text.into(),
+                        weight: 10
+                    }],
+                }
+            )
+            .ok
+        );
         typing(&mut host, "dz");
         assert_eq!(press(&mut host, 0x20).commit.as_deref(), Some(expected));
         cleanup(&host);
@@ -2179,13 +3695,25 @@ fn autospace_formats_boundaries_inside_a_single_commit() {
 fn focus_reports_mode_hint_when_enabled() {
     let mut host = host("focus");
     let frame = host
-        .handle(1, Request::Focus { active: true, before: None })
+        .handle(
+            1,
+            Request::Focus {
+                active: true,
+                before: None,
+            },
+        )
         .frame
         .unwrap();
     assert_eq!(frame.hint, None);
     configure(&mut host, |c| c.hint_on_focus = true);
     let frame = host
-        .handle(1, Request::Focus { active: true, before: None })
+        .handle(
+            1,
+            Request::Focus {
+                active: true,
+                before: None,
+            },
+        )
         .frame
         .unwrap();
     assert_eq!(frame.hint.as_deref(), Some("中"));
@@ -2220,15 +3748,26 @@ fn status_bar_follows_focus_and_mode() {
     let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     host.set_desktop(Box::new(Recorder(log.clone())));
     assert!(!log.borrow().last().unwrap().visible, "没有输入框时不显示");
-    host.handle(1, Request::Focus { active: true, before: None });
+    host.handle(
+        1,
+        Request::Focus {
+            active: true,
+            before: None,
+        },
+    );
     assert!(log.borrow().last().unwrap().visible);
     host.handle(1, Request::ToggleMode { shift: None });
     assert_eq!(log.borrow().last().unwrap().mode, Mode::English);
-    host.handle(1, Request::Focus { active: false, before: None });
+    host.handle(
+        1,
+        Request::Focus {
+            active: false,
+            before: None,
+        },
+    );
     assert!(!log.borrow().last().unwrap().visible);
     cleanup(&host);
 }
-
 
 #[test]
 fn lexicon_change_is_handed_to_the_loader() {
@@ -2246,13 +3785,24 @@ fn lexicon_change_is_handed_to_the_loader() {
     std::fs::write(&default, "ni hao\t你好\t100\n").unwrap();
     let loaded = super::load_engine(&resources, &host.data_dir(), &path).unwrap();
     assert_eq!(loaded.path, file);
-    assert!(loaded.engine.input("ceshi").iter().any(|candidate| candidate.text == "测试"));
-    for configured in [resources.join("missing.tsv").display().to_string(), String::new()] {
+    assert!(loaded
+        .engine
+        .input("ceshi")
+        .iter()
+        .any(|candidate| candidate.text == "测试"));
+    for configured in [
+        resources.join("missing.tsv").display().to_string(),
+        String::new(),
+    ] {
         let loaded = super::load_engine(&resources, &host.data_dir(), &configured).unwrap();
         assert_eq!(loaded.path, default);
         assert!(!loaded.invalid_custom_format);
         assert_eq!(loaded.warning.is_none(), configured.is_empty());
-        assert!(loaded.engine.input("nihao").iter().any(|candidate| candidate.text == "你好"));
+        assert!(loaded
+            .engine
+            .input("nihao")
+            .iter()
+            .any(|candidate| candidate.text == "你好"));
     }
     let _ = std::fs::remove_file(file);
     cleanup(&host);
@@ -2265,15 +3815,20 @@ fn reloading_lexicon_preserves_learning_and_deletions_made_during_loading() {
     old.add_user_word("ni hao", "你好", 3000.0).unwrap();
     // The loader read this snapshot, then the user kept typing in the old engine.
     let stale = old.export_learning().unwrap();
-    let loaded = Engine::new(std::sync::Arc::new(wowtype_core::MemoryLexicon::new()),
-        std::sync::Arc::new(wowtype_core::BigramLm::default()));
+    let loaded = Engine::new(
+        std::sync::Arc::new(wowtype_core::MemoryLexicon::new()),
+        std::sync::Arc::new(wowtype_core::BigramLm::default()),
+    );
     loaded.import_learning(&stale).unwrap();
     old.forget_word("你好");
     old.add_user_word("ce shi", "测试", 4000.0).unwrap();
     let expected = old.export_learning().unwrap();
     host.install_engine(Ok(loaded));
-    assert_eq!(host.engine.as_ref().unwrap().export_learning().unwrap(), expected,
-        "switching dictionaries must neither lose new learning nor resurrect deleted words");
+    assert_eq!(
+        host.engine.as_ref().unwrap().export_learning().unwrap(),
+        expected,
+        "switching dictionaries must neither lose new learning nor resurrect deleted words"
+    );
     cleanup(&host);
 }
 
@@ -2281,11 +3836,21 @@ fn reloading_lexicon_preserves_learning_and_deletions_made_during_loading() {
 fn command_config_save_failure_is_reported_without_changing_effective_config() {
     let mut host = host("command-save-error");
     std::fs::create_dir_all(host.data_dir().join("config.json")).unwrap();
-    for command in [Command::TogglePunct, Command::ToggleTraditional, Command::ToggleStatusBar] {
+    for command in [
+        Command::TogglePunct,
+        Command::ToggleTraditional,
+        Command::ToggleStatusBar,
+    ] {
         let before = host.config.clone();
         let response = host.handle(1, Request::Command { command });
-        assert!(!response.ok, "failed storage must not be reported as a successful toggle");
-        assert_eq!(host.config, before, "failed storage must preserve the previous setting");
+        assert!(
+            !response.ok,
+            "failed storage must not be reported as a successful toggle"
+        );
+        assert_eq!(
+            host.config, before,
+            "failed storage must preserve the previous setting"
+        );
     }
     cleanup(&host);
 }
@@ -2294,7 +3859,11 @@ fn command_config_save_failure_is_reported_without_changing_effective_config() {
 fn import_bare_words_and_add_user_word_use_lexicon_readings() {
     let mut host = host("readings");
     let lexicon = host.data_dir().with_extension("readings.tsv");
-    std::fs::write(&lexicon, "shi\t示\t10\nli\t例\t10\nci\t词\t10\nyun\t韵\t10\njiu\t酒\t10\n").unwrap();
+    std::fs::write(
+        &lexicon,
+        "shi\t示\t10\nli\t例\t10\nci\t词\t10\nyun\t韵\t10\njiu\t酒\t10\n",
+    )
+    .unwrap();
     host.lexicon_in_use = lexicon.display().to_string();
     let file = host.data_dir().with_extension("bare.txt");
     std::fs::write(&file, "示例词\n'yun'jiu 韵酒\n").unwrap();
@@ -2308,7 +3877,10 @@ fn import_bare_words_and_add_user_word_use_lexicon_readings() {
     let report = response.report.unwrap();
     assert_eq!(report.added, 2, "{:?}", report.errors);
     assert!(report.note.unwrap().contains("按常用读音补充拼音"));
-    assert!(typing(&mut host, "shilici").candidates.iter().any(|c| c == "示例词"));
+    assert!(typing(&mut host, "shilici")
+        .candidates
+        .iter()
+        .any(|c| c == "示例词"));
     press(&mut host, keysym::ESCAPE);
 
     let response = host.handle(
@@ -2319,7 +3891,11 @@ fn import_bare_words_and_add_user_word_use_lexicon_readings() {
         },
     );
     assert!(response.ok, "{:?}", response.error);
-    assert!(response.user_words.unwrap().iter().any(|w| w.word == "韵例" && w.pinyin == "yun li"));
+    assert!(response
+        .user_words
+        .unwrap()
+        .iter()
+        .any(|w| w.word == "韵例" && w.pinyin == "yun li"));
     assert_eq!(typing(&mut host, "yunli").candidates[0], "韵例");
     press(&mut host, keysym::ESCAPE);
     let bad = host.handle(
@@ -2361,15 +3937,30 @@ fn new_fuzzy_groups_and_yong_iong_match() {
         c.fuzzy_groups = fuzzy::AN_AI | fuzzy::HUANG_WANG | fuzzy::UN_IONG | fuzzy::ENG_ONG;
     });
 
-    assert!(typing(&mut host, "gan").candidates.iter().any(|c| c == "改"));
+    assert!(typing(&mut host, "gan")
+        .candidates
+        .iter()
+        .any(|c| c == "改"));
     press(&mut host, keysym::ESCAPE);
-    assert!(typing(&mut host, "huang").candidates.iter().any(|c| c == "望"));
+    assert!(typing(&mut host, "huang")
+        .candidates
+        .iter()
+        .any(|c| c == "望"));
     press(&mut host, keysym::ESCAPE);
-    assert!(typing(&mut host, "xun").candidates.iter().any(|c| c == "兄"));
+    assert!(typing(&mut host, "xun")
+        .candidates
+        .iter()
+        .any(|c| c == "兄"));
     press(&mut host, keysym::ESCAPE);
-    assert!(typing(&mut host, "dong").candidates.iter().any(|c| c == "灯"));
+    assert!(typing(&mut host, "dong")
+        .candidates
+        .iter()
+        .any(|c| c == "灯"));
     press(&mut host, keysym::ESCAPE);
-    assert!(typing(&mut host, "yun").candidates.iter().any(|c| c == "用"));
+    assert!(typing(&mut host, "yun")
+        .candidates
+        .iter()
+        .any(|c| c == "用"));
     cleanup(&host);
 }
 
@@ -2431,17 +4022,20 @@ fn arrow_keys_caret_and_shuangpin_show_keys() {
     press(&mut host, keysym::ESCAPE);
 
     let calc = typing(&mut host, "V1+2");
-    assert!(calc.candidates.iter().any(|c| c == "3"), "cands={:?}", calc.candidates);
+    assert!(
+        calc.candidates.iter().any(|c| c == "3"),
+        "cands={:?}",
+        calc.candidates
+    );
     cleanup(&host);
 }
 
 #[test]
 fn traditional_phrase_conversion_and_learning() {
     let mut host = host("trad-learn");
-    let lexicon = wowtype_core::MemoryLexicon::from_tsv_str(
-        "shen me\t什么\t100\nshen me\t神么\t200\n",
-    )
-    .unwrap();
+    let lexicon =
+        wowtype_core::MemoryLexicon::from_tsv_str("shen me\t什么\t100\nshen me\t神么\t200\n")
+            .unwrap();
     let engine = Engine::new(
         std::sync::Arc::new(lexicon),
         std::sync::Arc::new(wowtype_core::BigramLm::default()),
@@ -2453,7 +4047,11 @@ fn traditional_phrase_conversion_and_learning() {
 
     for _ in 0..3 {
         let f = typing(&mut host, "shenme");
-        let idx = f.candidates.iter().position(|c| c == "什麼").expect("应包含 OpenCC 繁体候选 什麼");
+        let idx = f
+            .candidates
+            .iter()
+            .position(|c| c == "什麼")
+            .expect("应包含 OpenCC 繁体候选 什麼");
         let chosen = press(&mut host, b'1' as u32 + idx as u32);
         assert_eq!(chosen.commit.as_deref(), Some("什麼"));
     }
@@ -2493,7 +4091,10 @@ fn add_user_word_accepts_tones_and_uppercase() {
     }
     assert_eq!(typing(&mut host, "baixiao").candidates.is_empty(), false);
     press(&mut host, keysym::ESCAPE);
-    assert!(typing(&mut host, "lvxia").candidates.iter().any(|c| c == "女侠"));
+    assert!(typing(&mut host, "lvxia")
+        .candidates
+        .iter()
+        .any(|c| c == "女侠"));
     cleanup(&host);
 }
 
@@ -2508,7 +4109,10 @@ fn predict_host(name: &str) -> Host {
         "今天\t下雨\t300\n今天\t天气\t200\n天气\t不错\t300\n开会\t今天\t5\n不错\t今天\t5\n下雨\t今天\t5\n",
     )
     .unwrap();
-    host.install_engine(Ok(Engine::new(std::sync::Arc::new(lexicon), std::sync::Arc::new(lm))));
+    host.install_engine(Ok(Engine::new(
+        std::sync::Arc::new(lexicon),
+        std::sync::Arc::new(lm),
+    )));
     host
 }
 
@@ -2573,7 +4177,10 @@ fn prediction_double_space_is_enabled_by_default_and_selects_highlight() {
     assert_eq!(result.candidates, ["不错"]);
     let single = press(&mut host, 0x20);
     assert!(!single.handled && single.commit.is_none() && single.predict);
-    assert_eq!(single.page_revision, result.page_revision, "下一轮第一次空格必须保留新联想页");
+    assert_eq!(
+        single.page_revision, result.page_revision,
+        "下一轮第一次空格必须保留新联想页"
+    );
     let next = press(&mut host, keysym::SPACE_DOUBLE);
     assert_eq!(next.commit.as_deref(), Some("不错"));
     assert!(next.replace_space && !next.predict);
@@ -2597,9 +4204,16 @@ fn legacy_prediction_shortcut_is_ignored_and_not_saved() {
         assert!(result.ok, "{:?}", result.error);
         assert!(commit_today(&mut host).predict, "旧设置仍可开启联想");
         let frame = key_with(&mut host, 1, sym, mods);
-        assert!(!frame.handled && frame.commit.is_none(), "{shortcut} 不再选词");
-        let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        assert!(saved.get("predict_shortcut").is_none(), "重存时不再写入旧设置");
+        assert!(
+            !frame.handled && frame.commit.is_none(),
+            "{shortcut} 不再选词"
+        );
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(
+            saved.get("predict_shortcut").is_none(),
+            "重存时不再写入旧设置"
+        );
     }
     cleanup(&host);
 }
@@ -2607,17 +4221,52 @@ fn legacy_prediction_shortcut_is_ignored_and_not_saved() {
 #[test]
 fn stale_candidate_action_does_not_select_and_fixed_slot_survives_reload() {
     let mut host = predict_host("fixed-candidate");
-    host.engine.as_ref().unwrap().add_user_word("jin tian", "今填", 1000.0).unwrap();
+    host.engine
+        .as_ref()
+        .unwrap()
+        .add_user_word("jin tian", "今填", 1000.0)
+        .unwrap();
     let frame = typing(&mut host, "jintian");
-    let index = frame.candidates.iter().position(|word| word == "今填").unwrap();
-    let pinned = host.handle(1, Request::CandidateAction { revision: frame.page_revision, action: CandidateAction::Pin { index, place: 1 } }).frame.unwrap();
+    let index = frame
+        .candidates
+        .iter()
+        .position(|word| word == "今填")
+        .unwrap();
+    let pinned = host
+        .handle(
+            1,
+            Request::CandidateAction {
+                revision: frame.page_revision,
+                action: CandidateAction::Pin { index, place: 1 },
+            },
+        )
+        .frame
+        .unwrap();
     assert_eq!(pinned.candidates[0], "今填");
     assert_eq!(pinned.pin_slots[0], Some(1));
-    let stale = host.handle(1, Request::CandidateAction { revision: frame.page_revision, action: CandidateAction::Select { index: 0 } }).frame.unwrap();
+    let stale = host
+        .handle(
+            1,
+            Request::CandidateAction {
+                revision: frame.page_revision,
+                action: CandidateAction::Select { index: 0 },
+            },
+        )
+        .frame
+        .unwrap();
     assert!(stale.commit.is_none());
     let pins = read_pins(&host.data_dir().join("candidate-pins.json")).unwrap();
     assert_eq!(pins["quanpin:jintian"][&1], "jin tian\t今填");
-    let unpin = host.handle(1, Request::CandidateAction { revision: stale.page_revision, action: CandidateAction::Pin { index: 0, place: 0 } }).frame.unwrap();
+    let unpin = host
+        .handle(
+            1,
+            Request::CandidateAction {
+                revision: stale.page_revision,
+                action: CandidateAction::Pin { index: 0, place: 0 },
+            },
+        )
+        .frame
+        .unwrap();
     assert_ne!(unpin.candidates[0], "今填");
     cleanup(&host);
 }
@@ -2636,7 +4285,10 @@ fn prediction_steps_aside_for_other_keys() {
     assert!(commit_today(&mut host).predict);
     let frame = press(&mut host, keysym::ESCAPE);
     assert!(frame.handled && frame.candidates.is_empty());
-    assert!(!press(&mut host, keysym::ESCAPE).handled, "收起以后 Esc 归应用");
+    assert!(
+        !press(&mut host, keysym::ESCAPE).handled,
+        "收起以后 Esc 归应用"
+    );
     // 默认不让数字键选词：即使数字对应现有联想项，也照常输入。
     let suggestions = commit_today(&mut host);
     assert!(suggestions.predict);
@@ -2649,7 +4301,10 @@ fn prediction_steps_aside_for_other_keys() {
     for sym in [keysym::BACKSPACE, keysym::UP, keysym::DOWN, keysym::RETURN] {
         assert!(commit_today(&mut host).predict);
         let frame = press(&mut host, sym);
-        assert!(!frame.handled && frame.candidates.is_empty() && frame.commit.is_none(), "{sym:#x}");
+        assert!(
+            !frame.handled && frame.candidates.is_empty() && frame.commit.is_none(),
+            "{sym:#x}"
+        );
         assert!(!press(&mut host, 0x20).handled, "收起以后空格归应用");
     }
     // 标点照常上屏
@@ -2679,7 +4334,11 @@ fn prediction_keys_can_be_switched_off_separately() {
     let frame = commit_today(&mut host);
     assert_eq!(frame.labels, ["", ""], "数字键不选词时不标序号");
     assert_eq!(frame.cursor, None);
-    assert_eq!(press(&mut host, '1' as u32).commit.as_deref(), Some(" 1"), "数字照常打出来");
+    assert_eq!(
+        press(&mut host, '1' as u32).commit.as_deref(),
+        Some(" 1"),
+        "数字照常打出来"
+    );
     assert!(commit_today(&mut host).predict);
     assert!(!press(&mut host, 0x20).handled, "空格照常打出来");
     cleanup(&host);
@@ -2695,22 +4354,39 @@ fn prediction_arrows_move_highlight_and_space_commits_the_selection() {
             c.horizontal = horizontal;
             c.arrow_keys = "caret".into();
         });
-        assert!(host.config().predict_arrows, "开启联想后默认支持左右选词，与组字光标设置无关");
+        assert!(
+            host.config().predict_arrows,
+            "开启联想后默认支持左右选词，与组字光标设置无关"
+        );
         let shown = commit_today(&mut host).candidates;
         let learned = host.engine.as_ref().unwrap().export_learning().unwrap();
-        for (sym, cursor) in [(keysym::LEFT, 0), (keysym::RIGHT, 1), (keysym::RIGHT, 1), (keysym::LEFT, 0), (keysym::RIGHT, 1)] {
+        for (sym, cursor) in [
+            (keysym::LEFT, 0),
+            (keysym::RIGHT, 1),
+            (keysym::RIGHT, 1),
+            (keysym::LEFT, 0),
+            (keysym::RIGHT, 1),
+        ] {
             let frame = press(&mut host, sym);
             assert!(frame.handled && frame.predict && frame.preedit.is_empty());
             assert!(frame.commit.is_none(), "移动高亮不能上屏");
             assert_eq!(frame.candidates, shown);
             assert_eq!(frame.cursor, Some(cursor), "两端停住，不循环");
         }
-        assert_eq!(host.engine.as_ref().unwrap().export_learning().unwrap(), learned, "移动高亮不能学习");
+        assert_eq!(
+            host.engine.as_ref().unwrap().export_learning().unwrap(),
+            learned,
+            "移动高亮不能学习"
+        );
         let frame = press(&mut host, 0x20);
         assert_eq!(frame.commit.as_deref(), Some("天气"));
         assert_eq!(frame.candidates, ["不错"]);
         assert_eq!(frame.cursor, Some(0), "下一轮联想重新从第一个词开始");
-        assert_eq!(press(&mut host, keysym::RIGHT).cursor, Some(0), "只有一个候选时仍吃掉方向键");
+        assert_eq!(
+            press(&mut host, keysym::RIGHT).cursor,
+            Some(0),
+            "只有一个候选时仍吃掉方向键"
+        );
         assert_eq!(press(&mut host, 0x20).commit.as_deref(), Some("不错"));
         cleanup(&host);
     }
@@ -2726,15 +4402,37 @@ fn prediction_arrows_switch_and_modified_keys_preserve_application_navigation() 
     for sym in [keysym::LEFT, keysym::RIGHT] {
         assert!(commit_today(&mut host).predict);
         let frame = press(&mut host, sym);
-        assert!(!frame.handled && !frame.predict && frame.commit.is_none() && frame.candidates.is_empty());
+        assert!(
+            !frame.handled
+                && !frame.predict
+                && frame.commit.is_none()
+                && frame.candidates.is_empty()
+        );
     }
     configure(&mut host, |c| c.predict_arrows = true);
-    for modifiers in [modifier::SHIFT, modifier::CTRL, modifier::ALT, modifier::SUPER] {
+    for modifiers in [
+        modifier::SHIFT,
+        modifier::CTRL,
+        modifier::ALT,
+        modifier::SUPER,
+    ] {
         for sym in [keysym::LEFT, keysym::RIGHT] {
             assert!(commit_today(&mut host).predict);
-            let key = Key { keysym: sym, modifiers, ..Key::default() };
-            let frame = host.handle(1, Request::Key { key, before: None }).frame.unwrap();
-            assert!(!frame.handled && !frame.predict && frame.commit.is_none() && frame.candidates.is_empty());
+            let key = Key {
+                keysym: sym,
+                modifiers,
+                ..Key::default()
+            };
+            let frame = host
+                .handle(1, Request::Key { key, before: None })
+                .frame
+                .unwrap();
+            assert!(
+                !frame.handled
+                    && !frame.predict
+                    && frame.commit.is_none()
+                    && frame.candidates.is_empty()
+            );
         }
     }
     cleanup(&host);
@@ -2752,12 +4450,19 @@ fn prediction_arrows_work_independently_of_digit_and_space_switches() {
     let frame = press(&mut host, keysym::RIGHT);
     assert_eq!(frame.cursor, Some(1));
     assert_eq!(frame.labels, ["", ""]);
-    assert!(!press(&mut host, 0x20).handled, "左右选词不能悄悄开启空格上屏");
+    assert!(
+        !press(&mut host, 0x20).handled,
+        "左右选词不能悄悄开启空格上屏"
+    );
     let shown = commit_today(&mut host);
     assert!(shown.predict && shown.candidates.len() >= 2);
     assert_eq!(press(&mut host, keysym::RIGHT).cursor, Some(1));
     let frame = host.handle(1, Request::Select { index: 0 }).frame.unwrap();
-    assert_eq!(frame.commit.as_deref(), Some(shown.candidates[0].as_str()), "鼠标仍按点中的词上屏");
+    assert_eq!(
+        frame.commit.as_deref(),
+        Some(shown.candidates[0].as_str()),
+        "鼠标仍按点中的词上屏"
+    );
     cleanup(&host);
 }
 
@@ -2769,16 +4474,39 @@ fn prediction_arrow_previews_do_not_move_the_live_selection() {
         c.predict_double_space = false;
     });
     commit_today(&mut host);
-    let preview = Key { keysym: keysym::RIGHT, test: true, ..Key::default() };
+    let preview = Key {
+        keysym: keysym::RIGHT,
+        test: true,
+        ..Key::default()
+    };
     for _ in 0..2 {
-        let frame = host.handle(1, Request::Key { key: preview.clone(), before: None }).frame.unwrap();
+        let frame = host
+            .handle(
+                1,
+                Request::Key {
+                    key: preview.clone(),
+                    before: None,
+                },
+            )
+            .frame
+            .unwrap();
         assert!(frame.handled && frame.commit.is_none());
         assert_eq!(frame.cursor, Some(1), "重复预判从真实位置计算");
     }
-    assert_eq!(press(&mut host, 0x20).commit.as_deref(), Some("下雨"), "没有真按右键就仍选第一个");
+    assert_eq!(
+        press(&mut host, 0x20).commit.as_deref(),
+        Some("下雨"),
+        "没有真按右键就仍选第一个"
+    );
     press(&mut host, keysym::ESCAPE);
     commit_today(&mut host);
-    host.handle(1, Request::Key { key: preview, before: None });
+    host.handle(
+        1,
+        Request::Key {
+            key: preview,
+            before: None,
+        },
+    );
     assert_eq!(press(&mut host, keysym::RIGHT).cursor, Some(1));
     assert_eq!(press(&mut host, 0x20).commit.as_deref(), Some("天气"));
     cleanup(&host);
@@ -2793,20 +4521,49 @@ fn prediction_is_dropped_when_caret_focus_or_mode_changes() {
     });
     // 光标挪走了（DLL 带来的光标前的字变了）
     assert!(commit_today(&mut host).predict);
-    let key = Key { keysym: '1' as u32, ..Key::default() };
-    let frame = host.handle(1, Request::Key { key, before: Some("今天，".into()) }).frame.unwrap();
+    let key = Key {
+        keysym: '1' as u32,
+        ..Key::default()
+    };
+    let frame = host
+        .handle(
+            1,
+            Request::Key {
+                key,
+                before: Some("今天，".into()),
+            },
+        )
+        .frame
+        .unwrap();
     assert!(!frame.handled && frame.commit.is_none() && frame.candidates.is_empty());
     // 换输入框
     assert!(commit_today(&mut host).predict);
-    let frame = host.handle(1, Request::Focus { active: true, before: Some("今天".into()) }).frame.unwrap();
+    let frame = host
+        .handle(
+            1,
+            Request::Focus {
+                active: true,
+                before: Some("今天".into()),
+            },
+        )
+        .frame
+        .unwrap();
     assert!(frame.candidates.is_empty());
     // 收起（一会儿没选）
     assert!(commit_today(&mut host).predict);
-    assert!(host.handle(1, Request::Reset { commit: false }).frame.unwrap().candidates.is_empty());
+    assert!(host
+        .handle(1, Request::Reset { commit: false })
+        .frame
+        .unwrap()
+        .candidates
+        .is_empty());
     assert!(!press(&mut host, 0x20).handled);
     // 切到英文
     assert!(commit_today(&mut host).predict);
-    let frame = host.handle(1, Request::ToggleMode { shift: None }).frame.unwrap();
+    let frame = host
+        .handle(1, Request::ToggleMode { shift: None })
+        .frame
+        .unwrap();
     assert!(frame.candidates.is_empty());
     cleanup(&host);
 }
@@ -2821,12 +4578,34 @@ fn chosen_predictions_are_learned_once_and_rank_first_later() {
     assert_eq!(commit_today(&mut host).candidates[1], "天气");
     // 预判（OnTestKeyDown）不学习
     let learned = host.engine.as_ref().unwrap().export_learning().unwrap();
-    let preview = Key { keysym: '2' as u32, test: true, ..Key::default() };
-    assert!(host.handle(1, Request::Key { key: preview, before: None }).frame.unwrap().handled);
-    assert_eq!(host.engine.as_ref().unwrap().export_learning().unwrap(), learned);
+    let preview = Key {
+        keysym: '2' as u32,
+        test: true,
+        ..Key::default()
+    };
+    assert!(
+        host.handle(
+            1,
+            Request::Key {
+                key: preview,
+                before: None
+            }
+        )
+        .frame
+        .unwrap()
+        .handled
+    );
+    assert_eq!(
+        host.engine.as_ref().unwrap().export_learning().unwrap(),
+        learned
+    );
     let pairs = host.engine.as_ref().unwrap().pair_count();
     assert_eq!(press(&mut host, '2' as u32).commit.as_deref(), Some("天气"));
-    assert_eq!(host.engine.as_ref().unwrap().pair_count(), pairs + 1, "只学一次");
+    assert_eq!(
+        host.engine.as_ref().unwrap().pair_count(),
+        pairs + 1,
+        "只学一次"
+    );
     press(&mut host, keysym::ESCAPE);
     // 选过的搭配排到「下雨」前面
     assert_eq!(commit_today(&mut host).candidates[0], "天气");
@@ -2838,7 +4617,10 @@ fn chosen_predictions_are_learned_once_and_rank_first_later() {
         press(&mut host, 0x20);
     }
     press(&mut host, keysym::ESCAPE);
-    assert!(commit_today(&mut host).candidates.iter().any(|c| c == "开会"));
+    assert!(commit_today(&mut host)
+        .candidates
+        .iter()
+        .any(|c| c == "开会"));
     cleanup(&host);
 }
 
@@ -2849,17 +4631,46 @@ fn merge_settings_adds_remote_data_without_dropping_local_data() {
         c.page_size = 9;
         c.predict_next = true;
     });
-    assert!(source.handle(1, Request::SetQuickPhrases {
-        phrases: vec![freetype_protocol::QuickPhrase { code: "dz".into(), text: "远端地址".into(), weight: 20 }],
-    }).ok);
+    assert!(
+        source
+            .handle(
+                1,
+                Request::SetQuickPhrases {
+                    phrases: vec![freetype_protocol::QuickPhrase {
+                        code: "dz".into(),
+                        text: "远端地址".into(),
+                        weight: 20
+                    }],
+                }
+            )
+            .ok
+    );
     assert!(source.handle(1, settings_request(serde_json::json!({"op": "set_common_phrases", "phrases": ["远端常用语", "两边都有"]}))).ok);
     std::fs::create_dir_all(source.data_dir().join("dicts")).unwrap();
-    std::fs::write(source.data_dir().join("dicts/人名.txt"), "阿特\ta te\t800\n").unwrap();
-    std::fs::write(source.data_dir().join("dicts/共有.txt"), "远端\tyuan duan\t800\n").unwrap();
+    std::fs::write(
+        source.data_dir().join("dicts/人名.txt"),
+        "阿特\ta te\t800\n",
+    )
+    .unwrap();
+    std::fs::write(
+        source.data_dir().join("dicts/共有.txt"),
+        "远端\tyuan duan\t800\n",
+    )
+    .unwrap();
     source.recent_emoji = vec!["😊".into()];
-    for _ in 0..3 { source.engine.as_ref().unwrap().record_selection_with_pinyin("阿特", Some("a te")); }
+    for _ in 0..3 {
+        source
+            .engine
+            .as_ref()
+            .unwrap()
+            .record_selection_with_pinyin("阿特", Some("a te"));
+    }
     let snapshot = source.data_dir().join("snapshot.json");
-    assert!(source.handle(1, learning_request("export_settings", &snapshot)).ok);
+    assert!(
+        source
+            .handle(1, learning_request("export_settings", &snapshot))
+            .ok
+    );
 
     let mut target = learning_host("merge-target");
     configure(&mut target, |c| {
@@ -2867,14 +4678,33 @@ fn merge_settings_adds_remote_data_without_dropping_local_data() {
         c.horizontal = false;
     });
     target.mode = Mode::English;
-    assert!(target.handle(1, Request::SetQuickPhrases {
-        phrases: vec![freetype_protocol::QuickPhrase { code: "yx".into(), text: "本机邮箱".into(), weight: 10 }],
-    }).ok);
+    assert!(
+        target
+            .handle(
+                1,
+                Request::SetQuickPhrases {
+                    phrases: vec![freetype_protocol::QuickPhrase {
+                        code: "yx".into(),
+                        text: "本机邮箱".into(),
+                        weight: 10
+                    }],
+                }
+            )
+            .ok
+    );
     assert!(target.handle(1, settings_request(serde_json::json!({"op": "set_common_phrases", "phrases": ["本机常用语", "两边都有"]}))).ok);
     std::fs::create_dir_all(target.data_dir().join("dicts")).unwrap();
-    std::fs::write(target.data_dir().join("dicts/共有.txt"), "本机\tben ji\t100\n").unwrap();
+    std::fs::write(
+        target.data_dir().join("dicts/共有.txt"),
+        "本机\tben ji\t100\n",
+    )
+    .unwrap();
     target.recent_emoji = vec!["🎉".into()];
-    target.engine.as_ref().unwrap().record_selection_with_pinyin("旧词", Some("jiu ci"));
+    target
+        .engine
+        .as_ref()
+        .unwrap()
+        .record_selection_with_pinyin("旧词", Some("jiu ci"));
 
     let result = target.handle(1, learning_request("merge_settings", &snapshot));
     assert!(result.ok, "{result:?}");
@@ -2884,17 +4714,40 @@ fn merge_settings_adds_remote_data_without_dropping_local_data() {
     assert_eq!(target.config.font_size, 24);
     assert!(!target.config.horizontal);
     assert_eq!(target.mode, Mode::English, "中英文状态是各设备自己的");
-    let codes: Vec<String> = target.store.list_quick_phrases().into_iter().map(|p| p.code).collect();
+    let codes: Vec<String> = target
+        .store
+        .list_quick_phrases()
+        .into_iter()
+        .map(|p| p.code)
+        .collect();
     assert_eq!(codes, ["dz", "yx"], "列表按编码排");
-    assert_eq!(target.store.load_common_phrases().unwrap(), ["本机常用语", "两边都有", "远端常用语"]);
-    let mut names: Vec<String> = target.store.list_dictionaries().into_iter().map(|d| d.name).collect();
+    assert_eq!(
+        target.store.load_common_phrases().unwrap(),
+        ["本机常用语", "两边都有", "远端常用语"]
+    );
+    let mut names: Vec<String> = target
+        .store
+        .list_dictionaries()
+        .into_iter()
+        .map(|d| d.name)
+        .collect();
     names.sort();
     assert_eq!(names, ["人名", "共有"]);
-    assert_eq!(std::fs::read_to_string(target.data_dir().join("dicts/共有.txt")).unwrap(), "本机\tben ji\t100\n", "同名词库保留本机的");
+    assert_eq!(
+        std::fs::read_to_string(target.data_dir().join("dicts/共有.txt")).unwrap(),
+        "本机\tben ji\t100\n",
+        "同名词库保留本机的"
+    );
     assert_eq!(target.recent_emoji, ["🎉", "😊"]);
     let engine = target.engine.as_ref().unwrap();
-    assert_eq!((engine.history_count("阿特"), engine.history_count("旧词")), (3, 1));
-    assert!(engine.input("ate").iter().any(|c| c.text == "阿特"), "并进来的词马上能用");
+    assert_eq!(
+        (engine.history_count("阿特"), engine.history_count("旧词")),
+        (3, 1)
+    );
+    assert!(
+        engine.input("ate").iter().any(|c| c.text == "阿特"),
+        "并进来的词马上能用"
+    );
     // 再合并一次不重复、不累加
     let again = target.handle(1, learning_request("merge_settings", &snapshot));
     assert!(again.ok);
@@ -2904,7 +4757,11 @@ fn merge_settings_adds_remote_data_without_dropping_local_data() {
     // 坏文件不动数据
     let bad = target.data_dir().join("bad.json");
     std::fs::write(&bad, "{}").unwrap();
-    assert!(!target.handle(1, learning_request("merge_settings", &bad)).ok);
+    assert!(
+        !target
+            .handle(1, learning_request("merge_settings", &bad))
+            .ok
+    );
     assert_eq!(target.config.page_size, 9);
     cleanup(&source);
     cleanup(&target);
@@ -2915,11 +4772,21 @@ fn typing_while_the_dictionary_loads_says_so_and_recovers_once_ready() {
     let dir = std::env::temp_dir().join(format!("freetype-host-loading-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let mut host = Host::new(Store::new(dir));
-    host.handle(1, Request::Hello { session: true, app: "notepad.exe".into() });
+    host.handle(
+        1,
+        Request::Hello {
+            session: true,
+            app: "notepad.exe".into(),
+        },
+    );
     let frame = typing(&mut host, "niha");
     assert_eq!(frame.preedit, "niha");
     assert!(frame.candidates.is_empty());
-    assert_eq!(frame.title.as_deref(), Some(LOADING_TITLE), "an empty candidate window must explain the wait");
+    assert_eq!(
+        frame.title.as_deref(),
+        Some(LOADING_TITLE),
+        "an empty candidate window must explain the wait"
+    );
     let lexicon = wowtype_core::MemoryLexicon::from_tsv_str("ni hao\t你好\t1000\n").unwrap();
     host.install_engine(Ok(Engine::new(
         std::sync::Arc::new(lexicon),
@@ -2933,20 +4800,53 @@ fn typing_while_the_dictionary_loads_says_so_and_recovers_once_ready() {
 }
 
 #[test]
-fn sentence_actions_require_current_display_and_preserve_session(){
-    let mut host=host("sentence-actions");
+fn sentence_actions_require_current_display_and_preserve_session() {
+    let mut host = host("sentence-actions");
     configure(&mut host, |c| c.sentence_editor = true);
-    let frame=typing(&mut host,"nihaoshijie");let revision=frame.page_revision;
-    let stale=host.handle(1,Request::CandidateAction{revision:revision.wrapping_add(1),action:CandidateAction::SentenceFocus{at:5}}).frame.unwrap();
+    let frame = typing(&mut host, "nihaoshijie");
+    let revision = frame.page_revision;
+    let stale = host
+        .handle(
+            1,
+            Request::CandidateAction {
+                revision: revision.wrapping_add(1),
+                action: CandidateAction::SentenceFocus { at: 5 },
+            },
+        )
+        .frame
+        .unwrap();
     assert!(stale.sentence.unwrap().cursor.is_none());
-    let revision=stale.page_revision;
-    let focus=host.handle(1,Request::CandidateAction{revision,action:CandidateAction::SentenceFocus{at:5}}).frame.unwrap();
-    assert_eq!(focus.candidates, frame.candidates, "词块焦点不能替换普通候选");
+    let revision = stale.page_revision;
+    let focus = host
+        .handle(
+            1,
+            Request::CandidateAction {
+                revision,
+                action: CandidateAction::SentenceFocus { at: 5 },
+            },
+        )
+        .frame
+        .unwrap();
+    assert_eq!(
+        focus.candidates, frame.candidates,
+        "词块焦点不能替换普通候选"
+    );
     assert_eq!(focus.preedit, frame.preedit);
     assert_eq!(focus.title, frame.title);
-    assert_eq!(focus.sentence.unwrap().cursor,Some(5));assert!(focus.commit.is_none());
-    let reset=host.handle(1,Request::Reset{commit:false}).frame.unwrap();assert!(reset.sentence.is_none());
-    let late=host.handle(1,Request::RefreshEnhancement{revision:focus.page_revision});assert!(late.frame.is_none());
+    assert_eq!(focus.sentence.unwrap().cursor, Some(5));
+    assert!(focus.commit.is_none());
+    let reset = host
+        .handle(1, Request::Reset { commit: false })
+        .frame
+        .unwrap();
+    assert!(reset.sentence.is_none());
+    let late = host.handle(
+        1,
+        Request::RefreshEnhancement {
+            revision: focus.page_revision,
+        },
+    );
+    assert!(late.frame.is_none());
     cleanup(&host);
 }
 
@@ -2957,11 +4857,27 @@ fn sentence_editor_defaults_off_and_disabling_restores_ordinary_selection() {
     let frame = typing(&mut host, "nihaoshijie");
     assert!(frame.sentence.is_none());
     configure(&mut host, |c| c.sentence_editor = true);
-    let frame = host.handle(1, Request::CandidateAction { revision: frame.page_revision,
-        action: CandidateAction::SentenceFocus { at: 5 } }).frame.unwrap();
+    let frame = host
+        .handle(
+            1,
+            Request::CandidateAction {
+                revision: frame.page_revision,
+                action: CandidateAction::SentenceFocus { at: 5 },
+            },
+        )
+        .frame
+        .unwrap();
     configure(&mut host, |c| c.sentence_editor = false);
-    let current = host.handle(1, Request::CandidateAction { revision: frame.page_revision,
-        action: CandidateAction::SentenceFocus { at: 5 } }).frame.unwrap();
+    let current = host
+        .handle(
+            1,
+            Request::CandidateAction {
+                revision: frame.page_revision,
+                action: CandidateAction::SentenceFocus { at: 5 },
+            },
+        )
+        .frame
+        .unwrap();
     assert!(current.sentence.is_none());
     let first = current.candidates[0].clone();
     let selected = press(&mut host, '1' as u32);
@@ -2970,32 +4886,103 @@ fn sentence_editor_defaults_off_and_disabling_restores_ordinary_selection() {
 }
 
 #[test]
-fn boundary_and_pending_learning_sync_replay_does_not_multiply_or_revive_deletions(){
-    let mut a=host("sentence-sync-a");let mut b=host("sentence-sync-b");
-    a.engine.as_ref().unwrap().remember_boundary("ni hao shi jie",vec![("你".into(),"ni".into()),("好世界".into(),"hao shi jie".into())]);
-    a.engine.as_ref().unwrap().record_merged_word("你好世界","ni hao shi jie");
-    let file=a.data_dir().join("boundary-sync.json");let path=file.display().to_string();
-    assert!(a.handle(1,Request::ExportSyncSettings{path:path.clone()}).ok);
-    assert!(b.handle(1,Request::MergeSettings{path:path.clone()}).ok);
-    assert!(b.handle(1,Request::MergeSettings{path:path.clone()}).ok);
-    assert_eq!(b.engine.as_ref().unwrap().sentence_boundaries().len(),1);
-    assert!(!b.engine.as_ref().unwrap().user_words().iter().any(|(_,w,_)|w=="你好世界"));
-    b.engine.as_ref().unwrap().record_merged_word("你好世界","ni hao shi jie");
-    assert!(b.engine.as_ref().unwrap().user_words().iter().any(|(_,w,_)|w=="你好世界"));
-    cleanup(&a);cleanup(&b);
+fn boundary_and_pending_learning_sync_replay_does_not_multiply_or_revive_deletions() {
+    let mut a = host("sentence-sync-a");
+    let mut b = host("sentence-sync-b");
+    a.engine.as_ref().unwrap().remember_boundary(
+        "ni hao shi jie",
+        vec![
+            ("你".into(), "ni".into()),
+            ("好世界".into(), "hao shi jie".into()),
+        ],
+    );
+    a.engine
+        .as_ref()
+        .unwrap()
+        .record_merged_word("你好世界", "ni hao shi jie");
+    let file = a.data_dir().join("boundary-sync.json");
+    let path = file.display().to_string();
+    assert!(
+        a.handle(1, Request::ExportSyncSettings { path: path.clone() })
+            .ok
+    );
+    assert!(
+        b.handle(1, Request::MergeSettings { path: path.clone() })
+            .ok
+    );
+    assert!(
+        b.handle(1, Request::MergeSettings { path: path.clone() })
+            .ok
+    );
+    assert_eq!(b.engine.as_ref().unwrap().sentence_boundaries().len(), 1);
+    assert!(!b
+        .engine
+        .as_ref()
+        .unwrap()
+        .user_words()
+        .iter()
+        .any(|(_, w, _)| w == "你好世界"));
+    b.engine
+        .as_ref()
+        .unwrap()
+        .record_merged_word("你好世界", "ni hao shi jie");
+    assert!(b
+        .engine
+        .as_ref()
+        .unwrap()
+        .user_words()
+        .iter()
+        .any(|(_, w, _)| w == "你好世界"));
+    cleanup(&a);
+    cleanup(&b);
 }
 
 #[test]
-fn accepted_key_preview_exposes_new_model_job_to_the_candidate_window(){
-    struct Delayed;impl wowtype_core::enhancement::Backend for Delayed {
-        fn submit(&self,_:wowtype_core::enhancement::Query){}
-        fn answer(&self,_:&str)->Option<wowtype_core::enhancement::Answer>{None}
+fn accepted_key_preview_exposes_new_model_job_to_the_candidate_window() {
+    struct Delayed;
+    impl wowtype_core::enhancement::Backend for Delayed {
+        fn submit(&self, _: wowtype_core::enhancement::Query) {}
+        fn answer(&self, _: &str) -> Option<wowtype_core::enhancement::Answer> {
+            None
+        }
     }
-    let mut host=host("model-preview");host.engine.as_ref().unwrap().set_enhancement(Some(Arc::new(Delayed)));
-    for c in "nihao".chars(){
-        let preview=Key{keysym:c as u32,modifiers:0,test:true};host.handle(1,Request::Key{key:preview,before:None});
-        let result=host.handle(1,Request::Key{key:Key{test:false,..preview},before:None}).frame.unwrap();
-        if c=='o'{assert!(result.enhancement_pending,"accepted preview must start polling");}
+    let mut host = host("model-preview");
+    host.engine
+        .as_ref()
+        .unwrap()
+        .set_enhancement(Some(Arc::new(Delayed)));
+    for c in "nihao".chars() {
+        let preview = Key {
+            keysym: c as u32,
+            modifiers: 0,
+            test: true,
+        };
+        host.handle(
+            1,
+            Request::Key {
+                key: preview,
+                before: None,
+            },
+        );
+        let result = host
+            .handle(
+                1,
+                Request::Key {
+                    key: Key {
+                        test: false,
+                        ..preview
+                    },
+                    before: None,
+                },
+            )
+            .frame
+            .unwrap();
+        if c == 'o' {
+            assert!(
+                result.enhancement_pending,
+                "accepted preview must start polling"
+            );
+        }
     }
     cleanup(&host);
 }

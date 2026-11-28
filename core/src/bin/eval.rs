@@ -24,23 +24,43 @@ fn fail(msg: &str) -> ! {
 /// Diagnostic exports carry per-case settings; old three-column suites keep command-line defaults.
 fn case_config(base: &EngineConfig, attributes: Option<&str>) -> Result<EngineConfig, String> {
     let mut config = base.clone();
-    let Some(text) = attributes.filter(|text| !text.is_empty()) else { return Ok(config); };
-    let value: serde_json::Value = serde_json::from_str(text).map_err(|e|format!("评测设置格式不正确：{e}"))?;
+    let Some(text) = attributes.filter(|text| !text.is_empty()) else {
+        return Ok(config);
+    };
+    let value: serde_json::Value =
+        serde_json::from_str(text).map_err(|e| format!("评测设置格式不正确：{e}"))?;
     let scheme = value["scheme"].as_str().ok_or("评测设置缺少输入方案")?;
     config.shuangpin = scheme != "pinyin";
     if config.shuangpin {
-        config.shuangpin_scheme = scheme.strip_prefix("shuangpin:").and_then(wowtype_core::shuangpin::Scheme::from_name)
+        config.shuangpin_scheme = scheme
+            .strip_prefix("shuangpin:")
+            .and_then(wowtype_core::shuangpin::Scheme::from_name)
             .ok_or("评测设置的双拼方案无效")?;
     }
-    for (field, target) in [("fuzzy", &mut config.fuzzy), ("typo", &mut config.typo_correction),
-        ("traditional", &mut config.traditional), ("english", &mut config.english_candidate)] {
-        if let Some(value) = value.get(field) { *target=value.as_bool().ok_or_else(||format!("评测设置 {field} 不是开关"))?; }
+    for (field, target) in [
+        ("fuzzy", &mut config.fuzzy),
+        ("typo", &mut config.typo_correction),
+        ("traditional", &mut config.traditional),
+        ("english", &mut config.english_candidate),
+    ] {
+        if let Some(value) = value.get(field) {
+            *target = value
+                .as_bool()
+                .ok_or_else(|| format!("评测设置 {field} 不是开关"))?;
+        }
     }
-    if let Some(groups)=value.get("fuzzy_groups") {
-        config.fuzzy_groups=groups.as_u64().filter(|n|*n<=u64::from(wowtype_core::syllable::fuzzy::ALL))
+    if let Some(groups) = value.get("fuzzy_groups") {
+        config.fuzzy_groups = groups
+            .as_u64()
+            .filter(|n| *n <= u64::from(wowtype_core::syllable::fuzzy::ALL))
             .ok_or("评测模糊音分组无效")? as u32;
     }
-    if let Some(nnlm)=value.get("nnlm") { config.nnlm_rerank=nnlm.as_u64().filter(|n|*n<=1000).ok_or("评测重排数量无效")? as usize; }
+    if let Some(nnlm) = value.get("nnlm") {
+        config.nnlm_rerank = nnlm
+            .as_u64()
+            .filter(|n| *n <= 1000)
+            .ok_or("评测重排数量无效")? as usize;
+    }
     Ok(config)
 }
 
@@ -49,13 +69,20 @@ mod tests {
     use super::*;
     #[test]
     fn diagnostic_settings_restore_shuangpin_and_do_not_leak_to_next_case() {
-        let base=EngineConfig::default();
-        let diagnostic=case_config(&base,Some(r#"{"scheme":"shuangpin:xiaohe","fuzzy":true,"fuzzy_groups":256,"typo":false}"#)).unwrap();
+        let base = EngineConfig::default();
+        let diagnostic = case_config(
+            &base,
+            Some(r#"{"scheme":"shuangpin:xiaohe","fuzzy":true,"fuzzy_groups":256,"typo":false}"#),
+        )
+        .unwrap();
         assert!(diagnostic.shuangpin && diagnostic.fuzzy && !diagnostic.typo_correction);
-        assert_eq!(diagnostic.shuangpin_scheme,wowtype_core::shuangpin::Scheme::Xiaohe);
-        assert_eq!(diagnostic.fuzzy_groups,256);
-        assert_eq!(case_config(&base,None).unwrap().shuangpin,base.shuangpin);
-        assert!(case_config(&base,Some(r#"{"scheme":"unknown"}"#)).is_err());
+        assert_eq!(
+            diagnostic.shuangpin_scheme,
+            wowtype_core::shuangpin::Scheme::Xiaohe
+        );
+        assert_eq!(diagnostic.fuzzy_groups, 256);
+        assert_eq!(case_config(&base, None).unwrap().shuangpin, base.shuangpin);
+        assert!(case_config(&base, Some(r#"{"scheme":"unknown"}"#)).is_err());
     }
 }
 
@@ -272,7 +299,9 @@ fn main() {
                 continue;
             }
             let context = cols.next().unwrap_or("");
-            engine = engine.with_config(case_config(&baseline_config, cols.next()).unwrap_or_else(|e|fail(&e)));
+            engine = engine.with_config(
+                case_config(&baseline_config, cols.next()).unwrap_or_else(|e| fail(&e)),
+            );
             let expected = expected.split('|').next().unwrap_or("").trim();
             // 照插件里真实的选法：整句对就选整句；不对就选最长的、对得上的句首候选，
             // 剩下的拼音接着打；最后把拼出来的整句也记一次
@@ -329,7 +358,8 @@ fn main() {
         let accepted: Vec<&str> = expected.split('|').map(str::trim).collect();
         // 第三列（可选）是光标前已经上屏的文字：测「接着前文打」时的排序
         let context = cols.next().unwrap_or("");
-        engine = engine.with_config(case_config(&baseline_config, cols.next()).unwrap_or_else(|e|fail(&e)));
+        engine = engine
+            .with_config(case_config(&baseline_config, cols.next()).unwrap_or_else(|e| fail(&e)));
         engine.set_context(context);
         let candidates = engine.input(input);
         total += 1;

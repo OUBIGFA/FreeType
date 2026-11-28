@@ -88,7 +88,10 @@ impl ModelSlot {
     fn prepare(self: &Arc<Self>, dir: &Path) -> bool {
         {
             let mut state = self.state.lock().unwrap();
-            if !matches!(*state, ModelState::None | ModelState::Missing | ModelState::Failed(_)) {
+            if !matches!(
+                *state,
+                ModelState::None | ModelState::Missing | ModelState::Failed(_)
+            ) {
                 return true;
             }
             // 每次都看一眼磁盘：设置界面可能刚下载好，也可能刚删掉

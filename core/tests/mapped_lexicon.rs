@@ -212,14 +212,30 @@ fn deployed_index_works_without_source_and_detects_replacement_damage() {
     // Shipping only the index must preserve candidates and predictions, not bypass integrity checks.
     std::fs::rename(&source, source.with_extension("source-only")).unwrap();
     let loaded = MappedLexicon::open_verified(&source, &index, &record);
-    assert!(loaded.is_ok(), "a deployed index must not require the build-time TSV: {:?}", loaded.as_ref().err());
+    assert!(
+        loaded.is_ok(),
+        "a deployed index must not require the build-time TSV: {:?}",
+        loaded.as_ref().err()
+    );
     let loaded = loaded.unwrap();
     assert_eq!(loaded.lookup(&full("ni hao"))[0].word, "你好");
-    assert_eq!(loaded.prediction_index().unwrap().log_frequency("中国"), Some(200_f64.ln() as f32));
+    assert_eq!(
+        loaded.prediction_index().unwrap().log_frequency("中国"),
+        Some(200_f64.ln() as f32)
+    );
     drop(loaded);
     std::fs::write(&source, "old installation TSV").unwrap();
-    assert_eq!(MappedLexicon::open_deployed(&index, &record).unwrap().lookup(&full("ni hao"))[0].word, "你好");
-    assert!(MappedLexicon::open_verified(&source, &index, &record).is_err(), "explicit source checks stay strict");
+    assert_eq!(
+        MappedLexicon::open_deployed(&index, &record)
+            .unwrap()
+            .lookup(&full("ni hao"))[0]
+            .word,
+        "你好"
+    );
+    assert!(
+        MappedLexicon::open_verified(&source, &index, &record).is_err(),
+        "explicit source checks stay strict"
+    );
     let mut bytes = std::fs::read(&index).unwrap();
     bytes[40] ^= 1;
     std::fs::write(&index, bytes).unwrap();
@@ -230,16 +246,27 @@ fn deployed_index_works_without_source_and_detects_replacement_damage() {
 fn legacy_deployed_index_keeps_candidates_and_float_priors() {
     let (source, index) = fixture();
     // Captured with the pre-optimization compiler (01927f8); the hex fixture is a fixed old-format artifact.
-    let bytes: Vec<u8> = include_str!("fixtures/lexicon-ftd1.hex").split_whitespace()
-        .flat_map(|line| line.as_bytes().chunks_exact(2).map(|pair|
-            u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap()))
+    let bytes: Vec<u8> = include_str!("fixtures/lexicon-ftd1.hex")
+        .split_whitespace()
+        .flat_map(|line| {
+            line.as_bytes()
+                .chunks_exact(2)
+                .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+        })
         .collect();
-    std::fs::write(&source, "ni\t你\t500\nni\t拟\t0.5\nni hao\t你好\t300\nzhong guo\t中国\t200\n").unwrap();
+    std::fs::write(
+        &source,
+        "ni\t你\t500\nni\t拟\t0.5\nni hao\t你好\t300\nzhong guo\t中国\t200\n",
+    )
+    .unwrap();
     std::fs::write(&index, bytes).unwrap();
     let mapped = MappedLexicon::open(&source, &index).unwrap();
     assert_eq!(mapped.lookup(&full("ni hao"))[0].word, "你好");
     assert_eq!(mapped.lookup_common(&full("ni")).len(), 1);
-    assert_eq!(mapped.prediction_index().unwrap().log_frequency("中国"), Some(200_f64.ln() as f32));
+    assert_eq!(
+        mapped.prediction_index().unwrap().log_frequency("中国"),
+        Some(200_f64.ln() as f32)
+    );
     assert_eq!(mapped.prediction_index().unwrap().log_frequency("拟"), None);
 }
 
@@ -253,7 +280,10 @@ fn compact_records_keep_multibyte_lengths_and_fractional_frequencies() {
     MappedLexicon::compile(&source, &index).unwrap();
     let mapped = MappedLexicon::open(&source, &index).unwrap();
     let expected = MemoryLexicon::from_tsv_path(&source).unwrap();
-    assert_eq!(mapped.lookup(&full(&reading)), expected.lookup(&full(&reading)));
+    assert_eq!(
+        mapped.lookup(&full(&reading)),
+        expected.lookup(&full(&reading))
+    );
     let mut visited = Vec::new();
     mapped.for_each_word(&mut |word, freq| visited.push((word.to_owned(), freq)));
     assert_eq!(visited.last(), Some(&(word, 3.25)));
@@ -288,11 +318,19 @@ fn verified_record_skips_full_checksums_only_for_unchanged_files() {
     let last = bytes.len() - 1;
     bytes[last] ^= 1;
     std::fs::write(&index, &bytes).unwrap();
-    std::fs::File::options().write(true).open(&index).unwrap().set_modified(modified).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&index)
+        .unwrap()
+        .set_modified(modified)
+        .unwrap();
     let mapped = MappedLexicon::open_verified(&source, &index, &record).unwrap();
     assert_eq!(mapped.lookup(&full("ni hao"))[0].word, "你好");
     drop(mapped);
-    assert!(MappedLexicon::open(&source, &index).is_err(), "plain open still verifies everything");
+    assert!(
+        MappedLexicon::open(&source, &index).is_err(),
+        "plain open still verifies everything"
+    );
     // Any replacement changes the identity, so the full check runs again.
     std::fs::write(&index, &bytes).unwrap();
     assert!(MappedLexicon::open_verified(&source, &index, &record).is_err());
@@ -320,12 +358,19 @@ fn fuzzy_pruning_keeps_every_longer_fuzzy_word() {
         assert!(view.has_longer(&full("zheng guo")));
         assert!(!view.has_longer(&full("ni hao")));
         // 不剪错：凡是模糊查询能查到的两音节词，它的第一个音节都必须判为「有更长的词」。
-        for first in ["zhong", "zong", "zheng", "zeng", "si", "shi", "ci", "chi", "ni", "li", "hua"] {
+        for first in [
+            "zhong", "zong", "zheng", "zeng", "si", "shi", "ci", "chi", "ni", "li", "hua",
+        ] {
             for second in ["guo", "ci", "chi", "hao", "r"] {
-                let Some(second) = Syllable::from_text(second) else { continue };
+                let Some(second) = Syllable::from_text(second) else {
+                    continue;
+                };
                 let query = vec![full(first)[0], second.query(false)];
                 if !view.lookup_common(&query).is_empty() {
-                    assert!(view.has_longer(&query[..1]), "pruned {first} before {query:?}");
+                    assert!(
+                        view.has_longer(&query[..1]),
+                        "pruned {first} before {query:?}"
+                    );
                 }
             }
         }
@@ -338,7 +383,13 @@ fn lookup_memo_follows_learning_and_fuzzy_settings() {
     MappedLexicon::compile(&source, &index).unwrap();
     let lm = Arc::new(BigramLm::default());
     let mut engine = Engine::new(Arc::new(MappedLexicon::open(&source, &index).unwrap()), lm);
-    let first = |engine: &Engine, code: &str| engine.input(code).into_iter().map(|c| c.text).collect::<Vec<_>>();
+    let first = |engine: &Engine, code: &str| {
+        engine
+            .input(code)
+            .into_iter()
+            .map(|c| c.text)
+            .collect::<Vec<_>>()
+    };
     assert!(!first(&engine, "nihao").contains(&"泥号".to_string()));
     // 缓存里已有 ni hao 的查表结果；学到的新词必须马上出现。
     engine.add_user_word("ni hao", "泥号", 1e9).unwrap();

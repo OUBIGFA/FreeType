@@ -69,7 +69,9 @@ pub fn modifiers(state: impl Fn(u16) -> i16) -> u32 {
 
 /// 是不是 Ctrl+空格（不带 Shift、Alt、Win）。Windows 也把它当作简体中文的输入法开关键。
 pub fn is_ctrl_space(key: &Key) -> bool {
-    key.keysym == 0x20 && key.modifiers & (modifier::SHIFT | modifier::CTRL | modifier::ALT | modifier::SUPER) == modifier::CTRL
+    key.keysym == 0x20
+        && key.modifiers & (modifier::SHIFT | modifier::CTRL | modifier::ALT | modifier::SUPER)
+            == modifier::CTRL
 }
 
 /// ToUnicode 给出的字符：只收可见 ASCII（别的字符原样交给应用）。
@@ -236,24 +238,52 @@ mod tests {
         for _ in 0..2 {
             tap.key_down(VK_SHIFT, PLAIN, false);
             tap.key_down(VK_SHIFT, PLAIN, false);
-            if tap.key_up(VK_SHIFT, PLAIN) { chinese = !chinese; }
+            if tap.key_up(VK_SHIFT, PLAIN) {
+                chinese = !chinese;
+            }
             assert!(!tap.key_up(VK_SHIFT, PLAIN));
         }
         assert!(chinese, "双击 Shift 后模式回到原状态，宿主仍收到两次按键");
         tap.key_down(VK_SHIFT, PLAIN, false);
         tap.key_down(0x41, PLAIN, false);
-        assert!(!tap.key_up(VK_SHIFT, PLAIN), "Shift 组合键不再触发一次模式切换");
+        assert!(
+            !tap.key_up(VK_SHIFT, PLAIN),
+            "Shift 组合键不再触发一次模式切换"
+        );
     }
 
     #[test]
     fn caret_move_waits_for_modifiers() {
         let pending = CaretMove::new(1, 1000);
-        assert_eq!(pending.step(1000, true, true), CaretStep::Wait, "Shift 还按着：等");
-        assert_eq!(pending.step(1100, true, false), CaretStep::Send(1), "松手了：发 ←");
-        assert_eq!(pending.step(1100, false, false), CaretStep::Drop, "焦点换走了：不发");
-        assert_eq!(pending.step(1000 + CaretMove::TIMEOUT_MS, true, true), CaretStep::Wait);
-        assert_eq!(pending.step(1001 + CaretMove::TIMEOUT_MS, true, false), CaretStep::Drop, "等太久：作废");
-        assert_eq!(CaretMove::new(99, 0).step(0, true, false), CaretStep::Send(4), "一次最多挪 4 下");
+        assert_eq!(
+            pending.step(1000, true, true),
+            CaretStep::Wait,
+            "Shift 还按着：等"
+        );
+        assert_eq!(
+            pending.step(1100, true, false),
+            CaretStep::Send(1),
+            "松手了：发 ←"
+        );
+        assert_eq!(
+            pending.step(1100, false, false),
+            CaretStep::Drop,
+            "焦点换走了：不发"
+        );
+        assert_eq!(
+            pending.step(1000 + CaretMove::TIMEOUT_MS, true, true),
+            CaretStep::Wait
+        );
+        assert_eq!(
+            pending.step(1001 + CaretMove::TIMEOUT_MS, true, false),
+            CaretStep::Drop,
+            "等太久：作废"
+        );
+        assert_eq!(
+            CaretMove::new(99, 0).step(0, true, false),
+            CaretStep::Send(4),
+            "一次最多挪 4 下"
+        );
     }
 
     #[test]
@@ -275,16 +305,31 @@ mod tests {
 
     #[test]
     fn ctrl_space_needs_ctrl_only() {
-        let key = |modifiers| Key { keysym: 0x20, modifiers, ..Key::default() };
+        let key = |modifiers| Key {
+            keysym: 0x20,
+            modifiers,
+            ..Key::default()
+        };
         assert!(is_ctrl_space(&key(modifier::CTRL)));
-        assert!(is_ctrl_space(&key(modifier::CTRL | modifier::CAPS)), "大写锁定不影响");
+        assert!(
+            is_ctrl_space(&key(modifier::CTRL | modifier::CAPS)),
+            "大写锁定不影响"
+        );
         assert!(!is_ctrl_space(&key(0)));
         assert!(!is_ctrl_space(&key(modifier::CTRL | modifier::SHIFT)));
-        assert!(!is_ctrl_space(&Key { keysym: 'a' as u32, modifiers: modifier::CTRL, ..Key::default() }));
+        assert!(!is_ctrl_space(&Key {
+            keysym: 'a' as u32,
+            modifiers: modifier::CTRL,
+            ..Key::default()
+        }));
     }
 
-    const PLAIN: Moment = Moment { other_modifiers: false };
-    const CTRL: Moment = Moment { other_modifiers: true };
+    const PLAIN: Moment = Moment {
+        other_modifiers: false,
+    };
+    const CTRL: Moment = Moment {
+        other_modifiers: true,
+    };
 
     #[test]
     fn shift_tap_rules() {

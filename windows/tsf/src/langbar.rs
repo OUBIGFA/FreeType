@@ -7,19 +7,20 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use freetype_protocol::Mode;
-use windows::core::{implement, w, Ref, Result, BOOL, BSTR, GUID, IUnknown, Interface};
+use windows::core::{implement, w, IUnknown, Interface, Ref, Result, BOOL, BSTR, GUID};
 use windows::Win32::Foundation::{E_INVALIDARG, E_NOTIMPL, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{
-    CreateBitmap, CreateCompatibleDC, CreateDIBSection, CreateFontW, DeleteDC, DeleteObject, GetTextExtentPoint32W,
-    SelectObject, SetBkMode, SetTextColor, TextOutW, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CLEARTYPE_QUALITY,
-    CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_PITCH, DIB_RGB_COLORS, FF_DONTCARE, FW_NORMAL,
-    OUT_DEFAULT_PRECIS, TRANSPARENT,
+    CreateBitmap, CreateCompatibleDC, CreateDIBSection, CreateFontW, DeleteDC, DeleteObject,
+    GetTextExtentPoint32W, SelectObject, SetBkMode, SetTextColor, TextOutW, BITMAPINFO,
+    BITMAPINFOHEADER, BI_RGB, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET,
+    DEFAULT_PITCH, DIB_RGB_COLORS, FF_DONTCARE, FW_NORMAL, OUT_DEFAULT_PRECIS, TRANSPARENT,
 };
 use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
 use windows::Win32::UI::TextServices::{
-    ITfLangBarItem, ITfLangBarItemButton, ITfLangBarItemButton_Impl, ITfLangBarItemSink, ITfLangBarItem_Impl,
-    ITfMenu, ITfSource, ITfSource_Impl, ITfThreadMgr, TfLBIClick, GUID_LBI_INPUTMODE, TF_LANGBARITEMINFO, TF_LBI_CLK_LEFT,
-    TF_LBI_CLK_RIGHT, TF_LBI_ICON, TF_LBI_STYLE_BTN_BUTTON, TF_LBI_STYLE_SHOWNINTRAY, TF_LBI_TEXT, TF_LBI_TOOLTIP,
+    ITfLangBarItem, ITfLangBarItemButton, ITfLangBarItemButton_Impl, ITfLangBarItemSink,
+    ITfLangBarItem_Impl, ITfMenu, ITfSource, ITfSource_Impl, ITfThreadMgr, TfLBIClick,
+    GUID_LBI_INPUTMODE, TF_LANGBARITEMINFO, TF_LBI_CLK_LEFT, TF_LBI_CLK_RIGHT, TF_LBI_ICON,
+    TF_LBI_STYLE_BTN_BUTTON, TF_LBI_STYLE_SHOWNINTRAY, TF_LBI_TEXT, TF_LBI_TOOLTIP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateIconIndirect, GetSystemMetrics, HICON, ICONINFO, SM_CXSMICON,
@@ -120,7 +121,10 @@ fn text_of(mode: Mode) -> &'static str {
 }
 
 fn copy_into(dst: &mut [u16], text: &str) {
-    for (slot, c) in dst.iter_mut().zip(text.encode_utf16().chain(std::iter::once(0))) {
+    for (slot, c) in dst
+        .iter_mut()
+        .zip(text.encode_utf16().chain(std::iter::once(0)))
+    {
         *slot = c;
     }
 }
@@ -192,7 +196,11 @@ fn text_icon(text: &str) -> Result<HICON> {
         SelectObject(dc, old_font);
         let _ = DeleteObject(font.into());
         SelectObject(dc, old);
-        let (r, g, b) = if light_taskbar() { (0x1f, 0x1f, 0x1f) } else { (0xff, 0xff, 0xff) };
+        let (r, g, b) = if light_taskbar() {
+            (0x1f, 0x1f, 0x1f)
+        } else {
+            (0xff, 0xff, 0xff)
+        };
         for p in pixels.iter_mut() {
             let a = (*p & 0xff).max((*p >> 8) & 0xff).max((*p >> 16) & 0xff);
             // 预乘透明度
@@ -240,7 +248,10 @@ impl ITfLangBarItem_Impl for ModeButton_Impl {
 
     fn GetTooltipString(&self) -> Result<BSTR> {
         let mode = self.state.borrow().mode;
-        Ok(BSTR::from(format!("FreeType：{}；点击切换中英文", text_of(mode))))
+        Ok(BSTR::from(format!(
+            "FreeType：{}；点击切换中英文",
+            text_of(mode)
+        )))
     }
 }
 
@@ -292,4 +303,3 @@ impl ITfSource_Impl for ModeButton_Impl {
         Ok(())
     }
 }
-

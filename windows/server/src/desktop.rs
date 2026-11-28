@@ -17,20 +17,24 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use freetype_protocol::{AppWindow, Mode};
 use windows::core::{w, BOOL, HSTRING, PCWSTR, PWSTR};
-use windows::Win32::Foundation::{CloseHandle, COLORREF, HGLOBAL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Foundation::{
+    CloseHandle, COLORREF, HGLOBAL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
+};
 use windows::Win32::Graphics::Dwm::{
-    DwmGetWindowAttribute, DwmSetWindowAttribute, DWMWA_CLOAKED, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
+    DwmGetWindowAttribute, DwmSetWindowAttribute, DWMWA_CLOAKED, DWMWA_WINDOW_CORNER_PREFERENCE,
+    DWMWCP_ROUND,
 };
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreatePen, CreateSolidBrush,
-    DeleteDC, DeleteObject, EndPaint, FillRect, GetMonitorInfoW, GetTextExtentPoint32W, InvalidateRect,
-    MonitorFromPoint, RoundRect, SelectObject, SetBkMode, SetTextColor, TextOutW, CLEARTYPE_QUALITY,
-    CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_PITCH, FF_DONTCARE, FW_NORMAL, MONITORINFO,
-    MONITOR_DEFAULTTOPRIMARY, OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_SOLID, SRCCOPY, TRANSPARENT,
+    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreatePen,
+    CreateSolidBrush, DeleteDC, DeleteObject, EndPaint, FillRect, GetMonitorInfoW,
+    GetTextExtentPoint32W, InvalidateRect, MonitorFromPoint, RoundRect, SelectObject, SetBkMode,
+    SetTextColor, TextOutW, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_PITCH,
+    FF_DONTCARE, FW_NORMAL, MONITORINFO, MONITOR_DEFAULTTOPRIMARY, OUT_DEFAULT_PRECIS, PAINTSTRUCT,
+    PS_SOLID, SRCCOPY, TRANSPARENT,
 };
 use windows::Win32::System::DataExchange::{
-    AddClipboardFormatListener, CloseClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
-    RegisterClipboardFormatW,
+    AddClipboardFormatListener, CloseClipboard, GetClipboardData, IsClipboardFormatAvailable,
+    OpenClipboard, RegisterClipboardFormatW,
 };
 use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
 use windows::Win32::System::Ole::CF_UNICODETEXT;
@@ -40,19 +44,23 @@ use windows::Win32::System::Threading::{
     PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::UI::Accessibility::{SetWinEventHook, HWINEVENTHOOK};
-use windows::Win32::UI::HiDpi::{GetDpiForWindow, SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
+use windows::Win32::UI::HiDpi::{
+    GetDpiForWindow, SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW, EnumWindows,
-    FindWindowExW, GetClassNameW, GetCursorPos, GetForegroundWindow, GetMessageW, GetWindow, GetWindowLongW, GetWindowRect,
-    GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible, KillTimer, LoadCursorW, PostMessageW,
-    RegisterClassExW, RegisterWindowMessageW, SetCursor, SetForegroundWindow, SetTimer, SetWindowPos, ShowWindow, TrackPopupMenu,
-    TranslateMessage, CS_DROPSHADOW, EVENT_SYSTEM_FOREGROUND, GWL_EXSTYLE, GW_OWNER, HTCAPTION, HTCLIENT,
-    HWND_MESSAGE, HWND_TOPMOST, IDC_ARROW, IDC_HAND, IDC_SIZEALL, MA_NOACTIVATE, MF_STRING, MSG, SWP_NOACTIVATE,
-    SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, TPM_BOTTOMALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON,
-    WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_APP, WM_CLIPBOARDUPDATE, WM_EXITSIZEMOVE, WM_LBUTTONUP,
-    WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_NCHITTEST, WM_PAINT, WM_RBUTTONUP, WM_SETCURSOR, WM_TIMER, WNDCLASSEXW,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
+    EnumWindows, FindWindowExW, GetClassNameW, GetCursorPos, GetForegroundWindow, GetMessageW,
+    GetWindow, GetWindowLongW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId,
+    IsWindowVisible, KillTimer, LoadCursorW, PostMessageW, RegisterClassExW,
+    RegisterWindowMessageW, SetCursor, SetForegroundWindow, SetTimer, SetWindowPos, ShowWindow,
+    TrackPopupMenu, TranslateMessage, CS_DROPSHADOW, EVENT_SYSTEM_FOREGROUND, GWL_EXSTYLE,
+    GW_OWNER, HTCAPTION, HTCLIENT, HWND_MESSAGE, HWND_TOPMOST, IDC_ARROW, IDC_HAND, IDC_SIZEALL,
+    MA_NOACTIVATE, MF_STRING, MSG, SWP_NOACTIVATE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE,
+    SW_SHOWNOACTIVATE, TPM_BOTTOMALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, WINEVENT_OUTOFCONTEXT,
+    WINEVENT_SKIPOWNPROCESS, WM_APP, WM_CLIPBOARDUPDATE, WM_EXITSIZEMOVE, WM_LBUTTONUP,
+    WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_NCHITTEST, WM_PAINT, WM_RBUTTONUP, WM_SETCURSOR, WM_TIMER,
+    WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 use crate::host::{BarState, Desktop};
@@ -93,12 +101,21 @@ enum Part {
 
 fn visible_parts(mask: u8) -> impl Iterator<Item = Part> {
     // 组件位掩码保持兼容，品牌入口始终排在第一个可见按钮。
-    [(Part::Settings, 8), (Part::Mode, 0), (Part::Punct, 1), (Part::Traditional, 2), (Part::Emoji, 4)]
-        .into_iter().filter_map(move |(part, bit)| (bit == 0 || mask & bit != 0).then_some(part))
+    [
+        (Part::Settings, 8),
+        (Part::Mode, 0),
+        (Part::Punct, 1),
+        (Part::Traditional, 2),
+        (Part::Emoji, 4),
+    ]
+    .into_iter()
+    .filter_map(move |(part, bit)| (bit == 0 || mask & bit != 0).then_some(part))
 }
 
 fn bar_state() -> BarState {
-    shared().and_then(|shared| shared.state.lock().ok().map(|state| state.clone())).unwrap_or_default()
+    shared()
+        .and_then(|shared| shared.state.lock().ok().map(|state| state.clone()))
+        .unwrap_or_default()
 }
 
 struct Shared {
@@ -159,18 +176,30 @@ impl Desktop for DesktopHandle {
 /// 保存设置及更新系统资源后共用同一通知；不切换输入法，不改变前台焦点。
 pub(crate) fn notify_brand_icon_changed() {
     // message-only 窗口不接收 HWND_BROADCAST，需要逐个投递。
-    let message = unsafe { RegisterWindowMessageW(&HSTRING::from(freetype_protocol::BRAND_ICON_CHANGED_MESSAGE)) };
+    let message = unsafe {
+        RegisterWindowMessageW(&HSTRING::from(
+            freetype_protocol::BRAND_ICON_CHANGED_MESSAGE,
+        ))
+    };
     if message == 0 {
         crate::log("无法注册语言栏图标刷新消息");
         return;
     }
     let mut previous = None;
-    while let Ok(hwnd) = unsafe { FindWindowExW(Some(HWND_MESSAGE), previous, PCWSTR::null(), PCWSTR::null()) } {
-        if hwnd.0.is_null() { break; }
+    while let Ok(hwnd) =
+        unsafe { FindWindowExW(Some(HWND_MESSAGE), previous, PCWSTR::null(), PCWSTR::null()) }
+    {
+        if hwnd.0.is_null() {
+            break;
+        }
         previous = Some(hwnd);
         let mut name = [0u16; 128];
         let length = unsafe { GetClassNameW(hwnd, &mut name) } as usize;
-        if !String::from_utf16_lossy(&name[..length]).starts_with(freetype_protocol::TSF_BRAND_MONITOR_CLASS) { continue; }
+        if !String::from_utf16_lossy(&name[..length])
+            .starts_with(freetype_protocol::TSF_BRAND_MONITOR_CLASS)
+        {
+            continue;
+        }
         if let Err(error) = unsafe { PostMessageW(Some(hwnd), message, WPARAM(0), LPARAM(0)) } {
             crate::log(&format!("语言栏图标刷新通知失败：{error}"));
         }
@@ -180,12 +209,27 @@ pub(crate) fn notify_brand_icon_changed() {
 /// 打开设置程序（安装目录里的 FreeType.exe，本程序在它下面的 bin）。
 pub fn open_emoji_panel() {
     // The bar does not activate itself, so Windows opens its picker over the active app.
-    use windows::Win32::UI::Input::KeyboardAndMouse::{SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VIRTUAL_KEY};
-    let sequence = [(0x5b, false), (0xbe, false), (0xbe, true), (0x5b, true)].map(|(vk, up)| INPUT {
-        r#type: INPUT_KEYBOARD,
-        Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: VIRTUAL_KEY(vk), dwFlags: if up { KEYEVENTF_KEYUP } else { Default::default() }, ..Default::default() } },
-    });
-    unsafe { SendInput(&sequence, std::mem::size_of::<INPUT>() as i32); }
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VIRTUAL_KEY,
+    };
+    let sequence =
+        [(0x5b, false), (0xbe, false), (0xbe, true), (0x5b, true)].map(|(vk, up)| INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VIRTUAL_KEY(vk),
+                    dwFlags: if up {
+                        KEYEVENTF_KEYUP
+                    } else {
+                        Default::default()
+                    },
+                    ..Default::default()
+                },
+            },
+        });
+    unsafe {
+        SendInput(&sequence, std::mem::size_of::<INPUT>() as i32);
+    }
 }
 
 pub fn open_settings(exe: &std::path::Path) {
@@ -227,7 +271,8 @@ pub fn start(events: Sender<BarEvent>, clipboard_on: Arc<AtomicBool>) -> Desktop
 fn run() {
     unsafe {
         let _ = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-        let instance = windows::Win32::System::LibraryLoader::GetModuleHandleW(None).unwrap_or_default();
+        let instance =
+            windows::Win32::System::LibraryLoader::GetModuleHandleW(None).unwrap_or_default();
         let bar_class = WNDCLASSEXW {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
             style: CS_DROPSHADOW,
@@ -306,7 +351,12 @@ fn run() {
 
 // —— 剪贴板 ——
 
-unsafe extern "system" fn clip_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+unsafe extern "system" fn clip_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     if msg == WM_CLIPBOARDUPDATE {
         if shared().is_some_and(|s| s.clipboard_on.load(Ordering::Relaxed)) {
             if let Some(text) = unsafe { read_clipboard(hwnd) } {
@@ -412,7 +462,12 @@ fn process_path(pid: u32) -> Option<String> {
         let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
         let mut buf = [0u16; 1024];
         let mut len = buf.len() as u32;
-        let result = QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut len);
+        let result = QueryFullProcessImageNameW(
+            process,
+            PROCESS_NAME_WIN32,
+            PWSTR(buf.as_mut_ptr()),
+            &mut len,
+        );
         let _ = CloseHandle(process);
         result.ok()?;
         Some(String::from_utf16_lossy(&buf[..len as usize]))
@@ -450,7 +505,12 @@ pub fn window_app(hwnd: HWND) -> Option<String> {
         if &path == SETTINGS.get_or_init(|| settings_exe().to_string_lossy().to_lowercase()) {
             return None;
         }
-        Some(path.rsplit(['\\', '/']).next().unwrap_or_default().to_string())
+        Some(
+            path.rsplit(['\\', '/'])
+                .next()
+                .unwrap_or_default()
+                .to_string(),
+        )
     }
 }
 
@@ -463,7 +523,8 @@ pub fn open_apps() -> Vec<AppWindow> {
             let mut title = [0u16; 256];
             let n = GetWindowTextW(hwnd, &mut title).max(0) as usize;
             let mut cloaked = 0u32;
-            let _ = DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &mut cloaked as *mut u32 as *mut _, 4);
+            let _ =
+                DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &mut cloaked as *mut u32 as *mut _, 4);
             let listed = IsWindowVisible(hwnd).as_bool()
                 && n > 0
                 && cloaked == 0
@@ -472,7 +533,10 @@ pub fn open_apps() -> Vec<AppWindow> {
             if listed {
                 if let Some(app) = window_app(hwnd).filter(|app| !app.is_empty()) {
                     if apps.iter().all(|a| a.app != app) {
-                        apps.push(AppWindow { app, title: String::from_utf16_lossy(&title[..n]) });
+                        apps.push(AppWindow {
+                            app,
+                            title: String::from_utf16_lossy(&title[..n]),
+                        });
                     }
                 }
             }
@@ -481,7 +545,10 @@ pub fn open_apps() -> Vec<AppWindow> {
     }
     let mut apps: Vec<AppWindow> = Vec::new();
     unsafe {
-        let _ = EnumWindows(Some(each), LPARAM(&mut apps as *mut Vec<AppWindow> as isize));
+        let _ = EnumWindows(
+            Some(each),
+            LPARAM(&mut apps as *mut Vec<AppWindow> as isize),
+        );
     }
     apps.sort_by(|a, b| a.app.cmp(&b.app));
     apps
@@ -511,7 +578,8 @@ fn light_mode() -> bool {
 }
 
 fn scale_of(hwnd: HWND, state: &BarState) -> f32 {
-    (unsafe { GetDpiForWindow(hwnd).max(96) } as f32 / 96.0) * state.scale.clamp(75, 150) as f32 / 100.0
+    (unsafe { GetDpiForWindow(hwnd).max(96) } as f32 / 96.0) * state.scale.clamp(75, 150) as f32
+        / 100.0
 }
 
 fn size_of_bar(scale: f32, parts: u8) -> (i32, i32) {
@@ -535,10 +603,12 @@ fn part_rect(i: usize, scale: f32) -> RECT {
 fn part_at(hwnd: HWND, x: i32, y: i32) -> Option<Part> {
     let state = bar_state();
     let scale = scale_of(hwnd, &state);
-    visible_parts(state.parts).enumerate().find_map(|(i, part)| {
-        let r = part_rect(i, scale);
-        (x >= r.left && x < r.right && y >= r.top && y < r.bottom).then_some(part)
-    })
+    visible_parts(state.parts)
+        .enumerate()
+        .find_map(|(i, part)| {
+            let r = part_rect(i, scale);
+            (x >= r.left && x < r.right && y >= r.top && y < r.bottom).then_some(part)
+        })
 }
 
 fn label(part: Part, state: &BarState) -> &'static str {
@@ -590,46 +660,106 @@ struct BarIcon {
     icon: windows::Win32::UI::WindowsAndMessaging::HICON,
 }
 impl Drop for BarIcon {
-    fn drop(&mut self) { unsafe { let _ = windows::Win32::UI::WindowsAndMessaging::DestroyIcon(self.icon); } }
+    fn drop(&mut self) {
+        unsafe {
+            let _ = windows::Win32::UI::WindowsAndMessaging::DestroyIcon(self.icon);
+        }
+    }
 }
 thread_local! { static BRAND: std::cell::RefCell<Option<BarIcon>> = const { std::cell::RefCell::new(None) }; }
 
 /// 先按最终物理像素进行面积采样，再生成同尺寸图标，避免系统直接缩小大 PNG 时产生锯齿。
-fn scaled_brand_icon(bytes: &[u8], size: i32) -> windows::core::Result<windows::Win32::UI::WindowsAndMessaging::HICON> {
+fn scaled_brand_icon(
+    bytes: &[u8],
+    size: i32,
+) -> windows::core::Result<windows::Win32::UI::WindowsAndMessaging::HICON> {
+    use windows::Win32::Graphics::Gdi::{
+        CreateBitmap, CreateDIBSection, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
+    };
     use windows::Win32::Graphics::Imaging::*;
-    use windows::Win32::Graphics::Gdi::{CreateBitmap, CreateDIBSection, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS};
-    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED};
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
+        COINIT_APARTMENTTHREADED,
+    };
     use windows::Win32::UI::WindowsAndMessaging::{CreateIconIndirect, ICONINFO};
     struct Apartment;
-    impl Drop for Apartment { fn drop(&mut self) { unsafe { CoUninitialize(); } } }
+    impl Drop for Apartment {
+        fn drop(&mut self) {
+            unsafe {
+                CoUninitialize();
+            }
+        }
+    }
     unsafe {
         CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
         let _apartment = Apartment;
-        let factory: IWICImagingFactory = CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
+        let factory: IWICImagingFactory =
+            CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
         let stream = factory.CreateStream()?;
         stream.InitializeFromMemory(bytes)?;
-        let decoder = factory.CreateDecoderFromStream(&stream, std::ptr::null(), WICDecodeMetadataCacheOnLoad)?;
+        let decoder = factory.CreateDecoderFromStream(
+            &stream,
+            std::ptr::null(),
+            WICDecodeMetadataCacheOnLoad,
+        )?;
         let frame = decoder.GetFrame(0)?;
         // 先预乘透明度再缩放，透明边缘不会混入原图中不可见的颜色。
         let source = factory.CreateFormatConverter()?;
-        source.Initialize(&frame, &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeCustom)?;
+        source.Initialize(
+            &frame,
+            &GUID_WICPixelFormat32bppPBGRA,
+            WICBitmapDitherTypeNone,
+            None,
+            0.0,
+            WICBitmapPaletteTypeCustom,
+        )?;
         let scaler = factory.CreateBitmapScaler()?;
-        scaler.Initialize(&source, size as u32, size as u32, WICBitmapInterpolationModeFant)?;
+        scaler.Initialize(
+            &source,
+            size as u32,
+            size as u32,
+            WICBitmapInterpolationModeFant,
+        )?;
         // 缩放用预乘像素，交给 HICON 前转回独立透明度；否则原生绘制会再次
         // 乘 alpha，让半透明的粉色或白色轮廓变成灰黑边。
         let output = factory.CreateFormatConverter()?;
-        output.Initialize(&scaler, &GUID_WICPixelFormat32bppBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeCustom)?;
-        let info = BITMAPINFO { bmiHeader: BITMAPINFOHEADER { biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth: size, biHeight: -size, biPlanes: 1, biBitCount: 32, biCompression: BI_RGB.0, ..Default::default() }, ..Default::default() };
+        output.Initialize(
+            &scaler,
+            &GUID_WICPixelFormat32bppBGRA,
+            WICBitmapDitherTypeNone,
+            None,
+            0.0,
+            WICBitmapPaletteTypeCustom,
+        )?;
+        let info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: size,
+                biHeight: -size,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         let mut bits = std::ptr::null_mut();
         let bitmap = CreateDIBSection(None, &info, DIB_RGB_COLORS, &mut bits, None, 0)?;
         let result = (|| {
-            let pixels = std::slice::from_raw_parts_mut(bits as *mut u8, (size * size * 4) as usize);
+            let pixels =
+                std::slice::from_raw_parts_mut(bits as *mut u8, (size * size * 4) as usize);
             output.CopyPixels(std::ptr::null(), (size * 4) as u32, pixels)?;
             let mask_bits = vec![0u8; ((size as usize + 15) / 16) * 2 * size as usize];
             let mask = CreateBitmap(size, size, 1, 1, Some(mask_bits.as_ptr().cast()));
-            if mask.0.is_null() { return Err(windows::core::Error::from_thread()); }
-            let icon = CreateIconIndirect(&ICONINFO { fIcon: true.into(), hbmMask: mask, hbmColor: bitmap, ..Default::default() });
+            if mask.0.is_null() {
+                return Err(windows::core::Error::from_thread());
+            }
+            let icon = CreateIconIndirect(&ICONINFO {
+                fIcon: true.into(),
+                hbmMask: mask,
+                hbmColor: bitmap,
+                ..Default::default()
+            });
             let _ = DeleteObject(mask.into());
             icon
         })();
@@ -643,36 +773,86 @@ fn draw_brand(hdc: windows::Win32::Graphics::Gdi::HDC, area: RECT, state: &BarSt
     use windows::Win32::UI::WindowsAndMessaging::{DrawIconEx, DI_NORMAL};
     BRAND.with(|cache| {
         let mut cache = cache.borrow_mut();
-        if cache.as_ref().is_none_or(|c| c.appearance != state.brand_icon || c.custom != state.custom_brand_icon || c.size != size) {
+        if cache.as_ref().is_none_or(|c| {
+            c.appearance != state.brand_icon
+                || c.custom != state.custom_brand_icon
+                || c.size != size
+        }) {
             let custom;
             let bytes: &[u8] = match state.brand_icon.as_str() {
                 "white" => include_bytes!("../../assets/freetype-white-logo.png"),
                 "custom" => {
-                    use windows::Win32::Security::Cryptography::{CryptStringToBinaryW, CRYPT_STRING_BASE64};
+                    use windows::Win32::Security::Cryptography::{
+                        CryptStringToBinaryW, CRYPT_STRING_BASE64,
+                    };
                     let encoded = wide(&state.custom_brand_icon);
                     let mut length = 0;
-                    let decoded = (|| -> windows::core::Result<Vec<u8>> { unsafe {
-                        CryptStringToBinaryW(&encoded, CRYPT_STRING_BASE64, None, &mut length, None, None)?;
-                        let mut bytes = vec![0; length as usize];
-                        CryptStringToBinaryW(&encoded, CRYPT_STRING_BASE64, Some(bytes.as_mut_ptr()), &mut length, None, None)?;
-                        bytes.truncate(length as usize);
-                        Ok(bytes)
-                    } })();
-                    match decoded { Ok(bytes) => { custom = bytes; &custom }, Err(error) => {
-                        crate::log(&format!("状态栏品牌图标读取失败：{error}")); return;
-                    } }
+                    let decoded = (|| -> windows::core::Result<Vec<u8>> {
+                        unsafe {
+                            CryptStringToBinaryW(
+                                &encoded,
+                                CRYPT_STRING_BASE64,
+                                None,
+                                &mut length,
+                                None,
+                                None,
+                            )?;
+                            let mut bytes = vec![0; length as usize];
+                            CryptStringToBinaryW(
+                                &encoded,
+                                CRYPT_STRING_BASE64,
+                                Some(bytes.as_mut_ptr()),
+                                &mut length,
+                                None,
+                                None,
+                            )?;
+                            bytes.truncate(length as usize);
+                            Ok(bytes)
+                        }
+                    })();
+                    match decoded {
+                        Ok(bytes) => {
+                            custom = bytes;
+                            &custom
+                        }
+                        Err(error) => {
+                            crate::log(&format!("状态栏品牌图标读取失败：{error}"));
+                            return;
+                        }
+                    }
                 }
                 _ => include_bytes!("../../assets/freetype-logo.png"),
             };
             match scaled_brand_icon(bytes, size) {
-                Ok(icon) => *cache = Some(BarIcon { appearance: state.brand_icon.clone(), custom: state.custom_brand_icon.clone(), size, icon }),
-                Err(error) => { crate::log(&format!("状态栏品牌图标创建失败：{error}")); return; }
+                Ok(icon) => {
+                    *cache = Some(BarIcon {
+                        appearance: state.brand_icon.clone(),
+                        custom: state.custom_brand_icon.clone(),
+                        size,
+                        icon,
+                    })
+                }
+                Err(error) => {
+                    crate::log(&format!("状态栏品牌图标创建失败：{error}"));
+                    return;
+                }
             }
         }
-        if let Some(icon) = cache.as_ref() { unsafe {
-            let _ = DrawIconEx(hdc, (area.left + area.right - size) / 2, (area.top + area.bottom - size) / 2,
-                icon.icon, size, size, 0, None, DI_NORMAL);
-        } }
+        if let Some(icon) = cache.as_ref() {
+            unsafe {
+                let _ = DrawIconEx(
+                    hdc,
+                    (area.left + area.right - size) / 2,
+                    (area.top + area.bottom - size) / 2,
+                    icon.icon,
+                    size,
+                    size,
+                    0,
+                    None,
+                    DI_NORMAL,
+                );
+            }
+        }
     });
 }
 
@@ -686,9 +866,23 @@ fn paint(hwnd: HWND, print_dc: Option<windows::Win32::Graphics::Gdi::HDC>) {
     let (w, h) = size_of_bar(scale, state.parts);
     let light = light_mode();
     let (background, border, text, muted, hover, accent) = if light {
-        (rgb(0xfa, 0xf8, 0xf9), rgb(0xd5, 0xcc, 0xd0), rgb(0x35, 0x2e, 0x32), rgb(0x87, 0x7b, 0x82), rgb(0xee, 0xe3, 0xe8), rgb(0xa4, 0x45, 0x70))
+        (
+            rgb(0xfa, 0xf8, 0xf9),
+            rgb(0xd5, 0xcc, 0xd0),
+            rgb(0x35, 0x2e, 0x32),
+            rgb(0x87, 0x7b, 0x82),
+            rgb(0xee, 0xe3, 0xe8),
+            rgb(0xa4, 0x45, 0x70),
+        )
     } else {
-        (rgb(0x28, 0x25, 0x29), rgb(0x53, 0x49, 0x50), rgb(0xed, 0xe7, 0xeb), rgb(0xa6, 0x98, 0xa1), rgb(0x42, 0x35, 0x3e), rgb(0xe4, 0xa1, 0xbf))
+        (
+            rgb(0x28, 0x25, 0x29),
+            rgb(0x53, 0x49, 0x50),
+            rgb(0xed, 0xe7, 0xeb),
+            rgb(0xa6, 0x98, 0xa1),
+            rgb(0x42, 0x35, 0x3e),
+            rgb(0xe4, 0xa1, 0xbf),
+        )
     };
     unsafe {
         let mut ps = PAINTSTRUCT::default();
@@ -697,11 +891,22 @@ fn paint(hwnd: HWND, print_dc: Option<windows::Win32::Graphics::Gdi::HDC>) {
         let bitmap = CreateCompatibleBitmap(target, w, h);
         let old_bitmap = SelectObject(hdc, bitmap.into());
         let brush = CreateSolidBrush(background);
-        FillRect(hdc, &RECT { left: 0, top: 0, right: w, bottom: h }, brush);
+        FillRect(
+            hdc,
+            &RECT {
+                left: 0,
+                top: 0,
+                right: w,
+                bottom: h,
+            },
+            brush,
+        );
         let _ = DeleteObject(brush.into());
         let pen = CreatePen(PS_SOLID, 1, border);
         let old_pen = SelectObject(hdc, pen.into());
-        let hollow = windows::Win32::Graphics::Gdi::GetStockObject(windows::Win32::Graphics::Gdi::NULL_BRUSH);
+        let hollow = windows::Win32::Graphics::Gdi::GetStockObject(
+            windows::Win32::Graphics::Gdi::NULL_BRUSH,
+        );
         let old_brush = SelectObject(hdc, hollow);
         let _ = windows::Win32::Graphics::Gdi::Rectangle(hdc, 0, 0, w, h);
         SelectObject(hdc, old_brush);
@@ -715,7 +920,16 @@ fn paint(hwnd: HWND, print_dc: Option<windows::Win32::Graphics::Gdi::HDC>) {
             for col in 0..2 {
                 let x = w - (GRIP * scale) as i32 + col * size * 2;
                 let y = h / 2 - size * 3 + row * size * 2 + size / 2;
-                FillRect(hdc, &RECT { left: x, top: y, right: x + size, bottom: y + size }, dot);
+                FillRect(
+                    hdc,
+                    &RECT {
+                        left: x,
+                        top: y,
+                        right: x + size,
+                        bottom: y + size,
+                    },
+                    dot,
+                );
             }
         }
         let _ = DeleteObject(dot.into());
@@ -753,7 +967,12 @@ fn paint(hwnd: HWND, print_dc: Option<windows::Win32::Graphics::Gdi::HDC>) {
                 let _ = DeleteObject(p.into());
             }
             if part == Part::Settings {
-                draw_brand(hdc, r, &state, ((state.icon_size.clamp(12, 23) + 5) as f32 * scale).round() as i32);
+                draw_brand(
+                    hdc,
+                    r,
+                    &state,
+                    ((state.icon_size.clamp(12, 23) + 5) as f32 * scale).round() as i32,
+                );
                 continue;
             }
             let label = wide(label(part, &state));
@@ -774,7 +993,9 @@ fn paint(hwnd: HWND, print_dc: Option<windows::Win32::Graphics::Gdi::HDC>) {
         SelectObject(hdc, old_bitmap);
         let _ = DeleteObject(bitmap.into());
         let _ = DeleteDC(hdc);
-        if print_dc.is_none() { let _ = EndPaint(hwnd, &ps); }
+        if print_dc.is_none() {
+            let _ = EndPaint(hwnd, &ps);
+        }
     }
 }
 
@@ -798,11 +1019,22 @@ fn initial_position(hwnd: HWND, state: &BarState) -> (i32, i32) {
         let work = if GetMonitorInfoW(monitor, &mut info).as_bool() {
             info.rcWork
         } else {
-            RECT { left: 0, top: 0, right: 1280, bottom: 720 }
+            RECT {
+                left: 0,
+                top: 0,
+                right: 1280,
+                bottom: 720,
+            }
         };
-        let (x, y) = saved.unwrap_or((work.right - w - (24.0 * scale) as i32, work.bottom - h - (16.0 * scale) as i32));
+        let (x, y) = saved.unwrap_or((
+            work.right - w - (24.0 * scale) as i32,
+            work.bottom - h - (16.0 * scale) as i32,
+        ));
         // 显示器拔掉了、分辨率变了：拉回屏幕里
-        (x.clamp(work.left, work.right - w), y.clamp(work.top, work.bottom - h))
+        (
+            x.clamp(work.left, work.right - w),
+            y.clamp(work.top, work.bottom - h),
+        )
     }
 }
 
@@ -814,8 +1046,16 @@ fn save_position(hwnd: HWND) {
         }
     }
     if let Some(shared) = shared() {
-        let _ = std::fs::create_dir_all(shared.position_file.parent().unwrap_or(std::path::Path::new(".")));
-        let _ = std::fs::write(&shared.position_file, format!("{},{}\n", rect.left, rect.top));
+        let _ = std::fs::create_dir_all(
+            shared
+                .position_file
+                .parent()
+                .unwrap_or(std::path::Path::new(".")),
+        );
+        let _ = std::fs::write(
+            &shared.position_file,
+            format!("{},{}\n", rect.left, rect.top),
+        );
     }
 }
 
@@ -831,8 +1071,15 @@ fn apply_state(hwnd: HWND) {
         }
         let scale = scale_of(hwnd, &state);
         let (w, h) = size_of_bar(scale, state.parts);
-        let _ = windows::Win32::UI::WindowsAndMessaging::SetClassLongW(hwnd,
-            windows::Win32::UI::WindowsAndMessaging::GCL_STYLE, if state.shadow { CS_DROPSHADOW.0 as i32 } else { 0 });
+        let _ = windows::Win32::UI::WindowsAndMessaging::SetClassLongW(
+            hwnd,
+            windows::Win32::UI::WindowsAndMessaging::GCL_STYLE,
+            if state.shadow {
+                CS_DROPSHADOW.0 as i32
+            } else {
+                0
+            },
+        );
         let mut rect = RECT::default();
         let _ = GetWindowRect(hwnd, &mut rect);
         let first = rect.right - rect.left <= 1;
@@ -840,13 +1087,37 @@ fn apply_state(hwnd: HWND) {
             let (x, y) = initial_position(hwnd, &state);
             let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), x, y, w, h, SWP_NOACTIVATE);
         } else {
-            let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), rect.left, rect.top, w, h, SWP_NOACTIVATE);
+            let _ = SetWindowPos(
+                hwnd,
+                Some(HWND_TOPMOST),
+                rect.left,
+                rect.top,
+                w,
+                h,
+                SWP_NOACTIVATE,
+            );
         }
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-        let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOACTIVATE | SWP_NOSIZE | windows::Win32::UI::WindowsAndMessaging::SWP_NOMOVE | SWP_SHOWWINDOW);
+        let _ = SetWindowPos(
+            hwnd,
+            Some(HWND_TOPMOST),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOACTIVATE
+                | SWP_NOSIZE
+                | windows::Win32::UI::WindowsAndMessaging::SWP_NOMOVE
+                | SWP_SHOWWINDOW,
+        );
         let _ = InvalidateRect(Some(hwnd), None, false);
         if state.autohide {
-            SetTimer(Some(hwnd), HIDE_TIMER, state.hide_seconds.clamp(1, 60) * 1000, None);
+            SetTimer(
+                Some(hwnd),
+                HIDE_TIMER,
+                state.hide_seconds.clamp(1, 60) * 1000,
+                None,
+            );
         } else {
             let _ = KillTimer(Some(hwnd), HIDE_TIMER);
         }
@@ -870,7 +1141,15 @@ fn context_menu(hwnd: HWND) {
         let _ = GetCursorPos(&mut pt);
         // 菜单要求窗口在前台，否则点别处不会收起
         let _ = SetForegroundWindow(hwnd);
-        let cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_BOTTOMALIGN, pt.x, pt.y, None, hwnd, None);
+        let cmd = TrackPopupMenu(
+            menu,
+            TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_BOTTOMALIGN,
+            pt.x,
+            pt.y,
+            None,
+            hwnd,
+            None,
+        );
         let _ = DestroyMenu(menu);
         match cmd.0 {
             1 => send(BarEvent::OpenSettings),
@@ -880,7 +1159,12 @@ fn context_menu(hwnd: HWND) {
     }
 }
 
-unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+unsafe extern "system" fn bar_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     let x = (lparam.0 & 0xffff) as i16 as i32;
     let y = ((lparam.0 >> 16) & 0xffff) as i16 as i32;
     match msg {
@@ -894,7 +1178,10 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             LRESULT(0)
         }
         windows::Win32::UI::WindowsAndMessaging::WM_PRINTCLIENT => {
-            paint(hwnd, Some(windows::Win32::Graphics::Gdi::HDC(wparam.0 as *mut _)));
+            paint(
+                hwnd,
+                Some(windows::Win32::Graphics::Gdi::HDC(wparam.0 as *mut _)),
+            );
             LRESULT(0)
         }
         WM_NCHITTEST => {
@@ -960,7 +1247,14 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 }
                 if let Ok(state) = shared.state.lock() {
                     if state.autohide {
-                        unsafe { SetTimer(Some(hwnd), HIDE_TIMER, state.hide_seconds.clamp(1, 60) * 1000, None); }
+                        unsafe {
+                            SetTimer(
+                                Some(hwnd),
+                                HIDE_TIMER,
+                                state.hide_seconds.clamp(1, 60) * 1000,
+                                None,
+                            );
+                        }
                     }
                 }
             }
@@ -1002,7 +1296,10 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
 /// 鼠标停在按钮上时的说明（用窗口标题给读屏软件；不另开提示窗）。
 fn set_tooltip(hwnd: HWND, text: &str) {
     unsafe {
-        let _ = windows::Win32::UI::WindowsAndMessaging::SetWindowTextW(hwnd, &HSTRING::from(format!("FreeType {text}")));
+        let _ = windows::Win32::UI::WindowsAndMessaging::SetWindowTextW(
+            hwnd,
+            &HSTRING::from(format!("FreeType {text}")),
+        );
     }
 }
 

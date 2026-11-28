@@ -212,7 +212,10 @@ impl LanguageModel for BigramLm {
         for (word, count) in row {
             let unigram = self.unigram.get(word).copied().unwrap_or(0.0);
             if *count > 0.0 && unigram > 0.0 {
-                visit(word, (count / prev_count).ln() - (unigram / self.total).ln());
+                visit(
+                    word,
+                    (count / prev_count).ln() - (unigram / self.total).ln(),
+                );
             }
         }
     }

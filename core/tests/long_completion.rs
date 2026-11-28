@@ -12,8 +12,20 @@ fn exact_homophones_stay_ahead_of_unlearned_extensions() {
     let baseline = engine(false).input("zhiding");
     let e = engine(true);
     let result = e.input("zhiding");
-    let exact: Vec<_> = baseline.iter().filter(|c| c.pinyin == "zhi ding" && c.consumed == 7).take(4).map(|c| c.text.as_str()).collect();
-    assert_eq!(result.iter().take(exact.len()).map(|c| c.text.as_str()).collect::<Vec<_>>(), exact);
+    let exact: Vec<_> = baseline
+        .iter()
+        .filter(|c| c.pinyin == "zhi ding" && c.consumed == 7)
+        .take(4)
+        .map(|c| c.text.as_str())
+        .collect();
+    assert_eq!(
+        result
+            .iter()
+            .take(exact.len())
+            .map(|c| c.text.as_str())
+            .collect::<Vec<_>>(),
+        exact
+    );
     assert!(result.iter().any(|c| c.long_completion), "补全仍应可选");
 }
 use std::sync::Arc;
@@ -25,20 +37,36 @@ use wowtype_core::{BigramLm, Converter, Engine, Lexicon, MemoryLexicon};
 fn completion_model_selects_a_real_extension_instead_of_a_frequent_fragment() {
     struct Vocabulary;
     impl wowtype_core::LanguageModel for Vocabulary {
-        fn score(&self, _: Option<&str>, _: &str) -> f64 { -1.0 }
-        fn knows_word(&self, word: &str) -> Option<bool> { Some(matches!(word, "人工智能" | "人工智能技术")) }
+        fn score(&self, _: Option<&str>, _: &str) -> f64 {
+            -1.0
+        }
+        fn knows_word(&self, word: &str) -> Option<bool> {
+            Some(matches!(word, "人工智能" | "人工智能技术"))
+        }
     }
     let words = "ren gong zhi neng\t人工智能\t100000\nren gong zhi neng neng\t人工智能能\t90000\nren gong zhi neng ji shu\t人工智能技术\t1000\n";
-    let mut engine = Engine::new(Arc::new(MemoryLexicon::from_tsv_str(words).unwrap()), Arc::new(Vocabulary));
+    let mut engine = Engine::new(
+        Arc::new(MemoryLexicon::from_tsv_str(words).unwrap()),
+        Arc::new(Vocabulary),
+    );
     engine.set_long_word_completion(true);
     let result = engine.input("rengongzhineng");
     assert_eq!(result[0].text, "人工智能");
-    assert_eq!(result.iter().find(|c| c.long_completion).unwrap().text, "人工智能技术");
+    assert_eq!(
+        result.iter().find(|c| c.long_completion).unwrap().text,
+        "人工智能技术"
+    );
     // A sole dictionary extension is still useful for names/poetry absent from the model.
     let words = "hai nei cun zhi\t海内存知\t1000\nhai nei cun zhi ji\t海内存知己\t10\n";
-    let mut engine = Engine::new(Arc::new(MemoryLexicon::from_tsv_str(words).unwrap()), Arc::new(Vocabulary));
+    let mut engine = Engine::new(
+        Arc::new(MemoryLexicon::from_tsv_str(words).unwrap()),
+        Arc::new(Vocabulary),
+    );
     engine.set_long_word_completion(true);
-    assert!(engine.input("haineicunzhi").iter().any(|c| c.long_completion && c.text == "海内存知己"));
+    assert!(engine
+        .input("haineicunzhi")
+        .iter()
+        .any(|c| c.long_completion && c.text == "海内存知己"));
 }
 
 const WORDS: &str = "zhong hua\t中华\t4000\n\
@@ -98,13 +126,7 @@ fn long_completion_commits_once_in_full_and_shuangpin_sessions() {
 #[test]
 fn long_completion_requires_complete_syllables_and_can_be_disabled() {
     let mut engine = engine();
-    for input in [
-        "zhong",
-        "zhrm",
-        "zhonghuarenmi",
-        "zhonghuarenmni",
-        "hello",
-    ] {
+    for input in ["zhong", "zhrm", "zhonghuarenmi", "zhonghuarenmni", "hello"] {
         assert!(
             !engine.input(input).iter().any(|c| c.long_completion),
             "{input}"
@@ -263,7 +285,9 @@ fn long_completion_compiled_and_cached_dictionaries_match_and_filter_by_word() {
     for lexicon in [&memory as &dyn Lexicon, &cached, &mapped] {
         let multiple = lexicon.long_completions(&prefix, "中华人民", 16);
         assert!(multiple.iter().any(|entry| entry.word == "中华人民共和国"));
-        assert!(multiple.iter().any(|entry| entry.word == "中华人民共和国宪法"));
+        assert!(multiple
+            .iter()
+            .any(|entry| entry.word == "中华人民共和国宪法"));
         assert!(multiple.len() <= 16);
         assert_eq!(
             lexicon

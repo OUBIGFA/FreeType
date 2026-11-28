@@ -366,7 +366,7 @@ func (s *settings) syncRecoveryActions(c *ui.Context, area, message string, busy
 	default:
 		guidance = "同步未能完成；可先重试一次，仍失败时可重建本机同步记录或以本机数据重置云端"
 	}
-	ui.Column(c).Key("sync-recovery-" + area).FillWidth().Padding(10, 12).Radius(controlRadius).
+	ui.Column(c).Key("sync-recovery-"+area).FillWidth().Padding(10, 12).Radius(controlRadius).
 		Background(p.card).Border(1, p.subBorder).Gap(8).Children(func() {
 		ui.Text(c, guidance).FontSize(textSize(c, 12.5)).TextColor(p.muted).LineHeight(1.45).Wrap()
 		ui.Row(c).FillWidth().Wrap().GapX(8).GapY(8).AlignItems(ui.Center).Children(func() {

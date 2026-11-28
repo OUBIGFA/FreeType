@@ -608,8 +608,12 @@ pub fn decode_fuzzy(scheme: Scheme, input: &str, groups: u32) -> Vec<Decoded> {
             if let Some(initial) = trailing_initial(scheme, a) {
                 for &(final_, key) in scheme.layout().finals {
                     if key == b {
-                        if let Some(alias) = crate::syllable::fuzzy_spelling(&format!("{initial}{final_}"), groups) {
-                            if !options.contains(&alias.text) { options.push(alias.text); }
+                        if let Some(alias) =
+                            crate::syllable::fuzzy_spelling(&format!("{initial}{final_}"), groups)
+                        {
+                            if !options.contains(&alias.text) {
+                                options.push(alias.text);
+                            }
                         }
                     }
                 }

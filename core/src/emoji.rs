@@ -287,7 +287,8 @@ pub fn panel_search(engine: Option<&crate::Engine>, query: &str, limit: usize) -
     let mut words: Vec<String> = Vec::new();
     if let Some(engine) = engine {
         if query.bytes().all(|b| b.is_ascii_alphabetic() || b == b'\'') {
-            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| engine.try_input(query)));
+            let outcome =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| engine.try_input(query)));
             if let Ok(Ok(candidates)) = outcome {
                 words = candidates
                     .into_iter()
@@ -310,7 +311,8 @@ pub fn panel_search(engine: Option<&crate::Engine>, query: &str, limit: usize) -
         }
     };
     let symbols = crate::symbols::search(query, limit);
-    let (named, prefixed): (Vec<_>, Vec<_>) = symbols.into_iter().partition(|s| s.names.contains(&query));
+    let (named, prefixed): (Vec<_>, Vec<_>) =
+        symbols.into_iter().partition(|s| s.names.contains(&query));
     // 符号名完全对上的、关键词完全对上的 emoji、以名字开头的符号、英文、关键词里包含这个词的
     add(named.into_iter().map(|s| s.text).collect(), &mut out);
     add(search_words_exact(&refs, limit), &mut out);

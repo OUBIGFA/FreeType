@@ -73,7 +73,9 @@ impl Tasks {
         });
         if let Err(mpsc::SendError(queued)) = queue.send(Queued { job, reply }) {
             finish(&self.pending);
-            if let Some(reply) = queued.reply { let _ = reply.send(Response::error("后台任务线程已停止")); }
+            if let Some(reply) = queued.reply {
+                let _ = reply.send(Response::error("后台任务线程已停止"));
+            }
         }
     }
 
@@ -82,7 +84,12 @@ impl Tasks {
     /// 而后台线程正等着这次应用，再等就会互相卡住。
     pub fn wait_idle(&self) {
         let state = self.pending.state.lock().unwrap();
-        drop(self.pending.idle.wait_while(state, |(count, applying)| !*applying && *count > 0).unwrap());
+        drop(
+            self.pending
+                .idle
+                .wait_while(state, |(count, applying)| !*applying && *count > 0)
+                .unwrap(),
+        );
     }
 }
 
@@ -90,7 +97,9 @@ impl Drop for Tasks {
     fn drop(&mut self) {
         // 关闭队列后后台线程做完已排队的工作再退出；停机时主循环先丢弃未处理的 Apply，不会互等。
         self.queue.take();
-        if let Some(worker) = self.worker.take() { let _ = worker.join(); }
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
     }
 }
 
@@ -115,16 +124,26 @@ fn run(queue: Receiver<Queued>, pending: &Pending, apply: Option<Sender<Apply>>)
             Step::Apply(work) => {
                 let (done, wait) = mpsc::channel();
                 set_applying(pending, true);
-                let sent = apply.as_ref().is_some_and(|apply| apply.send(Box::new(move |host: &mut Host| {
-                    let _ = done.send(work(host));
-                })).is_ok());
+                let sent = apply.as_ref().is_some_and(|apply| {
+                    apply
+                        .send(Box::new(move |host: &mut Host| {
+                            let _ = done.send(work(host));
+                        }))
+                        .is_ok()
+                });
                 // 主循环退出时丢弃闭包，接收端随即返回错误，不会一直等。
-                let response = if sent { wait.recv().ok() } else { Some(Response::error("服务正在退出，后台结果没有应用")) };
+                let response = if sent {
+                    wait.recv().ok()
+                } else {
+                    Some(Response::error("服务正在退出，后台结果没有应用"))
+                };
                 set_applying(pending, false);
                 response
             }
         };
-        if let (Some(reply), Some(response)) = (reply, response) { let _ = reply.send(response); }
+        if let (Some(reply), Some(response)) = (reply, response) {
+            let _ = reply.send(response);
+        }
         finish(pending);
     }
 }

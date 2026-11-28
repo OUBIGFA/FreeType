@@ -8,13 +8,14 @@ use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, HINSTANCE,
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 use windows::Win32::System::LibraryLoader::GetModuleFileNameW;
 use windows::Win32::System::Registry::{
-    RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegSetValueExW, HKEY, HKEY_LOCAL_MACHINE, KEY_WRITE,
-    REG_OPTION_NON_VOLATILE, REG_SZ,
+    RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegSetValueExW, HKEY, HKEY_LOCAL_MACHINE,
+    KEY_WRITE, REG_OPTION_NON_VOLATILE, REG_SZ,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::HKL;
 use windows::Win32::UI::TextServices::{
-    CLSID_TF_CategoryMgr, CLSID_TF_InputProcessorProfiles, ITfCategoryMgr, ITfInputProcessorProfileMgr,
-    GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT, GUID_TFCAT_TIPCAP_SYSTRAYSUPPORT, GUID_TFCAT_TIP_KEYBOARD,
+    CLSID_TF_CategoryMgr, CLSID_TF_InputProcessorProfiles, ITfCategoryMgr,
+    ITfInputProcessorProfileMgr, GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT,
+    GUID_TFCAT_TIPCAP_SYSTRAYSUPPORT, GUID_TFCAT_TIP_KEYBOARD,
 };
 
 use freetype_protocol::{DISPLAY_NAME, LANGID_ZH_CN, PROFILE_GUID, TEXT_SERVICE_CLSID};
@@ -86,7 +87,8 @@ fn register_com(dll: &str) -> Result<()> {
     }
     result?;
     let key = create_key(&format!(r"{}\InprocServer32", clsid_key()))?;
-    let result = set_string(key, None, dll).and_then(|_| set_string(key, Some("ThreadingModel"), "Apartment"));
+    let result = set_string(key, None, dll)
+        .and_then(|_| set_string(key, Some("ThreadingModel"), "Apartment"));
     unsafe {
         let _ = RegCloseKey(key);
     }
@@ -107,8 +109,20 @@ pub fn register(instance: HINSTANCE) -> Result<()> {
             CoCreateInstance(&CLSID_TF_InputProcessorProfiles, None, CLSCTX_INPROC_SERVER)?;
         let name: Vec<u16> = DISPLAY_NAME.encode_utf16().collect();
         let icon: Vec<u16> = icon.encode_utf16().collect();
-        profiles.RegisterProfile(&clsid, LANGID_ZH_CN, &profile, &name, &icon, 0, HKL::default(), 0, true, 0)?;
-        let categories: ITfCategoryMgr = CoCreateInstance(&CLSID_TF_CategoryMgr, None, CLSCTX_INPROC_SERVER)?;
+        profiles.RegisterProfile(
+            &clsid,
+            LANGID_ZH_CN,
+            &profile,
+            &name,
+            &icon,
+            0,
+            HKL::default(),
+            0,
+            true,
+            0,
+        )?;
+        let categories: ITfCategoryMgr =
+            CoCreateInstance(&CLSID_TF_CategoryMgr, None, CLSCTX_INPROC_SERVER)?;
         for category in CATEGORIES {
             categories.RegisterCategory(&clsid, &category, &clsid)?;
         }

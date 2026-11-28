@@ -28,33 +28,34 @@ use unicode_segmentation::UnicodeSegmentation;
 use windows::core::{implement, IUnknownImpl, Interface, Ref, Result, BOOL, GUID};
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::MapWindowPoints;
+use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::System::SystemInformation::GetTickCount64;
 use windows::Win32::System::Threading::GetCurrentThreadId;
-use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::System::Variant::{VariantClear, VARIANT, VT_I4, VT_UNKNOWN};
 use windows::Win32::UI::Input::Ime::{IMR_DOCUMENTFEED, RECONVERTSTRING};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, GetFocus, GetKeyState, GetKeyboardState, SendInput, ToUnicode, INPUT, INPUT_0, INPUT_KEYBOARD,
-    KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, VK_LEFT,
+    GetAsyncKeyState, GetFocus, GetKeyState, GetKeyboardState, SendInput, ToUnicode, INPUT,
+    INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, VK_LEFT,
 };
 use windows::Win32::UI::TextServices::{
-    ITfCompartmentEventSink, ITfCompartmentEventSink_Impl, ITfCompartmentMgr, ITfComposition, ITfCompositionSink, ITfCompositionSink_Impl, ITfContext,
-    ITfContextComposition, ITfDocumentMgr, ITfEditSession, ITfEditSession_Impl, ITfInsertAtSelection,
+    ITfCompartmentEventSink, ITfCompartmentEventSink_Impl, ITfCompartmentMgr, ITfComposition,
+    ITfCompositionSink, ITfCompositionSink_Impl, ITfContext, ITfContextComposition, ITfContextView,
+    ITfDocumentMgr, ITfEditSession, ITfEditSession_Impl, ITfInputScope, ITfInsertAtSelection,
     ITfKeyEventSink, ITfKeyEventSink_Impl, ITfKeystrokeMgr, ITfLangBarItemMgr, ITfRange, ITfSource,
-    ITfTextInputProcessorEx, ITfTextInputProcessorEx_Impl, ITfTextInputProcessor_Impl, ITfTextLayoutSink,
-    ITfTextLayoutSink_Impl, ITfThreadMgr, ITfThreadMgrEventSink, ITfThreadMgrEventSink_Impl, ITfContextView,
-    TfLayoutCode, GUID_COMPARTMENT_EMPTYCONTEXT, GUID_COMPARTMENT_KEYBOARD_DISABLED,
-    GUID_COMPARTMENT_TRANSITORYEXTENSION_PARENT, TF_SS_TRANSITORY,
-    GUID_PROP_INPUTSCOPE, ITfInputScope, IS_PASSWORD, IS_NUMERIC_PASSWORD, IS_NUMERIC_PIN,
-    IS_ALPHANUMERIC_PIN, IS_ALPHANUMERIC_PIN_SET,
-    GUID_COMPARTMENT_KEYBOARD_OPENCLOSE, INSERT_TEXT_AT_SELECTION_FLAGS, TF_AE_NONE, TF_ANCHOR_END,
-    TF_ANCHOR_START, TF_DEFAULT_SELECTION, TF_ES_ASYNCDONTCARE, TF_ES_READ, TF_ES_READWRITE, TF_ES_SYNC,
-    TF_GRAVITY_FORWARD, TF_IAS_QUERYONLY, TF_SELECTION, TF_SELECTIONSTYLE,
+    ITfTextInputProcessorEx, ITfTextInputProcessorEx_Impl, ITfTextInputProcessor_Impl,
+    ITfTextLayoutSink, ITfTextLayoutSink_Impl, ITfThreadMgr, ITfThreadMgrEventSink,
+    ITfThreadMgrEventSink_Impl, TfLayoutCode, GUID_COMPARTMENT_EMPTYCONTEXT,
+    GUID_COMPARTMENT_KEYBOARD_DISABLED, GUID_COMPARTMENT_KEYBOARD_OPENCLOSE,
+    GUID_COMPARTMENT_TRANSITORYEXTENSION_PARENT, GUID_PROP_INPUTSCOPE,
+    INSERT_TEXT_AT_SELECTION_FLAGS, IS_ALPHANUMERIC_PIN, IS_ALPHANUMERIC_PIN_SET,
+    IS_NUMERIC_PASSWORD, IS_NUMERIC_PIN, IS_PASSWORD, TF_AE_NONE, TF_ANCHOR_END, TF_ANCHOR_START,
+    TF_DEFAULT_SELECTION, TF_ES_ASYNCDONTCARE, TF_ES_READ, TF_ES_READWRITE, TF_ES_SYNC,
+    TF_GRAVITY_FORWARD, TF_IAS_QUERYONLY, TF_SELECTION, TF_SELECTIONSTYLE, TF_SS_TRANSITORY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, DestroyMenu, GetGUIThreadInfo, GetMessageExtraInfo, GetMessageTime, GetWindowRect,
-    EndMenu, PostMessageW, SendMessageW, TrackPopupMenu, GUITHREADINFO, MF_SEPARATOR, MF_STRING, TPM_NONOTIFY, TPM_RETURNCMD,
-    TPM_RIGHTBUTTON, WM_IME_REQUEST,
+    AppendMenuW, CreatePopupMenu, DestroyMenu, EndMenu, GetGUIThreadInfo, GetMessageExtraInfo,
+    GetMessageTime, GetWindowRect, PostMessageW, SendMessageW, TrackPopupMenu, GUITHREADINFO,
+    MF_SEPARATOR, MF_STRING, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_IME_REQUEST,
 };
 
 use crate::client::Client;
@@ -63,10 +64,10 @@ use crate::langbar::{self, ButtonClick, ButtonHandle};
 use crate::ui::{self, CandidateWindow, Click};
 use crate::DllRef;
 
-#[path = "pair.rs"]
-mod pair;
 #[path = "focus_notice.rs"]
 mod focus_notice;
+#[path = "pair.rs"]
+mod pair;
 
 /// 光标前读多少个字。
 const BEFORE_CHARS: i32 = 20;
@@ -186,7 +187,10 @@ impl TextService {
     /// 组字、候选选择和补全光标移动全部结束后才允许交接实现。
     pub(crate) fn can_reload(&self) -> bool {
         let s = self.state.borrow();
-        s.composition.is_none() && !s.busy && s.caret_move.is_none() && s.space.is_none()
+        s.composition.is_none()
+            && !s.busy
+            && s.caret_move.is_none()
+            && s.space.is_none()
             && s.language_menu == MenuState::Closed
     }
 
@@ -294,7 +298,12 @@ fn request_edit(
     unsafe { context.RequestEditSession(client_id, &session, flags)?.ok() }
 }
 
-fn edit(context: &ITfContext, client_id: u32, sync: bool, action: impl FnOnce(u32) -> Result<()> + 'static) {
+fn edit(
+    context: &ITfContext,
+    client_id: u32,
+    sync: bool,
+    action: impl FnOnce(u32) -> Result<()> + 'static,
+) {
     let flags = if sync {
         TF_ES_SYNC | TF_ES_READWRITE
     } else {
@@ -348,17 +357,22 @@ fn before_text(context: &ITfContext, ec: u32) -> Option<String> {
         let range = selection_range(context, ec)?;
         range.Collapse(ec, TF_ANCHOR_START).ok()?;
         let mut moved = 0;
-        range.ShiftStart(ec, -BEFORE_CHARS, &mut moved, std::ptr::null()).ok()?;
+        range
+            .ShiftStart(ec, -BEFORE_CHARS, &mut moved, std::ptr::null())
+            .ok()?;
         let mut buf = [0u16; BEFORE_CHARS as usize * 2];
         let mut len = 0u32;
         range.GetText(ec, 0, &mut buf, &mut len).ok()?;
-        Some(String::from_utf16_lossy(&buf[..(len as usize).min(buf.len())]))
+        Some(String::from_utf16_lossy(
+            &buf[..(len as usize).min(buf.len())],
+        ))
     }
 }
 
 /// CUAS 文档管理器上未公开的标记：值的最低位为 1 表示它替 IMM32 应用模拟 TSF 文档。
 /// 来源：Mozc `src/win32/tip/tip_transitory_extension.cc` 的 `kTsfEmulatedDocumentMgrGuid`。
-const GUID_COMPARTMENT_EMULATED_DOCUMENTMGR: GUID = GUID::from_u128(0xa94c5fd2_c471_4031_9546_709c17300cb9);
+const GUID_COMPARTMENT_EMULATED_DOCUMENTMGR: GUID =
+    GUID::from_u128(0xa94c5fd2_c471_4031_9546_709c17300cb9);
 
 /// 光标前文字从哪里读。照搬 Mozc 的 `TipTransitoryExtension::AsFullContext` 与
 /// `TipSurroundingText::Get`（`src/win32/tip/`）的判断：
@@ -382,22 +396,39 @@ fn transitory(context: &ITfContext) -> bool {
 }
 
 fn view_window(context: &ITfContext) -> Option<HWND> {
-    unsafe { context.GetActiveView().and_then(|view| view.GetWnd()).ok() }.filter(|window| !window.is_invalid())
+    unsafe { context.GetActiveView().and_then(|view| view.GetWnd()).ok() }
+        .filter(|window| !window.is_invalid())
 }
 
 fn surrounding(context: &ITfContext) -> Surrounding {
     unsafe {
-        let Ok(status) = context.GetStatus() else { return Surrounding::Imm32; };
-        if status.dwStaticFlags & TF_SS_TRANSITORY == 0 { return Surrounding::Tsf(context.clone()); }
-        let Ok(doc) = context.GetDocumentMgr() else { return Surrounding::Imm32; };
-        let Ok(mgr) = doc.cast::<ITfCompartmentMgr>() else { return Surrounding::Tsf(context.clone()); };
+        let Ok(status) = context.GetStatus() else {
+            return Surrounding::Imm32;
+        };
+        if status.dwStaticFlags & TF_SS_TRANSITORY == 0 {
+            return Surrounding::Tsf(context.clone());
+        }
+        let Ok(doc) = context.GetDocumentMgr() else {
+            return Surrounding::Imm32;
+        };
+        let Ok(mgr) = doc.cast::<ITfCompartmentMgr>() else {
+            return Surrounding::Tsf(context.clone());
+        };
         if let Some(parent) = transitory_parent(&mgr).filter(|parent| !same_object(parent, &doc)) {
             return match parent.GetTop() {
-                Ok(top) if top.GetStatus().is_ok_and(|s| s.dwStaticFlags & TF_SS_TRANSITORY == 0) => Surrounding::Tsf(top),
+                Ok(top)
+                    if top
+                        .GetStatus()
+                        .is_ok_and(|s| s.dwStaticFlags & TF_SS_TRANSITORY == 0) =>
+                {
+                    Surrounding::Tsf(top)
+                }
                 _ => Surrounding::Imm32,
             };
         }
-        if compartment_value(&mgr, &GUID_COMPARTMENT_EMULATED_DOCUMENTMGR).is_some_and(|v| v & 1 != 0) {
+        if compartment_value(&mgr, &GUID_COMPARTMENT_EMULATED_DOCUMENTMGR)
+            .is_some_and(|v| v & 1 != 0)
+        {
             Surrounding::Imm32
         } else {
             Surrounding::Tsf(context.clone())
@@ -408,11 +439,21 @@ fn surrounding(context: &ITfContext) -> Surrounding {
 /// Transitory Extensions 的父文档；隔间里的对象不是文档管理器时视为没有。
 fn transitory_parent(mgr: &ITfCompartmentMgr) -> Option<ITfDocumentMgr> {
     unsafe {
-        let mut value = mgr.GetCompartment(&GUID_COMPARTMENT_TRANSITORYEXTENSION_PARENT).ok()?.GetValue().ok()?;
+        let mut value = mgr
+            .GetCompartment(&GUID_COMPARTMENT_TRANSITORYEXTENSION_PARENT)
+            .ok()?
+            .GetValue()
+            .ok()?;
         let inner = &value.Anonymous.Anonymous;
         let parent = if inner.vt == VT_UNKNOWN {
-            inner.Anonymous.punkVal.as_ref().and_then(|unknown| unknown.cast::<ITfDocumentMgr>().ok())
-        } else { None };
+            inner
+                .Anonymous
+                .punkVal
+                .as_ref()
+                .and_then(|unknown| unknown.cast::<ITfDocumentMgr>().ok())
+        } else {
+            None
+        };
         let _ = VariantClear(&mut value);
         parent
     }
@@ -420,7 +461,8 @@ fn transitory_parent(mgr: &ITfCompartmentMgr) -> Option<ITfDocumentMgr> {
 
 /// IMM32 应用的光标前文字：向文档所在窗口要；拿不到窗口或应用不答都算不知道。
 fn imm32_before(context: &ITfContext) -> Option<String> {
-    unsafe { context.GetActiveView().and_then(|view| view.GetWnd()) }.ok()
+    unsafe { context.GetActiveView().and_then(|view| view.GetWnd()) }
+        .ok()
         .filter(|window| !window.is_invalid())
         .and_then(document_feed)
 }
@@ -429,22 +471,48 @@ fn imm32_before(context: &ITfContext) -> Option<String> {
 /// 那是不知道上文，不是空文档，服务进程会沿用自己记下的上屏文字。
 fn document_feed(window: HWND) -> Option<String> {
     let request = |data: LPARAM| unsafe {
-        SendMessageW(window, WM_IME_REQUEST, Some(WPARAM(IMR_DOCUMENTFEED as usize)), Some(data)).0
+        SendMessageW(
+            window,
+            WM_IME_REQUEST,
+            Some(WPARAM(IMR_DOCUMENTFEED as usize)),
+            Some(data),
+        )
+        .0
     };
     let head = std::mem::size_of::<RECONVERTSTRING>();
-    let size = usize::try_from(request(LPARAM(0))).ok().filter(|&size| size >= head)?;
+    let size = usize::try_from(request(LPARAM(0)))
+        .ok()
+        .filter(|&size| size >= head)?;
     // RECONVERTSTRING 只含 DWORD，按 u32 分配即可对齐
     let mut buffer = vec![0u32; size.div_ceil(4)];
     let header = buffer.as_mut_ptr().cast::<RECONVERTSTRING>();
-    unsafe { (*header).dwSize = size as u32; }
-    if request(LPARAM(header as isize)) == 0 { return None; }
+    unsafe {
+        (*header).dwSize = size as u32;
+    }
+    if request(LPARAM(header as isize)) == 0 {
+        return None;
+    }
     let info = unsafe { *header };
     // 长度按 UTF-16 计，偏移按字节计；应用填的值越界就当没答
-    let (start, len, caret) = (info.dwStrOffset as usize, info.dwStrLen as usize, info.dwCompStrOffset as usize / 2);
-    if start % 2 != 0 || start.checked_add(len * 2)? > size || caret > len { return None; }
-    let units = unsafe { std::slice::from_raw_parts(buffer.as_ptr().cast::<u8>().add(start).cast::<u16>(), caret) };
-    let before: Vec<char> = char::decode_utf16(units.iter().copied()).map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER)).collect();
-    Some(before[before.len().saturating_sub(BEFORE_CHARS as usize)..].iter().collect())
+    let (start, len, caret) = (
+        info.dwStrOffset as usize,
+        info.dwStrLen as usize,
+        info.dwCompStrOffset as usize / 2,
+    );
+    if start % 2 != 0 || start.checked_add(len * 2)? > size || caret > len {
+        return None;
+    }
+    let units = unsafe {
+        std::slice::from_raw_parts(buffer.as_ptr().cast::<u8>().add(start).cast::<u16>(), caret)
+    };
+    let before: Vec<char> = char::decode_utf16(units.iter().copied())
+        .map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER))
+        .collect();
+    Some(
+        before[before.len().saturating_sub(BEFORE_CHARS as usize)..]
+            .iter()
+            .collect(),
+    )
 }
 
 /// 应用给不出光标位置时：系统记的插入符，再不行用输入框窗口的左下角。
@@ -457,7 +525,16 @@ fn fallback_caret() -> Option<RECT> {
         GetGUIThreadInfo(GetCurrentThreadId(), &mut info).ok()?;
         if !info.hwndCaret.is_invalid() {
             let r = info.rcCaret;
-            let mut pts = [POINT { x: r.left, y: r.top }, POINT { x: r.right, y: r.bottom }];
+            let mut pts = [
+                POINT {
+                    x: r.left,
+                    y: r.top,
+                },
+                POINT {
+                    x: r.right,
+                    y: r.bottom,
+                },
+            ];
             MapWindowPoints(Some(info.hwndCaret), None, &mut pts);
             return Some(RECT {
                 left: pts[0].x,
@@ -466,7 +543,11 @@ fn fallback_caret() -> Option<RECT> {
                 bottom: pts[1].y,
             });
         }
-        let focus = if info.hwndFocus.is_invalid() { info.hwndActive } else { info.hwndFocus };
+        let focus = if info.hwndFocus.is_invalid() {
+            info.hwndActive
+        } else {
+            info.hwndFocus
+        };
         if focus.is_invalid() {
             return None;
         }
@@ -502,31 +583,63 @@ fn disabled(context: Option<&ITfContext>) -> bool {
 /// 输入范围由宿主声明；读取密码、数字密码及各类 PIN，只读取范围，不读取文字。
 fn sensitive_scope(context: &ITfContext, ec: u32) -> bool {
     unsafe {
-        let Some(selection) = selection_range(context, ec) else { return false; };
+        let Some(selection) = selection_range(context, ec) else {
+            return false;
+        };
         // InputScope belongs to the host's ITextStoreACP/ITfContextOwner;
         // Microsoft specifies GetAppProperty, not the service-owned GetProperty.
-        let Ok(property) = context.GetAppProperty(&GUID_PROP_INPUTSCOPE) else { return false; };
-        let Ok(mut value) = property.GetValue(ec, &selection) else { return false; };
+        let Ok(property) = context.GetAppProperty(&GUID_PROP_INPUTSCOPE) else {
+            return false;
+        };
+        let Ok(mut value) = property.GetValue(ec, &selection) else {
+            return false;
+        };
         let inner = &*value.Anonymous.Anonymous;
         let scopes = if inner.vt == VT_UNKNOWN {
-            inner.Anonymous.punkVal.as_ref().and_then(|value| value.cast::<ITfInputScope>().ok())
-        } else { None };
+            inner
+                .Anonymous
+                .punkVal
+                .as_ref()
+                .and_then(|value| value.cast::<ITfInputScope>().ok())
+        } else {
+            None
+        };
         let _ = VariantClear(&mut value);
-        let Some(scopes) = scopes else { return false; };
+        let Some(scopes) = scopes else {
+            return false;
+        };
         let mut data = std::ptr::null_mut();
         let mut count = 0;
-        if scopes.GetInputScopes(&mut data, &mut count).is_err() || data.is_null() { return false; }
-        let sensitive = std::slice::from_raw_parts(data, count as usize).iter().any(|scope|
-            matches!(*scope, IS_PASSWORD | IS_NUMERIC_PASSWORD | IS_NUMERIC_PIN | IS_ALPHANUMERIC_PIN | IS_ALPHANUMERIC_PIN_SET));
+        if scopes.GetInputScopes(&mut data, &mut count).is_err() || data.is_null() {
+            return false;
+        }
+        let sensitive = std::slice::from_raw_parts(data, count as usize)
+            .iter()
+            .any(|scope| {
+                matches!(
+                    *scope,
+                    IS_PASSWORD
+                        | IS_NUMERIC_PASSWORD
+                        | IS_NUMERIC_PIN
+                        | IS_ALPHANUMERIC_PIN
+                        | IS_ALPHANUMERIC_PIN_SET
+                )
+            });
         CoTaskMemFree(Some(data.cast()));
         sensitive
     }
 }
 
 fn set_sensitive(state: &Rc<RefCell<State>>, active: bool) {
-    if active && state.borrow().caret_move.is_some() { pair::finish(state, false); }
-    if active { finish_prediction_space(state, true, false); }
-    if std::mem::replace(&mut state.borrow_mut().sensitive, active) == active { return; }
+    if active && state.borrow().caret_move.is_some() {
+        pair::finish(state, false);
+    }
+    if active {
+        finish_prediction_space(state, true, false);
+    }
+    if std::mem::replace(&mut state.borrow_mut().sensitive, active) == active {
+        return;
+    }
     if let Some(frame) = call(state, &Request::SensitiveFocus { active }) {
         note_frame(state, &frame);
     }
@@ -564,20 +677,32 @@ fn check_sensitive(state: &Rc<RefCell<State>>, context: Option<&ITfContext>) -> 
     // current context. Failure to obtain an optional read lock must not keep
     // an earlier non-editing surface disabled forever (RichEdit/CUAS).
     // A known password/PIN remains protected if its own read lock is unavailable.
-    let active = state.borrow().sensitive_context.as_ref().is_some_and(|owner|
-        context.is_some_and(|context| same_object(owner, context)));
+    let active = state
+        .borrow()
+        .sensitive_context
+        .as_ref()
+        .is_some_and(|owner| context.is_some_and(|context| same_object(owner, context)));
     set_sensitive(state, active);
     active
 }
 
-fn replace_prediction_space(state: &Rc<RefCell<State>>, context: &ITfContext, ec: u32, text: &[u16]) -> Result<ITfRange> {
+fn replace_prediction_space(
+    state: &Rc<RefCell<State>>,
+    context: &ITfContext,
+    ec: u32,
+    text: &[u16],
+) -> Result<ITfRange> {
     let pending = state.borrow().space.clone();
     let failed = || windows::core::Error::from_hresult(windows::Win32::Foundation::E_FAIL);
-    let pending = pending.filter(|pending| same_object(&pending.context, context)).ok_or_else(failed)?;
+    let pending = pending
+        .filter(|pending| same_object(&pending.context, context))
+        .ok_or_else(failed)?;
     let selection = selection_range(context, ec).ok_or_else(failed)?;
     unsafe {
         let range = pending.composition.GetRange()?;
-        if !selection.IsEmpty(ec)?.as_bool() || selection.CompareStart(ec, &range, TF_ANCHOR_END)? != 0 {
+        if !selection.IsEmpty(ec)?.as_bool()
+            || selection.CompareStart(ec, &range, TF_ANCHOR_END)? != 0
+        {
             return Err(failed());
         }
         range.SetText(ec, 0, text)?;
@@ -618,8 +743,22 @@ fn ctrl_space_closed(state: &Rc<RefCell<State>>) {
     if !ctrl_space_handled(state, ms, false) {
         // 带上大写锁定的状态：服务进程按每个键里的这一位同步大写锁定
         let caps = keys::modifiers(|vk| unsafe { GetKeyState(i32::from(vk)) }) & modifier::CAPS;
-        let key = Key { keysym: 0x20, modifiers: modifier::CTRL | caps, test: false };
-        let Some(frame) = call(state, &Request::PhysicalKey { key, before: None, scan: 0, shown_revision: None }) else { return };
+        let key = Key {
+            keysym: 0x20,
+            modifiers: modifier::CTRL | caps,
+            test: false,
+        };
+        let Some(frame) = call(
+            state,
+            &Request::PhysicalKey {
+                key,
+                before: None,
+                scan: 0,
+                shown_revision: None,
+            },
+        ) else {
+            return;
+        };
         if !frame.handled {
             return;
         }
@@ -628,7 +767,14 @@ fn ctrl_space_closed(state: &Rc<RefCell<State>>) {
         apply(state, context.as_ref(), frame, false);
     }
     if let Some(window) = &state.borrow().window {
-        if let Err(error) = unsafe { PostMessageW(Some(window.hwnd()), ui::WM_RESTORE_KEYBOARD_OPEN, WPARAM(0), LPARAM(0)) } {
+        if let Err(error) = unsafe {
+            PostMessageW(
+                Some(window.hwnd()),
+                ui::WM_RESTORE_KEYBOARD_OPEN,
+                WPARAM(0),
+                LPARAM(0),
+            )
+        } {
             crate::log::write("安排恢复键盘打开状态失败", &error.to_string());
         }
     }
@@ -637,7 +783,9 @@ fn ctrl_space_closed(state: &Rc<RefCell<State>>) {
 /// 同一条按键消息的预询问、正式处理和系统通知只切换一次；长按重复也不再切换。
 fn ctrl_space_handled(state: &Rc<RefCell<State>>, ms: u32, repeat: bool) -> bool {
     let mut s = state.borrow_mut();
-    if s.ctrl_space_toggled.is_some_and(|previous| previous == ms || repeat) {
+    if s.ctrl_space_toggled
+        .is_some_and(|previous| previous == ms || repeat)
+    {
         s.ctrl_space_toggled = Some(ms);
         true
     } else {
@@ -647,14 +795,22 @@ fn ctrl_space_handled(state: &Rc<RefCell<State>>, ms: u32, repeat: bool) -> bool
 
 fn open_close_source(thread_mgr: &ITfThreadMgr) -> Option<ITfSource> {
     let mgr = thread_mgr.cast::<ITfCompartmentMgr>().ok()?;
-    unsafe { mgr.GetCompartment(&GUID_COMPARTMENT_KEYBOARD_OPENCLOSE).ok()?.cast().ok() }
+    unsafe {
+        mgr.GetCompartment(&GUID_COMPARTMENT_KEYBOARD_OPENCLOSE)
+            .ok()?
+            .cast()
+            .ok()
+    }
 }
 
 /// 订这个文档的排版变化（浏览器类应用打字时还没排好版，排好了再把候选窗挪过去）。
 fn watch_layout(state: &Rc<RefCell<State>>, context: &ITfContext) {
     let (current, sink) = {
         let s = state.borrow();
-        (s.layout_cookie.as_ref().map(|(c, _)| c.clone()), s.layout_sink.clone())
+        (
+            s.layout_cookie.as_ref().map(|(c, _)| c.clone()),
+            s.layout_sink.clone(),
+        )
     };
     if current.as_ref() == Some(context) {
         return;
@@ -684,12 +840,18 @@ fn unwatch_layout(state: &Rc<RefCell<State>>) {
 }
 
 /// 在编辑会话里按应答改文档：先上屏，再更新编辑区。返回候选窗该放的位置。
-fn apply_document(state: &Rc<RefCell<State>>, context: &ITfContext, frame: &Frame, ec: u32) -> Result<()> {
+fn apply_document(
+    state: &Rc<RefCell<State>>,
+    context: &ITfContext,
+    frame: &Frame,
+    ec: u32,
+) -> Result<()> {
     let (mut composition, sink) = {
         let s = state.borrow();
         (s.composition.clone(), s.sink.clone())
     };
-    let wants_window = frame.hint.is_some() || !frame.candidates.is_empty() || frame.title.is_some();
+    let wants_window =
+        frame.hint.is_some() || !frame.candidates.is_empty() || frame.title.is_some();
     let result = (|| -> Result<Option<RECT>> {
         unsafe {
             if let Some(text) = &frame.commit {
@@ -704,7 +866,11 @@ fn apply_document(state: &Rc<RefCell<State>>, context: &ITfContext, frame: &Fram
                     range
                 } else {
                     let insert: ITfInsertAtSelection = context.cast()?;
-                    let range = insert.InsertTextAtSelection(ec, INSERT_TEXT_AT_SELECTION_FLAGS(0), &text)?;
+                    let range = insert.InsertTextAtSelection(
+                        ec,
+                        INSERT_TEXT_AT_SELECTION_FLAGS(0),
+                        &text,
+                    )?;
                     range.Collapse(ec, TF_ANCHOR_END)?;
                     range
                 };
@@ -727,9 +893,15 @@ fn apply_document(state: &Rc<RefCell<State>>, context: &ITfContext, frame: &Fram
                     s.prediction_caret = anchor.ok();
                 }
                 if frame.caret_back == 1 && frame.pair_enabled {
-                    if let Some(pair) = frame.commit.as_ref().and_then(|text| pair::Pair::after_commit(context, &range, ec, text)) {
+                    if let Some(pair) = frame
+                        .commit
+                        .as_ref()
+                        .and_then(|text| pair::Pair::after_commit(context, &range, ec, text))
+                    {
                         let mut s = state.borrow_mut();
-                        if s.pairs.len() == 16 { s.pairs.remove(0); }
+                        if s.pairs.len() == 16 {
+                            s.pairs.remove(0);
+                        }
                         s.pairs.push(pair);
                     }
                 }
@@ -738,7 +910,10 @@ fn apply_document(state: &Rc<RefCell<State>>, context: &ITfContext, frame: &Fram
                     let watch = before_text(context, ec).and_then(|before| {
                         let (start, _) = before.grapheme_indices(true).next_back()?;
                         (start > 0).then(|| CommitWatch {
-                            context: context.clone(), shortened: before[..start].to_owned(), before, armed: false,
+                            context: context.clone(),
+                            shortened: before[..start].to_owned(),
+                            before,
+                            armed: false,
                         })
                     });
                     state.borrow_mut().undo = watch;
@@ -760,7 +935,11 @@ fn apply_document(state: &Rc<RefCell<State>>, context: &ITfContext, frame: &Fram
                 let caret = range.Clone()?;
                 caret.Collapse(ec, TF_ANCHOR_START)?;
                 let mut moved = 0;
-                let shift = if frame.inline_preedit.is_some() { frame.inline_cursor } else { frame.preedit_cursor } as i32;
+                let shift = if frame.inline_preedit.is_some() {
+                    frame.inline_cursor
+                } else {
+                    frame.preedit_cursor
+                } as i32;
                 caret.ShiftEnd(ec, shift, &mut moved, std::ptr::null())?;
                 caret.ShiftStart(ec, shift, &mut moved, std::ptr::null())?;
                 set_selection(context, ec, &caret)?;
@@ -776,9 +955,15 @@ fn apply_document(state: &Rc<RefCell<State>>, context: &ITfContext, frame: &Fram
             }
             if let Some(action) = frame.pair_edit {
                 let pair = state.borrow_mut().pairs.pop();
-                if let Some(pair) = pair { pair.apply(context, ec, action)?; }
+                if let Some(pair) = pair {
+                    pair.apply(context, ec, action)?;
+                }
             }
-            Ok(if wants_window || frame.caret_back != 0 { selection_rect(context, ec) } else { None })
+            Ok(if wants_window || frame.caret_back != 0 {
+                selection_rect(context, ec)
+            } else {
+                None
+            })
         }
     })();
     let mut s = state.borrow_mut();
@@ -804,10 +989,15 @@ fn note_frame(state: &Rc<RefCell<State>>, frame: &Frame) {
     let mut s = state.borrow_mut();
     s.predicting = frame.predict && !frame.candidates.is_empty();
     s.predict_double_space = s.predicting && frame.predict_double_space;
-    if !s.predicting { s.prediction_caret = None; }
+    if !s.predicting {
+        s.prediction_caret = None;
+    }
     s.pair_enabled = frame.pair_enabled;
-    if !frame.pair_enabled { s.pairs.clear(); }
-    s.busy = !s.predicting && (!frame.preedit.is_empty() || !frame.candidates.is_empty() || frame.title.is_some());
+    if !frame.pair_enabled {
+        s.pairs.clear();
+    }
+    s.busy = !s.predicting
+        && (!frame.preedit.is_empty() || !frame.candidates.is_empty() || frame.title.is_some());
 }
 
 fn clear_prediction(state: &Rc<RefCell<State>>) -> bool {
@@ -848,7 +1038,10 @@ fn note_preview(state: &Rc<RefCell<State>>, frame: &Frame) {
 /// 候选窗的 Win32 调用（摆位置、显示、隐藏、改所属窗口）会同步发消息给宿主窗口，
 /// 宿主（如记事本的 RichEdit）可能当场回调 TSF。调用期间不持有 State 借用：先取出
 /// 窗口，用完放回；期间重入的回调看到「没有候选窗」，不会重复借用。
-fn with_window<R>(state: &Rc<RefCell<State>>, f: impl FnOnce(&mut CandidateWindow) -> R) -> Option<R> {
+fn with_window<R>(
+    state: &Rc<RefCell<State>>,
+    f: impl FnOnce(&mut CandidateWindow) -> R,
+) -> Option<R> {
     let (mut window, generation) = {
         let Ok(mut s) = state.try_borrow_mut() else {
             crate::log::write("候选窗调用重入", "已跳过");
@@ -879,12 +1072,19 @@ fn show_window(state: &Rc<RefCell<State>>, frame: &Frame) {
     // https://learn.microsoft.com/windows/apps/develop/input/input-method-editor-requirements#owned-window
     let context = state.borrow().context.clone();
     let owner = wants.then(|| unsafe {
-        context.as_ref().and_then(|context| context.GetActiveView().and_then(|view| view.GetWnd()).ok())
-            .filter(|window| !window.is_invalid()).unwrap_or_else(|| GetFocus())
+        context
+            .as_ref()
+            .and_then(|context| context.GetActiveView().and_then(|view| view.GetWnd()).ok())
+            .filter(|window| !window.is_invalid())
+            .unwrap_or_else(|| GetFocus())
     });
     let caret = {
         let s = state.borrow();
-        if wants { s.caret.or(s.last_caret).or_else(fallback_caret) } else { s.caret }
+        if wants {
+            s.caret.or(s.last_caret).or_else(fallback_caret)
+        } else {
+            s.caret
+        }
     };
     let shown = with_window(state, |window| {
         if let Some(owner) = owner {
@@ -905,10 +1105,17 @@ fn show_window(state: &Rc<RefCell<State>>, frame: &Frame) {
 fn apply(state: &Rc<RefCell<State>>, context: Option<&ITfContext>, frame: Frame, sync: bool) {
     let expired = {
         let service = state.borrow();
-        service.caret_move.is_some_and(|motion| service.window.as_ref().is_none_or(|window| window.hwnd().is_invalid())
-            || motion.step(now_ms(), true, false) == keys::CaretStep::Drop)
+        service.caret_move.is_some_and(|motion| {
+            service
+                .window
+                .as_ref()
+                .is_none_or(|window| window.hwnd().is_invalid())
+                || motion.step(now_ms(), true, false) == keys::CaretStep::Drop
+        })
     };
-    if expired { pair::finish(state, true); }
+    if expired {
+        pair::finish(state, true);
+    }
     let deferred = {
         let mut service = state.borrow_mut();
         service.caret_move.is_some() && context.is_some() && service.pair_delivery.defer(&frame)
@@ -919,7 +1126,9 @@ fn apply(state: &Rc<RefCell<State>>, context: Option<&ITfContext>, frame: Frame,
         return;
     }
     // 鼠标选词、切换模式等也先落实单次空格；只有双击选词替换这个编辑区。
-    if !frame.replace_space { finish_prediction_space(state, true, sync); }
+    if !frame.replace_space {
+        finish_prediction_space(state, true, sync);
+    }
     note_frame(state, &frame);
     let Some(context) = context else {
         state.borrow_mut().caret = None;
@@ -941,7 +1150,9 @@ fn apply(state: &Rc<RefCell<State>>, context: Option<&ITfContext>, frame: Frame,
             let result = apply_document(&state2, &context2, &frame2, ec);
             if let Err(error) = &result {
                 crate::log::write("更新文档失败", &error.to_string());
-                if frame2.undo_learning { let _ = call(&state2, &Request::UndoCommitLearning); }
+                if frame2.undo_learning {
+                    let _ = call(&state2, &Request::UndoCommitLearning);
+                }
             } else {
                 caret_back(&state2, &frame2);
             }
@@ -953,9 +1164,13 @@ fn apply(state: &Rc<RefCell<State>>, context: Option<&ITfContext>, frame: Frame,
         let (state2, context2, frame2) = (state.clone(), context.clone(), shared.clone());
         let generation = state.borrow().generation;
         edit(context, client_id, false, move |ec| {
-            if state2.borrow().generation != generation { return Ok(()); }
+            if state2.borrow().generation != generation {
+                return Ok(());
+            }
             let result = apply_document(&state2, &context2, &frame2, ec);
-            if result.is_ok() { caret_back(&state2, &frame2); }
+            if result.is_ok() {
+                caret_back(&state2, &frame2);
+            }
             show_window(&state2, &frame2);
             result
         });
@@ -971,7 +1186,10 @@ fn caret_back(state: &Rc<RefCell<State>>, frame: &Frame) {
         return;
     }
     let mut s = state.borrow_mut();
-    if s.window.as_ref().is_some_and(CandidateWindow::request_caret_tick) {
+    if s.window
+        .as_ref()
+        .is_some_and(CandidateWindow::request_caret_tick)
+    {
         s.caret_move = Some(keys::CaretMove::new(frame.caret_back, now_ms()));
         s.pair_delivery.sent = false;
         s.pair_delivery.released = false;
@@ -991,7 +1209,9 @@ fn caret_tick(state: &Rc<RefCell<State>>) -> bool {
         .as_ref()
         .is_some_and(|mgr| unsafe { mgr.IsThreadFocus() }.is_ok_and(|focus| focus.as_bool()));
     let mut s = state.borrow_mut();
-    let Some(pending) = s.caret_move else { return false; };
+    let Some(pending) = s.caret_move else {
+        return false;
+    };
     // 此刻键盘上的状态：消息里记的状态这时已经过时了
     let held = [0x10, 0x11, 0x12, 0x5b, 0x5c]
         .into_iter()
@@ -1007,7 +1227,12 @@ fn caret_tick(state: &Rc<RefCell<State>>) -> bool {
             let released = s.pair_delivery.released;
             drop(s);
             let placement = pair::placement(state);
-            if placement == pair::Placement::Inside || (released && placement != pair::Placement::AfterTerminal) { pair::finish(state, true); return false; }
+            if placement == pair::Placement::Inside
+                || (released && placement != pair::Placement::AfterTerminal)
+            {
+                pair::finish(state, true);
+                return false;
+            }
             return true;
         }
         keys::CaretStep::Send(steps) => steps,
@@ -1021,13 +1246,23 @@ fn caret_tick(state: &Rc<RefCell<State>>) -> bool {
             ki: KEYBDINPUT {
                 wVk: VK_LEFT,
                 wScan: 0x4b,
-                dwFlags: if up { KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP } else { KEYEVENTF_EXTENDEDKEY },
-                dwExtraInfo: if last { keys::CARET_END_TAG } else { keys::OWN_INPUT_TAG },
+                dwFlags: if up {
+                    KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP
+                } else {
+                    KEYEVENTF_EXTENDEDKEY
+                },
+                dwExtraInfo: if last {
+                    keys::CARET_END_TAG
+                } else {
+                    keys::OWN_INPUT_TAG
+                },
                 ..Default::default()
             },
         },
     };
-    let inputs: Vec<INPUT> = (0..steps).flat_map(|index| [key(false, false), key(true, index + 1 == steps)]).collect();
+    let inputs: Vec<INPUT> = (0..steps)
+        .flat_map(|index| [key(false, false), key(true, index + 1 == steps)])
+        .collect();
     let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
     if sent as usize != inputs.len() {
         crate::log::write("发送辅助按键失败", &format!("{sent}/{}", inputs.len()));
@@ -1039,7 +1274,10 @@ fn caret_tick(state: &Rc<RefCell<State>>) -> bool {
 
 /// 正在处理的按键是不是 FreeType 为成对标点移动光标发出的按键。
 fn own_input() -> bool {
-    matches!(unsafe { GetMessageExtraInfo() }.0 as usize, keys::OWN_INPUT_TAG | keys::CARET_END_TAG)
+    matches!(
+        unsafe { GetMessageExtraInfo() }.0 as usize,
+        keys::OWN_INPUT_TAG | keys::CARET_END_TAG
+    )
 }
 
 fn now_ms() -> u64 {
@@ -1068,34 +1306,60 @@ fn key_before(state: &Rc<RefCell<State>>, context: &ITfContext) -> Option<String
         let s = state.borrow();
         s.mode == Mode::Chinese || s.want_before
     };
-    if wants { read_before(state, context) } else { None }
+    if wants {
+        read_before(state, context)
+    } else {
+        None
+    }
 }
 
 fn watch_backspace(state: &Rc<RefCell<State>>, context: Option<&ITfContext>, vk: u16) {
-    if vk != 0x08 || moment().other_modifiers || unsafe { GetAsyncKeyState(0x10) } < 0 || composing(state) {
+    if vk != 0x08
+        || moment().other_modifiers
+        || unsafe { GetAsyncKeyState(0x10) } < 0
+        || composing(state)
+    {
         state.borrow_mut().undo = None;
         return;
     }
-    let Some(context) = context else { return; };
+    let Some(context) = context else {
+        return;
+    };
     let before = {
         let state = state.borrow();
-        let Some(watch) = state.undo.as_ref().filter(|watch| same_object(&watch.context, context)) else { return; };
+        let Some(watch) = state
+            .undo
+            .as_ref()
+            .filter(|watch| same_object(&watch.context, context))
+        else {
+            return;
+        };
         watch.before.clone()
     };
     let valid = read_before(state, context).as_deref() == Some(before.as_str());
     let mut state = state.borrow_mut();
     if valid {
-        if let Some(watch) = state.undo.as_mut() { watch.armed = true; }
+        if let Some(watch) = state.undo.as_mut() {
+            watch.armed = true;
+        }
     } else {
         state.undo = None;
     }
 }
 
 fn confirm_backspace(state: &Rc<RefCell<State>>, context: Option<&ITfContext>) {
-    let Some(context) = context.filter(|context| !disabled(Some(context))) else { return; };
+    let Some(context) = context.filter(|context| !disabled(Some(context))) else {
+        return;
+    };
     let expected = {
         let state = state.borrow();
-        let Some(watch) = state.undo.as_ref().filter(|watch| watch.armed && same_object(&watch.context, context)) else { return; };
+        let Some(watch) = state
+            .undo
+            .as_ref()
+            .filter(|watch| watch.armed && same_object(&watch.context, context))
+        else {
+            return;
+        };
         watch.shortened.clone()
     };
     if read_before(state, context).is_some_and(|before| before.ends_with(&expected)) {
@@ -1104,11 +1368,17 @@ fn confirm_backspace(state: &Rc<RefCell<State>>, context: Option<&ITfContext>) {
     }
 }
 
-fn verified_pair_key(state: &Rc<RefCell<State>>, context: Option<&ITfContext>, key: Key) -> Option<PairEdit> {
+fn verified_pair_key(
+    state: &Rc<RefCell<State>>,
+    context: Option<&ITfContext>,
+    key: Key,
+) -> Option<PairEdit> {
     let context = context?;
     let (action, composition, client_id) = {
         let s = state.borrow();
-        if !s.pair_enabled || (s.busy && s.composition.is_none()) { return None; }
+        if !s.pair_enabled || (s.busy && s.composition.is_none()) {
+            return None;
+        }
         let action = s.pairs.last()?.for_key(key, s.composition.is_some())?;
         (action, s.composition.clone(), s.client_id)
     };
@@ -1116,8 +1386,17 @@ fn verified_pair_key(state: &Rc<RefCell<State>>, context: Option<&ITfContext>, k
     let (out, state, doc) = (accepted.clone(), state.clone(), context.clone());
     edit_with(context, client_id, TF_ES_SYNC | TF_ES_READ, move |ec| {
         let caret = if let Some(comp) = composition {
-            unsafe { comp.GetRange().and_then(|range| { range.Collapse(ec, TF_ANCHOR_END)?; Ok(range) }).ok() }
-        } else { selection_range(&doc, ec) };
+            unsafe {
+                comp.GetRange()
+                    .and_then(|range| {
+                        range.Collapse(ec, TF_ANCHOR_END)?;
+                        Ok(range)
+                    })
+                    .ok()
+            }
+        } else {
+            selection_range(&doc, ec)
+        };
         let state = state.borrow();
         if let (Some(caret), Some(last)) = (caret, state.pairs.last()) {
             out.set(last.permits(&doc, ec, &caret, action));
@@ -1132,7 +1411,10 @@ fn plain_key(key: Key) -> bool {
 }
 
 fn prediction_in(s: &State, context: &ITfContext) -> bool {
-    s.predicting && s.context.as_ref().is_some_and(|owner| same_object(owner, context))
+    s.predicting
+        && s.context
+            .as_ref()
+            .is_some_and(|owner| same_object(owner, context))
 }
 
 fn double_space_wait() -> u32 {
@@ -1140,99 +1422,156 @@ fn double_space_wait() -> u32 {
 }
 
 /// 从第一次按下起拥有空格的编辑区，CUAS 和原生 TSF 使用完全相同的事务。
-fn begin_prediction_space(state: &Rc<RefCell<State>>, context: &ITfContext, revision: u64, ms: u32) -> bool {
-    if state.borrow().space.as_ref().is_some_and(|pending| pending.pressed_ms == ms) { return true; }
+fn begin_prediction_space(
+    state: &Rc<RefCell<State>>,
+    context: &ITfContext,
+    revision: u64,
+    ms: u32,
+) -> bool {
+    if state
+        .borrow()
+        .space
+        .as_ref()
+        .is_some_and(|pending| pending.pressed_ms == ms)
+    {
+        return true;
+    }
     finish_prediction_space(state, true, true);
-    let (client_id, sink) = { let s = state.borrow(); (s.client_id, s.sink.clone()) };
+    let (client_id, sink) = {
+        let s = state.borrow();
+        (s.client_id, s.sink.clone())
+    };
     let done = Rc::new(std::cell::Cell::new(false));
     let (done2, state2, doc) = (done.clone(), state.clone(), context.clone());
-    let requested = request_edit(context, client_id, TF_ES_SYNC | TF_ES_READWRITE, move |ec| {
-        let result = (|| -> Result<()> { unsafe {
-            let insert: ITfInsertAtSelection = doc.cast()?;
-            let range = insert.InsertTextAtSelection(ec, TF_IAS_QUERYONLY, &[])?;
-            let owner: ITfContextComposition = doc.cast()?;
-            let composition = owner.StartComposition(ec, &range, sink.as_ref())?;
-            let result = (|| -> Result<ITfRange> {
-                let range = composition.GetRange()?;
-                range.SetText(ec, 0, &[u16::from(b' ')])?;
-                let caret = range.Clone()?;
-                caret.Collapse(ec, TF_ANCHOR_END)?;
-                set_selection(&doc, ec, &caret)?;
-                Ok(caret)
-            })();
-            let caret = match result {
-                Ok(caret) => caret,
-                Err(error) => {
-                    let _ = range.SetText(ec, 0, &[]);
-                    let _ = composition.EndComposition(ec);
-                    return Err(error);
+    let requested = request_edit(
+        context,
+        client_id,
+        TF_ES_SYNC | TF_ES_READWRITE,
+        move |ec| {
+            let result = (|| -> Result<()> {
+                unsafe {
+                    let insert: ITfInsertAtSelection = doc.cast()?;
+                    let range = insert.InsertTextAtSelection(ec, TF_IAS_QUERYONLY, &[])?;
+                    let owner: ITfContextComposition = doc.cast()?;
+                    let composition = owner.StartComposition(ec, &range, sink.as_ref())?;
+                    let result = (|| -> Result<ITfRange> {
+                        let range = composition.GetRange()?;
+                        range.SetText(ec, 0, &[u16::from(b' ')])?;
+                        let caret = range.Clone()?;
+                        caret.Collapse(ec, TF_ANCHOR_END)?;
+                        set_selection(&doc, ec, &caret)?;
+                        Ok(caret)
+                    })();
+                    let caret = match result {
+                        Ok(caret) => caret,
+                        Err(error) => {
+                            let _ = range.SetText(ec, 0, &[]);
+                            let _ = composition.EndComposition(ec);
+                            return Err(error);
+                        }
+                    };
+                    let wait = double_space_wait();
+                    // GetTextExt 由应用实现，调用它时不持有可重入文本服务的状态借用。
+                    let rect = text_rect(&doc, ec, &caret);
+                    let at = {
+                        let mut s = state2.borrow_mut();
+                        s.space = Some(PredictionSpace {
+                            context: doc.clone(),
+                            composition,
+                            revision,
+                            pressed_ms: ms,
+                            deadline_ms: now_ms() + u64::from(wait),
+                        });
+                        s.undo = None;
+                        s.caret = rect.or(s.caret);
+                        s.caret
+                    };
+                    with_window(&state2, |window| {
+                        window.set_prediction_space_timeout(Some(wait));
+                        if let Some(at) = at {
+                            window.reposition(at);
+                        }
+                    });
+                    done2.set(true);
+                    Ok(())
                 }
-            };
-            let wait = double_space_wait();
-            // GetTextExt 由应用实现，调用它时不持有可重入文本服务的状态借用。
-            let rect = text_rect(&doc, ec, &caret);
-            let at = {
-                let mut s = state2.borrow_mut();
-                s.space = Some(PredictionSpace {
-                    context: doc.clone(), composition, revision, pressed_ms: ms,
-                    deadline_ms: now_ms() + u64::from(wait),
-                });
-                s.undo = None;
-                s.caret = rect.or(s.caret);
-                s.caret
-            };
-            with_window(&state2, |window| {
-                window.set_prediction_space_timeout(Some(wait));
-                if let Some(at) = at { window.reposition(at); }
-            });
-            done2.set(true);
-            Ok(())
-        }})();
-        if let Err(error) = &result { crate::log::write("保留联想空格失败", &error.to_string()); }
-        result
-    });
-    if let Err(error) = requested { crate::log::write("保留联想空格失败", &error.to_string()); }
+            })();
+            if let Err(error) = &result {
+                crate::log::write("保留联想空格失败", &error.to_string());
+            }
+            result
+        },
+    );
+    if let Err(error) = requested {
+        crate::log::write("保留联想空格失败", &error.to_string());
+    }
     done.get()
 }
 
 fn take_prediction_space(state: &Rc<RefCell<State>>) -> Option<PredictionSpace> {
     let mut s = state.borrow_mut();
     let pending = s.space.take()?;
-    if let Some(window) = &s.window { window.set_prediction_space_timeout(None); }
+    if let Some(window) = &s.window {
+        window.set_prediction_space_timeout(None);
+    }
     Some(pending)
 }
 
 /// 只结束这个空格拥有的编辑区。异步焦点清理也不会把旧文字写到新的输入框。
 fn finish_prediction_space(state: &Rc<RefCell<State>>, commit: bool, sync: bool) {
-    let Some(pending) = take_prediction_space(state) else { return; };
+    let Some(pending) = take_prediction_space(state) else {
+        return;
+    };
     let (client_id, state2) = (state.borrow().client_id, state.clone());
     let context = pending.context.clone();
-    let flags = if sync { TF_ES_SYNC | TF_ES_READWRITE } else { TF_ES_ASYNCDONTCARE | TF_ES_READWRITE };
+    let flags = if sync {
+        TF_ES_SYNC | TF_ES_READWRITE
+    } else {
+        TF_ES_ASYNCDONTCARE | TF_ES_READWRITE
+    };
     let requested = request_edit(&context.clone(), client_id, flags, move |ec| {
-        let result = (|| -> Result<()> { unsafe {
-            let range = pending.composition.GetRange()?;
-            if !commit { range.SetText(ec, 0, &[])?; }
-            let caret = range.Clone()?;
-            caret.Collapse(ec, TF_ANCHOR_END)?;
-            caret.SetGravity(ec, TF_GRAVITY_FORWARD, TF_GRAVITY_FORWARD)?;
-            pending.composition.EndComposition(ec)?;
-            if !commit { set_selection(&context, ec, &caret)?; }
-            let mut s = state2.borrow_mut();
-            if prediction_in(&s, &context) { s.prediction_caret = Some(caret); }
-            Ok(())
-        }})();
-        if let Err(error) = &result { crate::log::write("结束联想空格失败", &error.to_string()); }
+        let result = (|| -> Result<()> {
+            unsafe {
+                let range = pending.composition.GetRange()?;
+                if !commit {
+                    range.SetText(ec, 0, &[])?;
+                }
+                let caret = range.Clone()?;
+                caret.Collapse(ec, TF_ANCHOR_END)?;
+                caret.SetGravity(ec, TF_GRAVITY_FORWARD, TF_GRAVITY_FORWARD)?;
+                pending.composition.EndComposition(ec)?;
+                if !commit {
+                    set_selection(&context, ec, &caret)?;
+                }
+                let mut s = state2.borrow_mut();
+                if prediction_in(&s, &context) {
+                    s.prediction_caret = Some(caret);
+                }
+                Ok(())
+            }
+        })();
+        if let Err(error) = &result {
+            crate::log::write("结束联想空格失败", &error.to_string());
+        }
         result
     });
-    if let Err(error) = requested { crate::log::write("结束联想空格失败", &error.to_string()); }
+    if let Err(error) = requested {
+        crate::log::write("结束联想空格失败", &error.to_string());
+    }
 }
 
 fn prediction_space_timeout(state: &Rc<RefCell<State>>) {
-    let remaining = state.borrow().space.as_ref().map(|pending| pending.deadline_ms.saturating_sub(now_ms()));
+    let remaining = state
+        .borrow()
+        .space
+        .as_ref()
+        .map(|pending| pending.deadline_ms.saturating_sub(now_ms()));
     match remaining {
         Some(0) => finish_prediction_space(state, true, false),
         Some(ms) => {
-            if let Some(window) = &state.borrow().window { window.set_prediction_space_timeout(Some(ms as u32)); }
+            if let Some(window) = &state.borrow().window {
+                window.set_prediction_space_timeout(Some(ms as u32));
+            }
         }
         None => {}
     }
@@ -1242,25 +1581,40 @@ fn prediction_space_timeout(state: &Rc<RefCell<State>>) {
 /// snapshot can lag behind the commit in a rich editor, so do not send it as
 /// `before` for this space. A verified move still invalidates the prediction.
 fn prediction_space_key(
-    state: &Rc<RefCell<State>>, context: &ITfContext, key: Key, repeat: bool, revision: u64, ms: u32,
+    state: &Rc<RefCell<State>>,
+    context: &ITfContext,
+    key: Key,
+    repeat: bool,
+    revision: u64,
+    ms: u32,
 ) -> (Key, bool) {
     if key.keysym != 0x20 || !plain_key(key) || repeat || revision == 0 {
         return (key, false);
     }
     let (client_id, anchor, pending, double) = {
         let s = state.borrow();
-        if !prediction_in(&s, context) { return (key, false); }
-        (s.client_id, s.prediction_caret.clone(), s.space.clone(), s.predict_double_space)
+        if !prediction_in(&s, context) {
+            return (key, false);
+        }
+        (
+            s.client_id,
+            s.prediction_caret.clone(),
+            s.space.clone(),
+            s.predict_double_space,
+        )
     };
     let pending = pending.filter(|p| p.revision == revision && same_object(&p.context, context));
-    let second = double && pending.as_ref().is_some_and(|pending| {
-        let elapsed = ms.wrapping_sub(pending.pressed_ms);
-        elapsed > 0 && elapsed <= double_space_wait()
-    });
+    let second = double
+        && pending.as_ref().is_some_and(|pending| {
+            let elapsed = ms.wrapping_sub(pending.pressed_ms);
+            elapsed > 0 && elapsed <= double_space_wait()
+        });
     let result = Rc::new(std::cell::Cell::new(false));
     let (result2, doc) = (result.clone(), context.clone());
     edit_with(context, client_id, TF_ES_SYNC | TF_ES_READ, move |ec| {
-        let Some(caret) = selection_range(&doc, ec) else { return Ok(()); };
+        let Some(caret) = selection_range(&doc, ec) else {
+            return Ok(());
+        };
         unsafe {
             if !caret.IsEmpty(ec)?.as_bool() {
                 result2.set(true);
@@ -1279,7 +1633,15 @@ fn prediction_space_key(
         dismiss_prediction(state);
         return (key, false);
     }
-    if second { return (Key { keysym: keysym::SPACE_DOUBLE, ..key }, true); }
+    if second {
+        return (
+            Key {
+                keysym: keysym::SPACE_DOUBLE,
+                ..key
+            },
+            true,
+        );
+    }
     if double && !key.test && !begin_prediction_space(state, context, revision, ms) {
         dismiss_prediction(state);
         return (key, false);
@@ -1291,9 +1653,17 @@ fn prediction_space_key(
 fn translate(wparam: WPARAM, lparam: LPARAM, test: bool) -> Option<Key> {
     let vk = wparam.0 as u16;
     let modifiers = keys::modifiers(|vk| unsafe { GetKeyState(i32::from(vk)) })
-        | if lparam.0 & (1 << 30) != 0 { modifier::REPEAT } else { 0 };
+        | if lparam.0 & (1 << 30) != 0 {
+            modifier::REPEAT
+        } else {
+            0
+        };
     if let Some(keysym) = keys::named_keysym(vk) {
-        return Some(Key { keysym, modifiers, test });
+        return Some(Key {
+            keysym,
+            modifiers,
+            test,
+        });
     }
     unsafe {
         let mut state = [0u8; 256];
@@ -1310,7 +1680,11 @@ fn translate(wparam: WPARAM, lparam: LPARAM, test: bool) -> Option<Key> {
             return None;
         }
         let keysym = char::from_u32(u32::from(buf[0])).and_then(keys::char_keysym)?;
-        Some(Key { keysym, modifiers, test })
+        Some(Key {
+            keysym,
+            modifiers,
+            test,
+        })
     }
 }
 
@@ -1319,7 +1693,11 @@ fn call(state: &Rc<RefCell<State>>, request: &Request) -> Option<Frame> {
 }
 
 fn shown_revision(state: &Rc<RefCell<State>>) -> u64 {
-    state.borrow().window.as_ref().map_or(0, CandidateWindow::painted_revision)
+    state
+        .borrow()
+        .window
+        .as_ref()
+        .map_or(0, CandidateWindow::painted_revision)
 }
 
 fn composing(state: &Rc<RefCell<State>>) -> bool {
@@ -1353,27 +1731,34 @@ fn on_click(state: &Weak<RefCell<State>>, click: Click) {
         return;
     };
     let request = match click {
-        Click::RefreshEnhancement(revision)=>Request::RefreshEnhancement{revision},
+        Click::RefreshEnhancement(revision) => Request::RefreshEnhancement { revision },
         Click::LanguageMenu(x, y) => {
             let (context, generation) = {
                 let mut s = state.borrow_mut();
-                if s.language_menu != MenuState::Queued { return; }
+                if s.language_menu != MenuState::Queued {
+                    return;
+                }
                 s.language_menu = MenuState::Open;
                 (s.context.clone(), s.generation)
             };
             // Like Weasel, anchor the native menu to the focused document. Its lifetime
             // is independent of the candidate and hint windows and their hide timers.
             let owner = unsafe {
-                context.and_then(|c| c.GetActiveView().and_then(|v| v.GetWnd()).ok())
+                context
+                    .and_then(|c| c.GetActiveView().and_then(|v| v.GetWnd()).ok())
                     .filter(|w| !w.is_invalid())
                     .unwrap_or_else(|| windows::Win32::UI::Input::KeyboardAndMouse::GetFocus())
             };
             let _dll = DllRef::new();
             let selected = button_menu(owner, x, y);
             let mut s = state.borrow_mut();
-            if s.generation != generation { return; }
+            if s.generation != generation {
+                return;
+            }
             s.language_menu = MenuState::Closed;
-            let Some(request) = selected else { return; };
+            let Some(request) = selected else {
+                return;
+            };
             request
         }
         Click::Candidate { revision, action } => Request::CandidateAction { revision, action },
@@ -1386,7 +1771,9 @@ fn on_click(state: &Weak<RefCell<State>>, click: Click) {
                 let s = state.borrow();
                 (s.thread_mgr.clone(), s.client_id)
             };
-            if let Some(manager) = manager { set_keyboard_open(&manager, client_id); }
+            if let Some(manager) = manager {
+                set_keyboard_open(&manager, client_id);
+            }
             return;
         }
         Click::Settings => Request::Command {
@@ -1396,7 +1783,12 @@ fn on_click(state: &Weak<RefCell<State>>, click: Click) {
     let Some(frame) = call(&state, &request) else {
         return;
     };
-    if matches!(request, Request::Command { command: Command::OpenSettings }) {
+    if matches!(
+        request,
+        Request::Command {
+            command: Command::OpenSettings
+        }
+    ) {
         return;
     }
     let context = state.borrow().context.clone();
@@ -1416,8 +1808,16 @@ fn on_button(state: &Weak<RefCell<State>>, click: ButtonClick) {
             let mut s = state.borrow_mut();
             if s.language_menu == MenuState::Closed {
                 if let Some(window) = &s.window {
-                    if unsafe { PostMessageW(Some(window.hwnd()), ui::WM_LANGUAGE_MENU,
-                        WPARAM(x as usize), LPARAM(y as isize)) }.is_ok() {
+                    if unsafe {
+                        PostMessageW(
+                            Some(window.hwnd()),
+                            ui::WM_LANGUAGE_MENU,
+                            WPARAM(x as usize),
+                            LPARAM(y as isize),
+                        )
+                    }
+                    .is_ok()
+                    {
                         s.language_menu = MenuState::Queued;
                     }
                 }
@@ -1433,7 +1833,9 @@ fn on_button(state: &Weak<RefCell<State>>, click: ButtonClick) {
 }
 
 fn button_menu(owner: HWND, x: i32, y: i32) -> Option<Request> {
-    use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, WS_EX_TOOLWINDOW, WS_POPUP};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DestroyWindow, WS_EX_TOOLWINDOW, WS_POPUP,
+    };
     unsafe {
         let menu = CreatePopupMenu().ok()?;
         let items: [(u32, &str); 7] = [
@@ -1446,22 +1848,54 @@ fn button_menu(owner: HWND, x: i32, y: i32) -> Option<Request> {
             (8, "拆字查字"),
         ];
         for (id, text) in items {
-            let _ = AppendMenuW(menu, MF_STRING, id as usize, &windows::core::HSTRING::from(text));
+            let _ = AppendMenuW(
+                menu,
+                MF_STRING,
+                id as usize,
+                &windows::core::HSTRING::from(text),
+            );
         }
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
         let _ = AppendMenuW(menu, MF_STRING, 6, windows::core::w!("FreeType 设置"));
         // The shell can deliver the click without a focused edit control. A separate
         // owner in that case survives every hide/update of the candidate window.
         let temporary = if owner.is_invalid() {
-            CreateWindowExW(WS_EX_TOOLWINDOW, windows::core::w!("STATIC"), None, WS_POPUP,
-                x, y, 0, 0, None, None, None, None).ok()
-        } else { None };
+            CreateWindowExW(
+                WS_EX_TOOLWINDOW,
+                windows::core::w!("STATIC"),
+                None,
+                WS_POPUP,
+                x,
+                y,
+                0,
+                0,
+                None,
+                None,
+                None,
+                None,
+            )
+            .ok()
+        } else {
+            None
+        };
         let owner = temporary.unwrap_or(owner);
-        let cmd = if owner.is_invalid() { BOOL(0) } else {
-            TrackPopupMenu(menu, TPM_NONOTIFY | TPM_RETURNCMD | TPM_RIGHTBUTTON, x, y, None, owner, None)
+        let cmd = if owner.is_invalid() {
+            BOOL(0)
+        } else {
+            TrackPopupMenu(
+                menu,
+                TPM_NONOTIFY | TPM_RETURNCMD | TPM_RIGHTBUTTON,
+                x,
+                y,
+                None,
+                owner,
+                None,
+            )
         };
         let _ = DestroyMenu(menu);
-        if let Some(hwnd) = temporary { let _ = DestroyWindow(hwnd); }
+        if let Some(hwnd) = temporary {
+            let _ = DestroyWindow(hwnd);
+        }
         let command = match cmd.0 {
             1 => return Some(Request::ToggleMode { shift: None }),
             2 => Command::TogglePunct,
@@ -1479,7 +1913,10 @@ fn button_menu(owner: HWND, x: i32, y: i32) -> Option<Request> {
 
 /// 两个接口指针是不是同一个 COM 对象（按 COM 的规定比 `IUnknown`，不比接口指针本身）。
 fn same_object<A: Interface, B: Interface>(a: &A, b: &B) -> bool {
-    match (a.cast::<windows::core::IUnknown>(), b.cast::<windows::core::IUnknown>()) {
+    match (
+        a.cast::<windows::core::IUnknown>(),
+        b.cast::<windows::core::IUnknown>(),
+    ) {
         (Ok(a), Ok(b)) => a.as_raw() == b.as_raw(),
         _ => false,
     }
@@ -1489,7 +1926,10 @@ fn same_object<A: Interface, B: Interface>(a: &A, b: &B) -> bool {
 ///
 /// 应用会对同一个输入框再报一次焦点：资源管理器地址栏（XAML）点进去以后，要等第一个键
 /// 打出来才报，这时编辑区和候选窗已经在了。这不是换输入框，见 [`on_focus`]。
-fn composing_context(composition: Option<&ITfComposition>, focus: Option<&ITfDocumentMgr>) -> Option<ITfContext> {
+fn composing_context(
+    composition: Option<&ITfComposition>,
+    focus: Option<&ITfDocumentMgr>,
+) -> Option<ITfContext> {
     let context = unsafe { composition?.GetRange().and_then(|range| range.GetContext()) }.ok()?;
     let owner = unsafe { context.GetDocumentMgr() }.ok()?;
     same_object(&owner, focus?).then_some(context)
@@ -1503,7 +1943,13 @@ fn composing_context(composition: Option<&ITfComposition>, focus: Option<&ITfDoc
 fn resume_composition(state: &Rc<RefCell<State>>, context: ITfContext) {
     state.borrow_mut().context = Some(context);
     // 焦点中途丢过的话服务进程已经当这个输入框不在用了：重新报上，顺便拿回这一页候选
-    let Some(mut frame) = call(state, &Request::Focus { active: true, before: None }) else {
+    let Some(mut frame) = call(
+        state,
+        &Request::Focus {
+            active: true,
+            before: None,
+        },
+    ) else {
         return;
     };
     frame.hint = None;
@@ -1522,7 +1968,10 @@ fn on_focus(state: &Rc<RefCell<State>>, focus: Option<&ITfDocumentMgr>) {
     focus_notice::observe(state, context.as_ref());
     // A rich editor can reassert the same focus during the commit, before
     // the prediction has even painted. Don't clear the new page or its range.
-    if context.as_ref().is_some_and(|context| prediction_in(&state.borrow(), context)) {
+    if context
+        .as_ref()
+        .is_some_and(|context| prediction_in(&state.borrow(), context))
+    {
         return;
     }
     let composition = state.borrow().composition.clone();
@@ -1532,35 +1981,67 @@ fn on_focus(state: &Rc<RefCell<State>>, focus: Option<&ITfDocumentMgr>) {
     }
     dismiss_prediction(state);
     let previous = state.borrow().context.clone();
-    let same_context = previous.as_ref().zip(context.as_ref()).is_some_and(|(old, new)| same_object(old, new));
-    let keep_move = same_context || previous.as_ref().zip(context.as_ref()).is_some_and(|(old, new)| {
-        let (suffix, client) = {
-            let service = state.borrow();
-            (service.caret_move.and_then(|_| service.pairs.last().map(pair::Pair::suffix)), service.client_id)
-        };
-        let Some(suffix) = suffix else { return false; };
-        if view_window(old).is_none_or(|window| Some(window) != view_window(new)) || disabled(Some(new)) { return false; }
-        let verified = Rc::new(std::cell::Cell::new(false));
-        let (result, target) = (verified.clone(), new.clone());
-        edit_with(new, client, TF_ES_SYNC | TF_ES_READ, move |cookie| {
-            result.set(!sensitive_scope(&target, cookie) && before_text(&target, cookie).is_some_and(|text| text.ends_with(&suffix)));
-            Ok(())
-        });
-        verified.get()
-    });
-    if !keep_move && state.borrow().caret_move.is_some() { pair::finish(state, false); }
+    let same_context = previous
+        .as_ref()
+        .zip(context.as_ref())
+        .is_some_and(|(old, new)| same_object(old, new));
+    let keep_move = same_context
+        || previous
+            .as_ref()
+            .zip(context.as_ref())
+            .is_some_and(|(old, new)| {
+                let (suffix, client) = {
+                    let service = state.borrow();
+                    (
+                        service
+                            .caret_move
+                            .and_then(|_| service.pairs.last().map(pair::Pair::suffix)),
+                        service.client_id,
+                    )
+                };
+                let Some(suffix) = suffix else {
+                    return false;
+                };
+                if view_window(old).is_none_or(|window| Some(window) != view_window(new))
+                    || disabled(Some(new))
+                {
+                    return false;
+                }
+                let verified = Rc::new(std::cell::Cell::new(false));
+                let (result, target) = (verified.clone(), new.clone());
+                edit_with(new, client, TF_ES_SYNC | TF_ES_READ, move |cookie| {
+                    result.set(
+                        !sensitive_scope(&target, cookie)
+                            && before_text(&target, cookie)
+                                .is_some_and(|text| text.ends_with(&suffix)),
+                    );
+                    Ok(())
+                });
+                verified.get()
+            });
+    if !keep_move && state.borrow().caret_move.is_some() {
+        pair::finish(state, false);
+    }
     {
         let mut s = state.borrow_mut();
         s.shift.cancel();
         s.prediction_escape = PredictionEscape::Free;
-        if !same_context { s.pairs.clear(); }
+        if !same_context {
+            s.pairs.clear();
+        }
         s.undo = None;
         s.last_caret = None;
     }
     with_window(state, |window| window.hide());
     let Some(context) = context else {
         state.borrow_mut().context = None;
-        if let Some(frame) = call(state, &Request::Focus { active: false, before: None }) {
+        if let Some(frame) = call(
+            state,
+            &Request::Focus {
+                active: false,
+                before: None,
+            },
+        ) {
             note_frame(state, &frame);
         }
         return;
@@ -1580,32 +2061,58 @@ fn on_focus(state: &Rc<RefCell<State>>, focus: Option<&ITfDocumentMgr>) {
     // 读光标前的字和光标位置要编辑会话；这里不能同步要，异步做完再告诉服务进程
     let (state2, context2) = (state.clone(), context.clone());
     let generation = state.borrow().generation;
-    edit_with(&context, client_id, TF_ES_ASYNCDONTCARE | TF_ES_READ, move |ec| {
-        if state2.borrow().generation != generation { return Ok(()); }
-        if !state2.borrow().context.as_ref().is_some_and(|current| same_object(current, &context2)) { return Ok(()); }
-        let sensitive = sensitive_scope(&context2, ec);
-        state2.borrow_mut().sensitive_context = sensitive.then(|| context2.clone());
-        set_sensitive(&state2, sensitive);
-        if sensitive { return Ok(()); }
-        // A queued focus read can arrive after the first commit in this field.
-        if prediction_in(&state2.borrow(), &context2) { return Ok(()); }
-        let before = match surrounding(&context2) {
-            Surrounding::Tsf(target) if same_object(&target, &context2) => before_text(&context2, ec),
-            // 父文档要另开读锁；这里先报不知道，下一个键会照常读到
-            Surrounding::Tsf(_) => None,
-            Surrounding::Imm32 => imm32_before(&context2),
-        };
-        // 大写锁定可能在别的窗口里开关过：先对齐，下面拿到的中英文状态才是对的
-        let on = caps_on();
-        state2.borrow_mut().caps = on;
-        let _ = call(&state2, &Request::CapsLock { on });
-        let Some(frame) = call(&state2, &Request::Focus { active: true, before }) else {
-            return Ok(());
-        };
-        note_frame(&state2, &frame);
-        focus_notice::capture(&state2, frame);
-        Ok(())
-    });
+    edit_with(
+        &context,
+        client_id,
+        TF_ES_ASYNCDONTCARE | TF_ES_READ,
+        move |ec| {
+            if state2.borrow().generation != generation {
+                return Ok(());
+            }
+            if !state2
+                .borrow()
+                .context
+                .as_ref()
+                .is_some_and(|current| same_object(current, &context2))
+            {
+                return Ok(());
+            }
+            let sensitive = sensitive_scope(&context2, ec);
+            state2.borrow_mut().sensitive_context = sensitive.then(|| context2.clone());
+            set_sensitive(&state2, sensitive);
+            if sensitive {
+                return Ok(());
+            }
+            // A queued focus read can arrive after the first commit in this field.
+            if prediction_in(&state2.borrow(), &context2) {
+                return Ok(());
+            }
+            let before = match surrounding(&context2) {
+                Surrounding::Tsf(target) if same_object(&target, &context2) => {
+                    before_text(&context2, ec)
+                }
+                // 父文档要另开读锁；这里先报不知道，下一个键会照常读到
+                Surrounding::Tsf(_) => None,
+                Surrounding::Imm32 => imm32_before(&context2),
+            };
+            // 大写锁定可能在别的窗口里开关过：先对齐，下面拿到的中英文状态才是对的
+            let on = caps_on();
+            state2.borrow_mut().caps = on;
+            let _ = call(&state2, &Request::CapsLock { on });
+            let Some(frame) = call(
+                &state2,
+                &Request::Focus {
+                    active: true,
+                    before,
+                },
+            ) else {
+                return Ok(());
+            };
+            note_frame(&state2, &frame);
+            focus_notice::capture(&state2, frame);
+            Ok(())
+        },
+    );
 }
 
 impl ITfTextInputProcessor_Impl for TextService_Impl {
@@ -1617,7 +2124,11 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
         pair::finish(&self.state, false);
         finish_prediction_space(&self.state, true, false);
         let menu = std::mem::take(&mut self.state.borrow_mut().language_menu);
-        if menu == MenuState::Open { unsafe { let _ = EndMenu(); } }
+        if menu == MenuState::Open {
+            unsafe {
+                let _ = EndMenu();
+            }
+        }
         ui::set_click_handler(None);
         ui::set_caret_handler(None);
         self.state.borrow_mut().focus_notice = Default::default();
@@ -1627,7 +2138,9 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
         s.caret_move = None;
         if let Some(thread_mgr) = s.thread_mgr.take() {
             unsafe {
-                if let (Some(button), Ok(items)) = (s.button.take(), thread_mgr.cast::<ITfLangBarItemMgr>()) {
+                if let (Some(button), Ok(items)) =
+                    (s.button.take(), thread_mgr.cast::<ITfLangBarItemMgr>())
+                {
                     button.detach();
                     if let Some(item) = button.as_item() {
                         let _ = items.RemoveItem(&item);
@@ -1636,13 +2149,19 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
                 if let Ok(keystrokes) = thread_mgr.cast::<ITfKeystrokeMgr>() {
                     let _ = keystrokes.UnadviseKeyEventSink(s.client_id);
                 }
-                if let (Some(cookie), Ok(source)) = (s.thread_sink_cookie.take(), thread_mgr.cast::<ITfSource>()) {
+                if let (Some(cookie), Ok(source)) =
+                    (s.thread_sink_cookie.take(), thread_mgr.cast::<ITfSource>())
+                {
                     let _ = source.UnadviseSink(cookie);
                 }
-                if let (Some(cookie), Ok(source)) = (s.thread_focus_cookie.take(), thread_mgr.cast::<ITfSource>()) {
+                if let (Some(cookie), Ok(source)) =
+                    (s.thread_focus_cookie.take(), thread_mgr.cast::<ITfSource>())
+                {
                     let _ = source.UnadviseSink(cookie);
                 }
-                if let (Some(cookie), Some(source)) = (s.open_close_cookie.take(), open_close_source(&thread_mgr)) {
+                if let (Some(cookie), Some(source)) =
+                    (s.open_close_cookie.take(), open_close_source(&thread_mgr))
+                {
                     let _ = source.UnadviseSink(cookie);
                 }
             }
@@ -1676,15 +2195,25 @@ impl ITfTextInputProcessorEx_Impl for TextService_Impl {
             let keystrokes: ITfKeystrokeMgr = thread_mgr.cast()?;
             keystrokes.AdviseKeyEventSink(tid, &key_sink, true)?;
             let source: ITfSource = thread_mgr.cast()?;
-            let cookie = source.AdviseSink(&ITfThreadMgrEventSink::IID, &thread_sink).ok();
+            let cookie = source
+                .AdviseSink(&ITfThreadMgrEventSink::IID, &thread_sink)
+                .ok();
             self.state.borrow_mut().thread_sink_cookie = cookie;
-            let focus_sink: windows::Win32::UI::TextServices::ITfThreadFocusSink = self.to_interface();
-            match source.AdviseSink(&windows::Win32::UI::TextServices::ITfThreadFocusSink::IID, &focus_sink) {
+            let focus_sink: windows::Win32::UI::TextServices::ITfThreadFocusSink =
+                self.to_interface();
+            match source.AdviseSink(
+                &windows::Win32::UI::TextServices::ITfThreadFocusSink::IID,
+                &focus_sink,
+            ) {
                 Ok(cookie) => self.state.borrow_mut().thread_focus_cookie = Some(cookie),
                 Err(error) => crate::log::write("订阅线程焦点失败", &error.to_string()),
             }
             let open_close_sink: ITfCompartmentEventSink = self.to_interface();
-            let cookie = open_close_source(&thread_mgr).and_then(|source| source.AdviseSink(&ITfCompartmentEventSink::IID, &open_close_sink).ok());
+            let cookie = open_close_source(&thread_mgr).and_then(|source| {
+                source
+                    .AdviseSink(&ITfCompartmentEventSink::IID, &open_close_sink)
+                    .ok()
+            });
             self.state.borrow_mut().open_close_cookie = cookie;
         }
         let weak = Rc::downgrade(&self.state);
@@ -1693,7 +2222,9 @@ impl ITfTextInputProcessorEx_Impl for TextService_Impl {
             crate::log::write("语言栏图标监视启动失败", &error.to_string());
         }
         unsafe {
-            if let (Ok(items), Some(item)) = (thread_mgr.cast::<ITfLangBarItemMgr>(), button.as_item()) {
+            if let (Ok(items), Some(item)) =
+                (thread_mgr.cast::<ITfLangBarItemMgr>(), button.as_item())
+            {
                 let _ = items.AddItem(&item);
             }
         }
@@ -1712,7 +2243,9 @@ impl ITfTextInputProcessorEx_Impl for TextService_Impl {
         let weak = Rc::downgrade(&self.state);
         ui::set_click_handler(Some(Box::new(move |click| on_click(&weak, click))));
         let weak = Rc::downgrade(&self.state);
-        ui::set_caret_handler(Some(Box::new(move || weak.upgrade().is_some_and(|state| caret_tick(&state)))));
+        ui::set_caret_handler(Some(Box::new(move || {
+            weak.upgrade().is_some_and(|state| caret_tick(&state))
+        })));
         if let Some(focus) = focus {
             on_focus(&self.state, Some(&focus));
         }
@@ -1730,12 +2263,17 @@ fn note_key_down(state: &Rc<RefCell<State>>, wparam: WPARAM, lparam: LPARAM) {
     let mut s = state.borrow_mut();
     let modifiers = moment();
     s.shift.key_down(vk, modifiers, repeat);
-    if !keys::is_modifier(vk) { s.focus_notice.cancel(); }
+    if !keys::is_modifier(vk) {
+        s.focus_notice.cancel();
+    }
     if matches!(vk, 0x08 | 0x09 | 0x0d | 0x1b | 0x21..=0x28 | 0x2d | 0x2e)
-        || (!keys::is_modifier(vk) && modifiers.other_modifiers) {
+        || (!keys::is_modifier(vk) && modifiers.other_modifiers)
+    {
         let pending = s.caret_move.is_some();
         drop(s);
-        if pending { pair::finish(state, true); }
+        if pending {
+            pair::finish(state, true);
+        }
     }
 }
 
@@ -1749,19 +2287,32 @@ fn note_key_down(state: &Rc<RefCell<State>>, wparam: WPARAM, lparam: LPARAM) {
 /// 不吃这个键：应用照常收到 Shift 松开，不会以为 Shift 还按着。
 ///
 /// 成对标点还等着挪光标的话，修饰键一松开就去挪（见 [`caret_tick`]）。
-fn key_released(state: &Rc<RefCell<State>>, context: Option<&ITfContext>, wparam: WPARAM, lparam: LPARAM) {
+fn key_released(
+    state: &Rc<RefCell<State>>,
+    context: Option<&ITfContext>,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) {
     let vk = wparam.0 as u16;
     if own_input() {
-        if vk == VK_LEFT.0 && unsafe { GetMessageExtraInfo() }.0 as usize == keys::CARET_END_TAG
-            && state.borrow().pair_delivery.sent {
+        if vk == VK_LEFT.0
+            && unsafe { GetMessageExtraInfo() }.0 as usize == keys::CARET_END_TAG
+            && state.borrow().pair_delivery.sent
+        {
             state.borrow_mut().pair_delivery.released = true;
-            if pair::placement(state) != pair::Placement::AfterTerminal { pair::finish(state, true); }
+            if pair::placement(state) != pair::Placement::AfterTerminal {
+                pair::finish(state, true);
+            }
         }
         return;
     }
     state.borrow_mut().key_preview = None;
-    if vk == 0x20 { state.borrow_mut().ctrl_space_toggled = None; }
-    if vk == 0x08 { confirm_backspace(state, context); }
+    if vk == 0x20 {
+        state.borrow_mut().ctrl_space_toggled = None;
+    }
+    if vk == 0x08 {
+        confirm_backspace(state, context);
+    }
     if keys::is_modifier(vk) && state.borrow().caret_move.is_some() {
         caret_tick(state);
     }
@@ -1787,11 +2338,20 @@ fn key_released(state: &Rc<RefCell<State>>, context: Option<&ITfContext>, wparam
 
 /// A visible prediction owns plain Esc until release, including repeats
 /// after the window closes. A fresh press can still go to the application.
-fn prediction_escape_down(state: &Rc<RefCell<State>>, context: Option<&ITfContext>, key: Key, repeat: bool) -> bool {
-    if key.keysym != keysym::ESCAPE { return false; }
+fn prediction_escape_down(
+    state: &Rc<RefCell<State>>,
+    context: Option<&ITfContext>,
+    key: Key,
+    repeat: bool,
+) -> bool {
+    if key.keysym != keysym::ESCAPE {
+        return false;
+    }
     let (eat, close) = {
         let mut s = state.borrow_mut();
-        if repeat && s.prediction_escape == PredictionEscape::Held { return true; }
+        if repeat && s.prediction_escape == PredictionEscape::Held {
+            return true;
+        }
         let visible = context.is_some_and(|context| prediction_in(&s, context))
             && s.window.as_ref().is_some_and(|window| window.visible());
         let claimed = visible && plain_key(key);
@@ -1802,22 +2362,34 @@ fn prediction_escape_down(state: &Rc<RefCell<State>>, context: Option<&ITfContex
         };
         (claimed, claimed && !key.test)
     };
-    if close { dismiss_prediction(state); }
+    if close {
+        dismiss_prediction(state);
+    }
     eat
 }
 
 fn prediction_escape_up(state: &Rc<RefCell<State>>, wparam: WPARAM, test: bool) -> bool {
-    if own_input() || wparam.0 as u16 != 0x1b { return false; }
+    if own_input() || wparam.0 as u16 != 0x1b {
+        return false;
+    }
     let claimed = {
         let mut s = state.borrow_mut();
         let claimed = s.prediction_escape;
-        if claimed == PredictionEscape::Free { return false; }
-        s.prediction_escape = if test { PredictionEscape::Held } else { PredictionEscape::Free };
+        if claimed == PredictionEscape::Free {
+            return false;
+        }
+        s.prediction_escape = if test {
+            PredictionEscape::Held
+        } else {
+            PredictionEscape::Free
+        };
         claimed
     };
     // Do not forward an unmatched release. If the host omitted KeyDown
     // after a handled test, this still closes the window without editing text.
-    if claimed == PredictionEscape::Preview { dismiss_prediction(state); }
+    if claimed == PredictionEscape::Preview {
+        dismiss_prediction(state);
+    }
     true
 }
 
@@ -1826,7 +2398,9 @@ fn discard_prediction_from_other_context(state: &Rc<RefCell<State>>, context: &I
         let s = state.borrow();
         s.predicting && !prediction_in(&s, context)
     };
-    if stale { dismiss_prediction(state); }
+    if stale {
+        dismiss_prediction(state);
+    }
 }
 
 impl ITfKeyEventSink_Impl for TextService_Impl {
@@ -1852,14 +2426,18 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         let vk = wparam.0 as u16;
         note_key_down(&self.state, wparam, lparam);
         // 先取得正式按下回调，再同步落实预编辑空格；预询问不是应用已处理按键的屏障。
-        if vk != 0x1b && self.state.borrow().space.is_some() { return Ok(true.into()); }
+        if vk != 0x1b && self.state.borrow().space.is_some() {
+            return Ok(true.into());
+        }
         if vk == keys::VK_CAPITAL {
             caps_changed(&self.state, pic.as_ref());
         }
         if keys::is_modifier(vk) || check_sensitive(&self.state, pic.as_ref()) {
             return Ok(false.into());
         }
-        if let Some(context) = pic.as_ref() { discard_prediction_from_other_context(&self.state, context); }
+        if let Some(context) = pic.as_ref() {
+            discard_prediction_from_other_context(&self.state, context);
+        }
         watch_backspace(&self.state, pic.as_ref(), vk);
         let Some(key) = translate(wparam, lparam, true) else {
             dismiss_prediction(&self.state);
@@ -1868,35 +2446,64 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         };
         let repeat = lparam.0 & (1 << 30) != 0;
         // 同一消息已由按键回调或系统状态变化处理过；新按下不依赖上一回是否收到松开。
-        if keys::is_ctrl_space(&key) && ctrl_space_handled(&self.state, ms, repeat) { return Ok(true.into()); }
+        if keys::is_ctrl_space(&key) && ctrl_space_handled(&self.state, ms, repeat) {
+            return Ok(true.into());
+        }
         if prediction_escape_down(&self.state, pic.as_ref(), key, repeat)
-            || verified_pair_key(&self.state, pic.as_ref(), key).is_some() {
+            || verified_pair_key(&self.state, pic.as_ref(), key).is_some()
+        {
             return Ok(true.into());
         }
         let (key, prediction_space) = pic.as_ref().map_or((key, false), |context| {
-            prediction_space_key(&self.state, context, key, repeat, shown_revision(&self.state), ms)
+            prediction_space_key(
+                &self.state,
+                context,
+                key,
+                repeat,
+                shown_revision(&self.state),
+                ms,
+            )
         });
-        if prediction_space && key.keysym == 0x20 && self.state.borrow().predict_double_space { return Ok(true.into()); }
+        if prediction_space && key.keysym == 0x20 && self.state.borrow().predict_double_space {
+            return Ok(true.into());
+        }
         // 在决定接管按键前读取上文。若等到 OnKeyDown 才读，CUAS 的空文档会让
         // 自动空格从“接管并上屏”变成“放行”，重命名等输入框会丢掉这一次按键。
-        let before = pic.as_ref().filter(|_| !prediction_space).and_then(|context| key_before(&self.state, context));
+        let before = pic
+            .as_ref()
+            .filter(|_| !prediction_space)
+            .and_then(|context| key_before(&self.state, context));
         let revision = shown_revision(&self.state);
-        let frame = call(&self.state, &Request::PhysicalKey { key, before: before.clone(), scan: 0, shown_revision: Some(revision) });
+        let frame = call(
+            &self.state,
+            &Request::PhysicalKey {
+                key,
+                before: before.clone(),
+                scan: 0,
+                shown_revision: Some(revision),
+            },
+        );
         if let Some(frame) = &frame {
             // 放行的数字等会由宿主立即写入，无法进入延迟队列；不能让旧的左移键
             // 跟在这些文字后执行。接管的拼音仍保持等待左移完成的原有顺序。
-            if !frame.handled && self.state.borrow().caret_move.is_some() { pair::finish(&self.state, true); }
+            if !frame.handled && self.state.borrow().caret_move.is_some() {
+                pair::finish(&self.state, true);
+            }
             note_preview(&self.state, frame);
             if frame.handled {
                 if let Some(context) = pic.as_ref() {
                     self.state.borrow_mut().key_preview = Some(KeyPreview {
-                        key: Key { test: false, ..key }, context: context.clone(), before,
+                        key: Key { test: false, ..key },
+                        context: context.clone(),
+                        before,
                     });
                 }
             }
             // A passed-through key won't get OnKeyDown. The server has
             // already put the prediction aside; don't leave the old popup.
-            if !frame.handled && !frame.predict { clear_prediction(&self.state); }
+            if !frame.handled && !frame.predict {
+                clear_prediction(&self.state);
+            }
         }
         Ok(frame.is_some_and(|f| f.handled).into())
     }
@@ -1910,11 +2517,17 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         let vk = wparam.0 as u16;
         note_key_down(&self.state, wparam, lparam);
         let repeat = lparam.0 & (1 << 30) != 0;
-        let plain = plain_key(Key { modifiers: keys::modifiers(|vk| unsafe { GetKeyState(i32::from(vk)) }), ..Key::default() });
+        let plain = plain_key(Key {
+            modifiers: keys::modifiers(|vk| unsafe { GetKeyState(i32::from(vk)) }),
+            ..Key::default()
+        });
         if self.state.borrow().space.is_some() && (vk != 0x20 || repeat || !plain) {
             let erase = vk == 0x08 && plain;
             finish_prediction_space(&self.state, !erase, true);
-            if erase { dismiss_prediction(&self.state); return Ok(true.into()); }
+            if erase {
+                dismiss_prediction(&self.state);
+                return Ok(true.into());
+            }
         }
         if vk == keys::VK_CAPITAL {
             caps_changed(&self.state, pic.as_ref());
@@ -1931,8 +2544,12 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
             dismiss_prediction(&self.state);
             return Ok(composing(&self.state).into());
         };
-        if keys::is_ctrl_space(&key) && ctrl_space_handled(&self.state, ms, repeat) { return Ok(true.into()); }
-        if prediction_escape_down(&self.state, Some(&context), key, repeat) { return Ok(true.into()); }
+        if keys::is_ctrl_space(&key) && ctrl_space_handled(&self.state, ms, repeat) {
+            return Ok(true.into());
+        }
+        if prediction_escape_down(&self.state, Some(&context), key, repeat) {
+            return Ok(true.into());
+        }
         if let Some(action) = verified_pair_key(&self.state, Some(&context), key) {
             if let Some(mut frame) = call(&self.state, &Request::ClosePair) {
                 frame.pair_edit = Some(action);
@@ -1940,16 +2557,36 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                 return Ok(true.into());
             }
         }
-        let (key, prediction_space) = prediction_space_key(&self.state, &context, key, repeat, shown_revision(&self.state), ms);
-        if prediction_space && key.keysym == 0x20 && self.state.borrow().predict_double_space { return Ok(true.into()); }
-        let before = if prediction_space { None } else {
-            preview.filter(|preview| preview.key == key && same_object(&preview.context, &context))
+        let (key, prediction_space) = prediction_space_key(
+            &self.state,
+            &context,
+            key,
+            repeat,
+            shown_revision(&self.state),
+            ms,
+        );
+        if prediction_space && key.keysym == 0x20 && self.state.borrow().predict_double_space {
+            return Ok(true.into());
+        }
+        let before = if prediction_space {
+            None
+        } else {
+            preview
+                .filter(|preview| preview.key == key && same_object(&preview.context, &context))
                 .map(|preview| preview.before)
                 .unwrap_or_else(|| key_before(&self.state, &context))
         };
         let scan = ((lparam.0 >> 16) & 0x1ff) as u16;
         let revision = shown_revision(&self.state);
-        let frame = match call(&self.state, &Request::PhysicalKey { key, before, scan, shown_revision: Some(revision) }) {
+        let frame = match call(
+            &self.state,
+            &Request::PhysicalKey {
+                key,
+                before,
+                scan,
+                shown_revision: Some(revision),
+            },
+        ) {
             Some(frame) => frame,
             None => {
                 // 服务进程没了：结束编辑区，键交给应用
@@ -1962,9 +2599,18 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         };
         let handled = frame.handled;
         // 部分宿主直接调用正式按键回调，仍需在把键交给宿主前取消旧移动。
-        if !handled && self.state.borrow().caret_move.is_some() { pair::finish(&self.state, true); }
-        if handled && keys::is_ctrl_space(&key) { self.state.borrow_mut().ctrl_space_toggled = Some(ms); }
-        let visible = self.state.borrow().window.as_ref().is_some_and(|w| w.visible());
+        if !handled && self.state.borrow().caret_move.is_some() {
+            pair::finish(&self.state, true);
+        }
+        if handled && keys::is_ctrl_space(&key) {
+            self.state.borrow_mut().ctrl_space_toggled = Some(ms);
+        }
+        let visible = self
+            .state
+            .borrow()
+            .window
+            .as_ref()
+            .is_some_and(|w| w.visible());
         if handled || frame.commit.is_some() || composing(&self.state) || visible {
             apply(&self.state, Some(&context), frame, true);
         } else {
@@ -1974,13 +2620,17 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
     }
 
     fn OnTestKeyUp(&self, pic: Ref<ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
-        if prediction_escape_up(&self.state, wparam, true) { return Ok(true.into()); }
+        if prediction_escape_up(&self.state, wparam, true) {
+            return Ok(true.into());
+        }
         key_released(&self.state, pic.as_ref(), wparam, lparam);
         Ok(false.into())
     }
 
     fn OnKeyUp(&self, pic: Ref<ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
-        if prediction_escape_up(&self.state, wparam, false) { return Ok(true.into()); }
+        if prediction_escape_up(&self.state, wparam, false) {
+            return Ok(true.into());
+        }
         key_released(&self.state, pic.as_ref(), wparam, lparam);
         Ok(false.into())
     }
@@ -1992,11 +2642,18 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
 
 impl ITfCompartmentEventSink_Impl for TextService_Impl {
     fn OnChange(&self, rguid: *const GUID) -> Result<()> {
-        if unsafe { rguid.as_ref() } != Some(&GUID_COMPARTMENT_KEYBOARD_OPENCLOSE) { return Ok(()); }
+        if unsafe { rguid.as_ref() } != Some(&GUID_COMPARTMENT_KEYBOARD_OPENCLOSE) {
+            return Ok(());
+        }
         // 应用或系统改这个状态的时机不受我们控制；正在改 State 时不处理，避免在宿主进程里 panic
-        let Ok(thread_mgr) = self.state.try_borrow().map(|s| s.thread_mgr.clone()) else { return Ok(()) };
-        let closed = thread_mgr.and_then(|t| t.cast::<ITfCompartmentMgr>().ok())
-            .is_some_and(|mgr| compartment_value(&mgr, &GUID_COMPARTMENT_KEYBOARD_OPENCLOSE) == Some(0));
+        let Ok(thread_mgr) = self.state.try_borrow().map(|s| s.thread_mgr.clone()) else {
+            return Ok(());
+        };
+        let closed = thread_mgr
+            .and_then(|t| t.cast::<ITfCompartmentMgr>().ok())
+            .is_some_and(|mgr| {
+                compartment_value(&mgr, &GUID_COMPARTMENT_KEYBOARD_OPENCLOSE) == Some(0)
+            });
         let held = unsafe {
             let down = |vk: i32| GetAsyncKeyState(vk) < 0;
             down(0x11) && down(0x20) && !down(0x10) && !down(0x12) && !down(0x5b) && !down(0x5c)
@@ -2034,12 +2691,25 @@ impl ITfThreadMgrEventSink_Impl for TextService_Impl {
 impl ITfCompositionSink_Impl for TextService_Impl {
     /// 应用结束了编辑区（点了别处、切了输入框）：编辑区的字留在文档里，会话清空。
     fn OnCompositionTerminated(&self, _ec: u32, composition: Ref<ITfComposition>) -> Result<()> {
-        let Some(composition) = composition.as_ref() else { return Ok(()); };
-        let pending = self.state.borrow().space.as_ref().is_some_and(|space| same_object(&space.composition, composition));
+        let Some(composition) = composition.as_ref() else {
+            return Ok(());
+        };
+        let pending = self
+            .state
+            .borrow()
+            .space
+            .as_ref()
+            .is_some_and(|space| same_object(&space.composition, composition));
         if pending {
             take_prediction_space(&self.state);
             clear_prediction(&self.state);
-        } else if !self.state.borrow().composition.as_ref().is_some_and(|current| same_object(current, composition)) {
+        } else if !self
+            .state
+            .borrow()
+            .composition
+            .as_ref()
+            .is_some_and(|current| same_object(current, composition))
+        {
             // 输入法主动结束的旧编辑区，不能清掉已开始的下一次输入。
             return Ok(());
         }
@@ -2054,16 +2724,26 @@ impl ITfCompositionSink_Impl for TextService_Impl {
 
 impl ITfTextLayoutSink_Impl for TextService_Impl {
     /// 应用排好了版（浏览器类应用打字后一会儿才给得出位置）：候选窗挪到编辑区下面。
-    fn OnLayoutChange(&self, pic: Ref<ITfContext>, _lcode: TfLayoutCode, _view: Ref<ITfContextView>) -> Result<()> {
+    fn OnLayoutChange(
+        &self,
+        pic: Ref<ITfContext>,
+        _lcode: TfLayoutCode,
+        _view: Ref<ITfContextView>,
+    ) -> Result<()> {
         let Some(context) = pic.as_ref().cloned() else {
             return Ok(());
         };
         // RichEdit 等宿主会在我们改状态或摆候选窗时同步发来排版通知。这时跳过，
         // 编辑区下一次排版或下一个键会再摆一次；在宿主进程里 panic 会直接让应用崩溃。
-        let Ok((composition, client_id, generation)) = self.state.try_borrow().map(|s| (
-            s.composition.clone().or_else(|| s.space.as_ref().map(|space| space.composition.clone())),
-            s.client_id, s.generation,
-        )) else {
+        let Ok((composition, client_id, generation)) = self.state.try_borrow().map(|s| {
+            (
+                s.composition
+                    .clone()
+                    .or_else(|| s.space.as_ref().map(|space| space.composition.clone())),
+                s.client_id,
+                s.generation,
+            )
+        }) else {
             return Ok(());
         };
         let Some(composition) = composition else {
@@ -2071,21 +2751,33 @@ impl ITfTextLayoutSink_Impl for TextService_Impl {
         };
         let state = self.state.clone();
         let context2 = context.clone();
-        edit_with(&context, client_id, TF_ES_ASYNCDONTCARE | TF_ES_READ, move |ec| {
-            if state.try_borrow().map_or(true, |s| s.generation != generation) { return Ok(()); }
-            let rect = unsafe { composition.GetRange() }
-                .ok()
-                .and_then(|range| text_rect(&context2, ec, &range));
-            if let Some(rect) = rect {
+        edit_with(
+            &context,
+            client_id,
+            TF_ES_ASYNCDONTCARE | TF_ES_READ,
+            move |ec| {
+                if state
+                    .try_borrow()
+                    .map_or(true, |s| s.generation != generation)
                 {
-                    let Ok(mut s) = state.try_borrow_mut() else { return Ok(()); };
-                    s.caret = Some(rect);
-                    s.last_caret = Some(rect);
+                    return Ok(());
                 }
-                with_window(&state, |window| window.reposition(rect));
-            }
-            Ok(())
-        });
+                let rect = unsafe { composition.GetRange() }
+                    .ok()
+                    .and_then(|range| text_rect(&context2, ec, &range));
+                if let Some(rect) = rect {
+                    {
+                        let Ok(mut s) = state.try_borrow_mut() else {
+                            return Ok(());
+                        };
+                        s.caret = Some(rect);
+                        s.last_caret = Some(rect);
+                    }
+                    with_window(&state, |window| window.reposition(rect));
+                }
+                Ok(())
+            },
+        );
         Ok(())
     }
 }
@@ -2098,7 +2790,14 @@ mod tests {
     fn component_handoff_waits_for_input_and_caret_completion() {
         let service = TextService::new(HINSTANCE::default());
         assert!(service.can_reload());
-        note_frame(&service.state, &Frame { preedit: "ni".into(), handled: true, ..Frame::default() });
+        note_frame(
+            &service.state,
+            &Frame {
+                preedit: "ni".into(),
+                handled: true,
+                ..Frame::default()
+            },
+        );
         assert!(!service.can_reload(), "正在组字时不能替换实现");
         note_frame(&service.state, &Frame::default());
         service.state.borrow_mut().caret_move = Some(keys::CaretMove::new(1, 0));
@@ -2110,22 +2809,45 @@ mod tests {
     #[test]
     fn predicted_key_does_not_start_or_end_document_composition() {
         let service = TextService::new(HINSTANCE::default());
-        let predicted = Frame { handled: true, preedit: "ni".into(), ..Frame::default() };
+        let predicted = Frame {
+            handled: true,
+            preedit: "ni".into(),
+            ..Frame::default()
+        };
         note_preview(&service.state, &predicted);
-        assert!(!composing(&service.state), "尚未接受的按键不能使 DLL 提前进入组字状态");
+        assert!(
+            !composing(&service.state),
+            "尚未接受的按键不能使 DLL 提前进入组字状态"
+        );
         note_frame(&service.state, &predicted);
         assert!(composing(&service.state));
-        let predicted_commit = Frame { handled: true, commit: Some("你".into()), ..Frame::default() };
+        let predicted_commit = Frame {
+            handled: true,
+            commit: Some("你".into()),
+            ..Frame::default()
+        };
         note_preview(&service.state, &predicted_commit);
-        assert!(composing(&service.state), "预判上屏也不能提前结束正在进行的组字");
+        assert!(
+            composing(&service.state),
+            "预判上屏也不能提前结束正在进行的组字"
+        );
     }
 
     #[test]
     fn next_word_predictions_are_not_a_composition() {
         let service = TextService::new(HINSTANCE::default());
-        let frame = Frame { handled: true, commit: Some("今天".into()), candidates: vec!["下雨".into()], predict: true, ..Frame::default() };
+        let frame = Frame {
+            handled: true,
+            commit: Some("今天".into()),
+            candidates: vec!["下雨".into()],
+            predict: true,
+            ..Frame::default()
+        };
         note_frame(&service.state, &frame);
-        assert!(!composing(&service.state), "联想词显示着时不认的键要交给应用，还要照常读光标前的字");
+        assert!(
+            !composing(&service.state),
+            "联想词显示着时不认的键要交给应用，还要照常读光标前的字"
+        );
         assert!(service.state.borrow().predicting);
         note_frame(&service.state, &Frame::default());
         assert!(!service.state.borrow().predicting);

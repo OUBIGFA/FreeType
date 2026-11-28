@@ -59,7 +59,8 @@ impl WordLm {
         let path = path.as_ref();
         let file = std::fs::File::open(path).with_context(|| format!("读取 {}", path.display()))?;
         // 安装目录的模型只读、由安装器整体替换；映射页可被系统回收，不占 30 多 MB 私有内存。
-        let map = unsafe { memmap2::Mmap::map(&file) }.with_context(|| format!("映射 {}", path.display()))?;
+        let map = unsafe { memmap2::Mmap::map(&file) }
+            .with_context(|| format!("映射 {}", path.display()))?;
         Self::from_data(Box::new(map)).with_context(|| format!("解析 {}", path.display()))
     }
 
@@ -105,8 +106,11 @@ impl WordLm {
         let scores = r.take(m * 4)?;
         let start = |i: usize| le_u32(starts, i * 4);
         let cur = |i: usize| le_u32(curs, i * 4);
-        if start(0) != 0 || start(n) != m as u32 || (0..n).any(|i| start(i) > start(i + 1))
-            || (0..m).any(|i| cur(i) as usize >= n) {
+        if start(0) != 0
+            || start(n) != m as u32
+            || (0..n).any(|i| start(i) > start(i + 1))
+            || (0..m).any(|i| cur(i) as usize >= n)
+        {
             bail!("二元组索引坏了");
         }
         for i in 0..n {
@@ -114,8 +118,11 @@ impl WordLm {
                 bail!("二元组编号未严格递增");
             }
         }
-        if backoff.chunks_exact(4).chain(scores.chunks_exact(4))
-            .any(|value| !f32::from_le_bytes(value.try_into().unwrap()).is_finite()) {
+        if backoff
+            .chunks_exact(4)
+            .chain(scores.chunks_exact(4))
+            .any(|value| !f32::from_le_bytes(value.try_into().unwrap()).is_finite())
+        {
             bail!("词级模型含非有限分数");
         }
         if r.at != data.len() {
@@ -227,7 +234,12 @@ impl LanguageModel for WordLm {
         };
         let mut items: Vec<(String, f64)> = self
             .row(p)
-            .map(|i| (self.words[self.cur(i) as usize].clone(), self.pair_score(i) as f64))
+            .map(|i| {
+                (
+                    self.words[self.cur(i) as usize].clone(),
+                    self.pair_score(i) as f64,
+                )
+            })
             .collect();
         items.sort_by(|x, y| y.1.total_cmp(&x.1).then_with(|| x.0.cmp(&y.0)));
         items.truncate(limit);
@@ -400,19 +412,36 @@ mod tests {
     fn rejects_invalid_word_indexes_and_nonfinite_scores_before_querying() {
         // Two words, one transition from <s> to 好. Offsets are part of WTLM v1.
         let mut valid = Vec::from(*MAGIC);
-        for value in [VERSION, 2, 1] { valid.extend(value.to_le_bytes()); }
+        for value in [VERSION, 2, 1] {
+            valid.extend(value.to_le_bytes());
+        }
         for word in ["<s>", "好"] {
             valid.push(word.len() as u8);
             valid.extend(word.as_bytes());
         }
-        for value in [0.0f32, 0.0] { valid.extend(value.to_le_bytes()); }
-        for value in [0u32, 1, 1, 1] { valid.extend(value.to_le_bytes()); }
+        for value in [0.0f32, 0.0] {
+            valid.extend(value.to_le_bytes());
+        }
+        for value in [0u32, 1, 1, 1] {
+            valid.extend(value.to_le_bytes());
+        }
         valid.extend(1.0f32.to_le_bytes());
-        assert_eq!(WordLm::from_bytes(&valid).unwrap().top_next("<s>", 1)[0].0, "好");
-        for (offset, bits) in [(44, 2u32), (32, 1), (24, f32::NAN.to_bits()), (48, f32::INFINITY.to_bits())] {
+        assert_eq!(
+            WordLm::from_bytes(&valid).unwrap().top_next("<s>", 1)[0].0,
+            "好"
+        );
+        for (offset, bits) in [
+            (44, 2u32),
+            (32, 1),
+            (24, f32::NAN.to_bits()),
+            (48, f32::INFINITY.to_bits()),
+        ] {
             let mut invalid = valid.clone();
             invalid[offset..offset + 4].copy_from_slice(&bits.to_le_bytes());
-            assert!(WordLm::from_bytes(&invalid).is_err(), "accepted corrupt WTLM field at {offset}");
+            assert!(
+                WordLm::from_bytes(&invalid).is_err(),
+                "accepted corrupt WTLM field at {offset}"
+            );
         }
     }
 

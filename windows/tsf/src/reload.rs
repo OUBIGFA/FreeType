@@ -116,12 +116,20 @@ struct State {
 
 /// 只读目录项里的修改时间和大小，不打开文件（每个输入线程每秒一次，打开文件会触发杀毒扫描）。
 fn file_stamp(path: &Path) -> Option<(u64, u32)> {
-    use windows::Win32::Storage::FileSystem::{GetFileAttributesExW, GetFileExInfoStandard, WIN32_FILE_ATTRIBUTE_DATA};
+    use windows::Win32::Storage::FileSystem::{
+        GetFileAttributesExW, GetFileExInfoStandard, WIN32_FILE_ATTRIBUTE_DATA,
+    };
     let mut data = WIN32_FILE_ATTRIBUTE_DATA::default();
     unsafe {
-        GetFileAttributesExW(&HSTRING::from(path.as_os_str()), GetFileExInfoStandard, &mut data as *mut _ as *mut c_void).ok()?;
+        GetFileAttributesExW(
+            &HSTRING::from(path.as_os_str()),
+            GetFileExInfoStandard,
+            &mut data as *mut _ as *mut c_void,
+        )
+        .ok()?;
     }
-    let time = u64::from(data.ftLastWriteTime.dwHighDateTime) << 32 | u64::from(data.ftLastWriteTime.dwLowDateTime);
+    let time = u64::from(data.ftLastWriteTime.dwHighDateTime) << 32
+        | u64::from(data.ftLastWriteTime.dwLowDateTime);
     Some((time, data.nFileSizeLow))
 }
 

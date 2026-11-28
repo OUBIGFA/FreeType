@@ -1,7 +1,7 @@
 package main
 
 import (
-    "context"
+	"context"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -16,13 +16,13 @@ import (
 // settings 是设置窗口的状态。界面在主线程上画；找服务进程的事放到 goroutine 里做，
 // 做完用 apply 回到主线程改状态。
 type settings struct {
-    enhancement EnhancementStatus
-    enhancementBusy, enhancementRefreshing, enhancementDownloaded, confirmEnhancementDelete bool
-    enhancementChecked time.Time
-    enhancementCancel context.CancelFunc
-    enhancementGeneration uint64
-	backend Backend
-	version string
+	enhancement                                                                             EnhancementStatus
+	enhancementBusy, enhancementRefreshing, enhancementDownloaded, confirmEnhancementDelete bool
+	enhancementChecked                                                                      time.Time
+	enhancementCancel                                                                       context.CancelFunc
+	enhancementGeneration                                                                   uint64
+	backend                                                                                 Backend
+	version                                                                                 string
 	// apply 在主线程上执行 fn 并重画；测试里直接执行。
 	apply func(fn func())
 	// inline：后台的事也在当前线程做完（测试用）。

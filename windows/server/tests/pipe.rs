@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use freetype_protocol::{decode, encode, pipe_name, DefaultMode, Frame, Key, Mode, Request, Response};
+use freetype_protocol::{
+    decode, encode, pipe_name, DefaultMode, Frame, Key, Mode, Request, Response,
+};
 
 struct Server {
     root: PathBuf,
@@ -30,7 +32,12 @@ impl Server {
         let sid = freetype_server::pipe::current_user_sid().unwrap();
         let pipe = format!("{}-{instance}", pipe_name(&sid));
         let child = Self::launch(&root, &instance);
-        Self { root, pipe, child, instance }
+        Self {
+            root,
+            pipe,
+            child,
+            instance,
+        }
     }
 
     fn launch(root: &Path, instance: &str) -> std::process::Child {
@@ -47,7 +54,10 @@ impl Server {
         assert!(self.connect().call(&Request::Shutdown).ok);
         let started = Instant::now();
         while self.child.try_wait().unwrap().is_none() {
-            assert!(started.elapsed() < Duration::from_secs(5), "服务进程没有退出");
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "服务进程没有退出"
+            );
             std::thread::sleep(Duration::from_millis(50));
         }
         self.child = Self::launch(&self.root, &self.instance);
@@ -56,7 +66,11 @@ impl Server {
     fn connect(&self) -> Connection {
         let started = Instant::now();
         loop {
-            match std::fs::OpenOptions::new().read(true).write(true).open(&self.pipe) {
+            match std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&self.pipe)
+            {
                 Ok(file) => {
                     return Connection {
                         reader: BufReader::new(file.try_clone().unwrap()),
@@ -98,7 +112,9 @@ impl Connection {
             modifiers: 0,
             test: false,
         };
-        self.call(&Request::Key { key, before: None }).frame.unwrap()
+        self.call(&Request::Key { key, before: None })
+            .frame
+            .unwrap()
     }
 }
 
@@ -108,11 +124,21 @@ fn typing_through_the_pipe() {
     let mut conn = server.connect();
     let started = Instant::now();
     loop {
-        let status = conn.call(&Request::Hello { session: true, app: "test.exe".into() }).status.unwrap();
+        let status = conn
+            .call(&Request::Hello {
+                session: true,
+                app: "test.exe".into(),
+            })
+            .status
+            .unwrap();
         if status.ready {
             break;
         }
-        assert!(started.elapsed() < Duration::from_secs(20), "词库一直没载入：{:?}", status.error);
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "词库一直没载入：{:?}",
+            status.error
+        );
         std::thread::sleep(Duration::from_millis(50));
     }
     for c in "niha".chars() {
@@ -139,7 +165,10 @@ fn typing_through_the_pipe() {
 
     // 第二条连接是另一个输入框：互不影响
     let mut other = server.connect();
-    other.call(&Request::Hello { session: true, app: "test.exe".into() });
+    other.call(&Request::Hello {
+        session: true,
+        app: "test.exe".into(),
+    });
     other.key('n');
     assert!(conn.key('h').preedit.starts_with('h'));
 
@@ -149,7 +178,10 @@ fn typing_through_the_pipe() {
     let mut server = server;
     let started = Instant::now();
     while server.child.try_wait().unwrap().is_none() {
-        assert!(started.elapsed() < Duration::from_secs(5), "收到退出请求后没有退出");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "收到退出请求后没有退出"
+        );
         std::thread::sleep(Duration::from_millis(50));
     }
     assert!(server.root.join("data").join("quick_phrases.txt").exists());
@@ -161,31 +193,70 @@ fn global_mode_survives_process_restart_and_keycaps_round_trip() {
     let mut first = server.connect();
     let started = Instant::now();
     loop {
-        let status = first.call(&Request::Hello { session: true, app: "first.exe".into() }).status.unwrap();
-        if status.ready { break; }
-        assert!(started.elapsed() < Duration::from_secs(20), "词库未载入：{:?}", status.error);
+        let status = first
+            .call(&Request::Hello {
+                session: true,
+                app: "first.exe".into(),
+            })
+            .status
+            .unwrap();
+        if status.ready {
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "词库未载入：{:?}",
+            status.error
+        );
         std::thread::sleep(Duration::from_millis(50));
     }
     first.key('b');
     let frame = first.key('a');
-    let index = frame.candidates.iter().position(|s| s == "8️⃣").expect("应保留上游数字表情");
+    let index = frame
+        .candidates
+        .iter()
+        .position(|s| s == "8️⃣")
+        .expect("应保留上游数字表情");
     let selected = first.call(&Request::Select { index }).frame.unwrap();
-    assert_eq!(selected.commit.as_deref(), Some("8️⃣"), "跨管道仍是完整的表情序列");
+    assert_eq!(
+        selected.commit.as_deref(),
+        Some("8️⃣"),
+        "跨管道仍是完整的表情序列"
+    );
     let mut config = first.call(&Request::GetConfig).config.unwrap();
     config.default_mode = DefaultMode::Global;
     config.mode_scope = "app".into();
     assert!(first.call(&Request::SetConfig { config }).ok);
-    assert_eq!(first.call(&Request::ToggleMode { shift: None }).frame.unwrap().mode, Mode::English);
+    assert_eq!(
+        first
+            .call(&Request::ToggleMode { shift: None })
+            .frame
+            .unwrap()
+            .mode,
+        Mode::English
+    );
     let mut second = server.connect();
-    second.call(&Request::Hello { session: true, app: "second.exe".into() });
+    second.call(&Request::Hello {
+        session: true,
+        app: "second.exe".into(),
+    });
     assert!(!second.key('n').handled, "另一个应用立即沿用英文状态");
     drop(first);
     drop(second);
     server.restart();
     let mut restarted = server.connect();
-    let status = restarted.call(&Request::Hello { session: true, app: "third.exe".into() }).status.unwrap();
+    let status = restarted
+        .call(&Request::Hello {
+            session: true,
+            app: "third.exe".into(),
+        })
+        .status
+        .unwrap();
     assert_eq!(status.mode, Mode::English);
-    assert!(!restarted.key('n').handled, "新进程也沿用最后主动选择的英文状态");
+    assert!(
+        !restarted.key('n').handled,
+        "新进程也沿用最后主动选择的英文状态"
+    );
 }
 
 #[test]
@@ -194,28 +265,73 @@ fn common_phrases_and_all_settings_backup_round_trip_through_real_pipe() {
     let mut conn = server.connect();
     let started = Instant::now();
     loop {
-        let status = conn.call(&Request::Hello { session: true, app: "profile.exe".into() }).status.unwrap();
-        if status.ready { break; }
-        assert!(started.elapsed() < Duration::from_secs(20), "词库未载入：{:?}", status.error);
+        let status = conn
+            .call(&Request::Hello {
+                session: true,
+                app: "profile.exe".into(),
+            })
+            .status
+            .unwrap();
+        if status.ready {
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "词库未载入：{:?}",
+            status.error
+        );
         std::thread::sleep(Duration::from_millis(50));
     }
-    assert!(conn.call(&Request::SetCommonPhrases { phrases: vec!["打tag\n下一行".into()] }).ok);
-    conn.key('v'); conn.key(' '); conn.key('2');
+    assert!(
+        conn.call(&Request::SetCommonPhrases {
+            phrases: vec!["打tag\n下一行".into()]
+        })
+        .ok
+    );
+    conn.key('v');
+    conn.key(' ');
+    conn.key('2');
     assert_eq!(conn.key('1').commit.as_deref(), Some("打 tag\n下一行"));
-    conn.call(&Request::AddUserWord { word: "阿特".into(), pinyin: "a te".into() });
+    conn.call(&Request::AddUserWord {
+        word: "阿特".into(),
+        pinyin: "a te".into(),
+    });
     let path = server.root.join("all.json").display().to_string();
-    assert!(conn.call(&Request::ExportSettings { path: path.clone(), parts: None }).ok);
-    assert!(conn.call(&Request::SetCommonPhrases { phrases: Vec::new() }).ok);
+    assert!(
+        conn.call(&Request::ExportSettings {
+            path: path.clone(),
+            parts: None
+        })
+        .ok
+    );
+    assert!(
+        conn.call(&Request::SetCommonPhrases {
+            phrases: Vec::new()
+        })
+        .ok
+    );
     assert!(conn.call(&Request::ClearLearned).ok);
-    assert!(conn.call(&Request::InspectSettingsBackup { path: path.clone() }).ok);
+    assert!(
+        conn.call(&Request::InspectSettingsBackup { path: path.clone() })
+            .ok
+    );
     let restored = conn.call(&Request::ImportSettings { path });
     assert!(restored.ok, "{:?}", restored.error);
     assert_eq!(restored.common_phrases.unwrap(), vec!["打tag\n下一行"]);
-    assert!(restored.user_words.unwrap().iter().any(|word| word.word == "阿特"));
+    assert!(restored
+        .user_words
+        .unwrap()
+        .iter()
+        .any(|word| word.word == "阿特"));
     drop(conn);
     server.restart();
     let mut conn = server.connect();
-    assert_eq!(conn.call(&Request::ListCommonPhrases).common_phrases.unwrap(), vec!["打tag\n下一行"]);
+    assert_eq!(
+        conn.call(&Request::ListCommonPhrases)
+            .common_phrases
+            .unwrap(),
+        vec!["打tag\n下一行"]
+    );
 }
 
 struct LowIntegrity;
@@ -226,8 +342,8 @@ impl LowIntegrity {
         use windows::Win32::Foundation::{CloseHandle, LocalFree, HANDLE, HLOCAL};
         use windows::Win32::Security::Authorization::ConvertStringSidToSidW;
         use windows::Win32::Security::{
-            ImpersonateSelf, SetTokenInformation, SecurityImpersonation, TokenIntegrityLevel,
-            PSID, SID_AND_ATTRIBUTES, TOKEN_ADJUST_DEFAULT, TOKEN_MANDATORY_LABEL, TOKEN_QUERY,
+            ImpersonateSelf, SecurityImpersonation, SetTokenInformation, TokenIntegrityLevel, PSID,
+            SID_AND_ATTRIBUTES, TOKEN_ADJUST_DEFAULT, TOKEN_MANDATORY_LABEL, TOKEN_QUERY,
         };
         use windows::Win32::System::SystemServices::SE_GROUP_INTEGRITY;
         use windows::Win32::System::Threading::{GetCurrentThread, OpenThreadToken};
@@ -235,14 +351,25 @@ impl LowIntegrity {
             ImpersonateSelf(SecurityImpersonation).unwrap();
             let guard = Self;
             let mut token = HANDLE::default();
-            OpenThreadToken(GetCurrentThread(), TOKEN_QUERY | TOKEN_ADJUST_DEFAULT, true, &mut token).unwrap();
+            OpenThreadToken(
+                GetCurrentThread(),
+                TOKEN_QUERY | TOKEN_ADJUST_DEFAULT,
+                true,
+                &mut token,
+            )
+            .unwrap();
             let mut sid = PSID::default();
             ConvertStringSidToSidW(w!("S-1-16-4096"), &mut sid).unwrap();
             let label = TOKEN_MANDATORY_LABEL {
-                Label: SID_AND_ATTRIBUTES { Sid: sid, Attributes: SE_GROUP_INTEGRITY as u32 },
+                Label: SID_AND_ATTRIBUTES {
+                    Sid: sid,
+                    Attributes: SE_GROUP_INTEGRITY as u32,
+                },
             };
             let result = SetTokenInformation(
-                token, TokenIntegrityLevel, (&label as *const TOKEN_MANDATORY_LABEL).cast(),
+                token,
+                TokenIntegrityLevel,
+                (&label as *const TOKEN_MANDATORY_LABEL).cast(),
                 std::mem::size_of::<TOKEN_MANDATORY_LABEL>() as u32,
             );
             let _ = LocalFree(Some(HLOCAL(sid.0)));
@@ -265,33 +392,88 @@ fn low_integrity_clients_can_type_but_cannot_manage_or_export_user_data() {
     let mut normal = server.connect();
     let started = Instant::now();
     loop {
-        let status = normal.call(&Request::Hello { session: true, app: "test.exe".into() }).status.unwrap();
-        if status.ready { break; }
-        assert!(started.elapsed() < Duration::from_secs(20), "词库未载入：{:?}", status.error);
+        let status = normal
+            .call(&Request::Hello {
+                session: true,
+                app: "test.exe".into(),
+            })
+            .status
+            .unwrap();
+        if status.ready {
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "词库未载入：{:?}",
+            status.error
+        );
         std::thread::sleep(Duration::from_millis(50));
     }
     let target = server.root.join("outside-data.json");
     {
         let _identity = LowIntegrity::enter();
         let mut restricted = server.connect();
-        assert!(restricted.call(&Request::Hello { session: true, app: "sandbox.exe".into() }).ok);
-        for letter in "nihao".chars() { assert!(restricted.key(letter).handled); }
+        assert!(
+            restricted
+                .call(&Request::Hello {
+                    session: true,
+                    app: "sandbox.exe".into()
+                })
+                .ok
+        );
+        for letter in "nihao".chars() {
+            assert!(restricted.key(letter).handled);
+        }
         assert_eq!(restricted.key(' ').commit.as_deref(), Some("你好"));
-        assert_eq!(restricted.call(&Request::Status).status.unwrap().input_idle_seconds, None,
-            "低完整性客户端不能读取输入节奏");
-        let icon = restricted.call(&Request::GetBrandIcon { known_revision: None });
+        assert_eq!(
+            restricted
+                .call(&Request::Status)
+                .status
+                .unwrap()
+                .input_idle_seconds,
+            None,
+            "低完整性客户端不能读取输入节奏"
+        );
+        let icon = restricted.call(&Request::GetBrandIcon {
+            known_revision: None,
+        });
         assert!(icon.ok, "低完整性宿主仍应能读取用于显示的图像");
         assert_eq!(icon.brand_icon.unwrap().appearance, "default");
         assert!(icon.config.is_none(), "图标读取不能附带用户设置");
-        let export = restricted.call(&Request::ExportSettings { path: target.display().to_string(), parts: None });
+        let export = restricted.call(&Request::ExportSettings {
+            path: target.display().to_string(),
+            parts: None,
+        });
         assert!(!export.ok, "低完整性进程不应借服务进程写入用户文件");
-        for request in [Request::GetConfig, Request::ListUserWords, Request::ClearLearned, Request::Shutdown] {
-            assert!(!restricted.call(&request).ok, "低完整性客户端不应执行 {request:?}");
+        for request in [
+            Request::GetConfig,
+            Request::ListUserWords,
+            Request::ClearLearned,
+            Request::Shutdown,
+        ] {
+            assert!(
+                !restricted.call(&request).ok,
+                "低完整性客户端不应执行 {request:?}"
+            );
         }
     }
     assert!(!target.exists());
-    assert!(normal.call(&Request::Status).status.unwrap().input_idle_seconds.is_some_and(|idle| idle < 10),
-        "可管理的客户端看得到刚才的输入，自动同步据此等待");
-    assert!(normal.call(&Request::ExportSettings { path: target.display().to_string(), parts: None }).ok);
+    assert!(
+        normal
+            .call(&Request::Status)
+            .status
+            .unwrap()
+            .input_idle_seconds
+            .is_some_and(|idle| idle < 10),
+        "可管理的客户端看得到刚才的输入，自动同步据此等待"
+    );
+    assert!(
+        normal
+            .call(&Request::ExportSettings {
+                path: target.display().to_string(),
+                parts: None
+            })
+            .ok
+    );
     assert!(target.is_file(), "正常设置客户端仍可导出备份");
 }

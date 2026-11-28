@@ -35,7 +35,10 @@ pub fn write(kind: &'static str, detail: &str) {
     let now = now_ms();
     if let Ok(mut last) = LAST.lock() {
         let map = last.get_or_insert_with(HashMap::new);
-        if map.get(kind).is_some_and(|&at| now.saturating_sub(at) < QUIET_MS) {
+        if map
+            .get(kind)
+            .is_some_and(|&at| now.saturating_sub(at) < QUIET_MS)
+        {
             return;
         }
         map.insert(kind, now);
@@ -43,7 +46,9 @@ pub fn write(kind: &'static str, detail: &str) {
     let Some(local) = std::env::var_os("LOCALAPPDATA") else {
         return;
     };
-    let dir = std::path::PathBuf::from(local).join("FreeType").join("logs");
+    let dir = std::path::PathBuf::from(local)
+        .join("FreeType")
+        .join("logs");
     // 卸载以后，还开着的应用里仍载着这个 DLL，连不上服务进程会来记日志：
     // 不把卸载器删掉的目录再建回来
     if !dir.is_dir() && !crate::client::installed() {
@@ -53,7 +58,9 @@ pub fn write(kind: &'static str, detail: &str) {
         return;
     }
     let path = dir.join("tsf.log");
-    let append = std::fs::metadata(&path).map(|m| m.len() < MAX_BYTES).unwrap_or(true);
+    let append = std::fs::metadata(&path)
+        .map(|m| m.len() < MAX_BYTES)
+        .unwrap_or(true);
     let file = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
@@ -65,6 +72,11 @@ pub fn write(kind: &'static str, detail: &str) {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let _ = writeln!(file, "[{secs}] {} ({}) {kind}：{detail}", program(), std::process::id());
+        let _ = writeln!(
+            file,
+            "[{secs}] {} ({}) {kind}：{detail}",
+            program(),
+            std::process::id()
+        );
     }
 }

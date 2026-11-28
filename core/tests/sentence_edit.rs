@@ -21,13 +21,19 @@ fn block_alternatives_offer_whole_homophones_before_single_characters() {
         "zhi ding\t指定\t90000\nzhi ding\t置顶\t80000\nzhi\t指\t90000\nzhi\t只\t80000\nding\t定\t90000\nding\t顶\t80000\nding\t丁\t70000\n"
     ).unwrap()), Arc::new(BigramLm::default()));
     let mut s = Session::with_engine(&e);
-    s.configure(wowtype_core::session::Config { sentence_editor: true, ..Default::default() });
+    s.configure(wowtype_core::session::Config {
+        sentence_editor: true,
+        ..Default::default()
+    });
     type_text(&mut s, "zhiding");
     s.sentence_action(Action::Focus { at: 7 });
     let alternatives = &s.sentence_view().unwrap().alternatives;
     assert_eq!(alternatives[0].text, "置顶");
     assert_eq!((alternatives[0].from, alternatives[0].to), (0, 7));
-    assert!(alternatives.iter().any(|c| c.from == 3 && c.to == 7), "单字备选仍可选");
+    assert!(
+        alternatives.iter().any(|c| c.from == 3 && c.to == 7),
+        "单字备选仍可选"
+    );
 }
 
 #[test]
@@ -49,7 +55,10 @@ fn ordinary_input_does_not_enable_sentence_editor_by_default() {
 fn disabling_editor_drops_local_focus_and_restores_digit_selection() {
     let e = engine();
     let mut s = Session::with_engine(&e);
-    s.configure(wowtype_core::session::Config { sentence_editor: true, ..Default::default() });
+    s.configure(wowtype_core::session::Config {
+        sentence_editor: true,
+        ..Default::default()
+    });
     type_text(&mut s, "woxihuanni");
     s.sentence_action(Action::Focus { at: 9 });
     assert!(s.sentence_view().unwrap().cursor.is_some());
@@ -64,14 +73,29 @@ fn ordinary_candidate_forget_does_not_delete_the_focused_editor_block() {
     e.add_user_word("wo", "我", 90000.0).unwrap();
     e.add_user_word("ni", "你", 90000.0).unwrap();
     let mut s = Session::with_engine(&e);
-    s.configure(wowtype_core::session::Config { sentence_editor: true, ..Default::default() });
+    s.configure(wowtype_core::session::Config {
+        sentence_editor: true,
+        ..Default::default()
+    });
     type_text(&mut s, "woxihuanni");
     s.sentence_action(Action::Focus { at: 9 });
-    assert_eq!(s.sentence_view().unwrap().blocks.iter().find(|b| b.focused).unwrap().text, "你");
+    assert_eq!(
+        s.sentence_view()
+            .unwrap()
+            .blocks
+            .iter()
+            .find(|b| b.focused)
+            .unwrap()
+            .text,
+        "你"
+    );
     let index = s.candidates().iter().position(|c| c.text == "我").unwrap();
     assert_eq!(s.forget(index).as_deref(), Some("我"));
     let words = e.user_words();
-    assert!(words.iter().any(|(_, word, _)| word == "你"), "普通候选菜单不能删编辑区焦点词");
+    assert!(
+        words.iter().any(|(_, word, _)| word == "你"),
+        "普通候选菜单不能删编辑区焦点词"
+    );
     assert!(words.iter().all(|(_, word, _)| word != "我"));
 }
 
@@ -79,7 +103,10 @@ fn ordinary_candidate_forget_does_not_delete_the_focused_editor_block() {
 fn local_selection_keeps_the_rest_and_commits_once() {
     let e = engine();
     let mut s = Session::new();
-    s.configure(wowtype_core::session::Config { sentence_editor: true, ..Default::default() });
+    s.configure(wowtype_core::session::Config {
+        sentence_editor: true,
+        ..Default::default()
+    });
     s.set_engine(Some(&e));
     type_text(&mut s, "woxihuanni");
     assert_eq!(s.sentence_view().unwrap().text, "我喜欢你");
@@ -96,7 +123,10 @@ fn local_selection_keeps_the_rest_and_commits_once() {
 fn split_and_merge_change_boundaries_without_changing_text() {
     let e = engine();
     let mut s = Session::new();
-    s.configure(wowtype_core::session::Config { sentence_editor: true, ..Default::default() });
+    s.configure(wowtype_core::session::Config {
+        sentence_editor: true,
+        ..Default::default()
+    });
     s.set_engine(Some(&e));
     type_text(&mut s, "woxihuanni");
     s.sentence_action(Action::Focus { at: 8 });
@@ -118,7 +148,10 @@ fn cancelled_sentence_does_not_learn_a_boundary() {
     let e = engine();
     let before = e.export_learning().unwrap();
     let mut s = Session::new();
-    s.configure(wowtype_core::session::Config { sentence_editor: true, ..Default::default() });
+    s.configure(wowtype_core::session::Config {
+        sentence_editor: true,
+        ..Default::default()
+    });
     s.set_engine(Some(&e));
     type_text(&mut s, "woxihuanni");
     s.sentence_action(Action::Focus { at: 8 });
@@ -131,7 +164,10 @@ fn cancelled_sentence_does_not_learn_a_boundary() {
 fn boundary_survives_backup_and_repeated_merge_without_learning_on_cancel() {
     let e = engine();
     let mut s = Session::new();
-    s.configure(wowtype_core::session::Config { sentence_editor: true, ..Default::default() });
+    s.configure(wowtype_core::session::Config {
+        sentence_editor: true,
+        ..Default::default()
+    });
     s.set_engine(Some(&e));
     type_text(&mut s, "woxihuanni");
     s.sentence_action(Action::Focus { at: 8 });
@@ -142,7 +178,10 @@ fn boundary_survives_backup_and_repeated_merge_without_learning_on_cancel() {
     restored.import_learning(&saved).unwrap();
     restored.import_learning(&saved).unwrap();
     let mut next = Session::new();
-    next.configure(wowtype_core::session::Config { sentence_editor: true, ..Default::default() });
+    next.configure(wowtype_core::session::Config {
+        sentence_editor: true,
+        ..Default::default()
+    });
     next.set_engine(Some(&restored));
     type_text(&mut next, "woxihuanni");
     assert!(next
@@ -183,7 +222,10 @@ fn windows_history_overwrite_keeps_latest_boundaries() {
 fn abbreviated_tail_commits_the_visible_candidate_in_one_space() {
     let e = engine();
     let mut s = Session::new();
-    s.configure(wowtype_core::session::Config { sentence_editor: true, ..Default::default() });
+    s.configure(wowtype_core::session::Config {
+        sentence_editor: true,
+        ..Default::default()
+    });
     s.set_engine(Some(&e));
     type_text(&mut s, "wox");
     let expected = s.candidates()[0].text.clone();
@@ -199,10 +241,15 @@ fn editor_does_not_replace_visible_mixed_input_with_stale_prefix() {
     ).unwrap()), Arc::new(BigramLm::default()));
     for editor in [false, true] {
         let mut s = Session::with_engine(&e);
-        s.configure(wowtype_core::session::Config { sentence_editor: editor, ..Default::default() });
+        s.configure(wowtype_core::session::Config {
+            sentence_editor: editor,
+            ..Default::default()
+        });
         type_text(&mut s, "zuiqianm");
         assert_eq!(s.candidates()[0].text, "最前面");
-        if editor { assert_eq!(s.sentence_view().unwrap().text, "最前面"); }
+        if editor {
+            assert_eq!(s.sentence_view().unwrap().text, "最前面");
+        }
         let frame = s.key(&Key::char(' '));
         assert_eq!(frame.commit.as_deref(), Some("最前面"));
         assert!(!s.composing());
@@ -213,7 +260,10 @@ fn editor_does_not_replace_visible_mixed_input_with_stale_prefix() {
 fn changing_letters_preserves_nonoverlapping_confirmation() {
     let e = engine();
     let mut s = Session::new();
-    s.configure(wowtype_core::session::Config { sentence_editor: true, ..Default::default() });
+    s.configure(wowtype_core::session::Config {
+        sentence_editor: true,
+        ..Default::default()
+    });
     s.set_engine(Some(&e));
     type_text(&mut s, "woxihuanni");
     s.sentence_action(Action::Focus { at: 9 });
@@ -262,7 +312,10 @@ fn learned_local_boundary_survives_an_added_suffix() {
         ],
     );
     let mut s = Session::new();
-    s.configure(wowtype_core::session::Config { sentence_editor: true, ..Default::default() });
+    s.configure(wowtype_core::session::Config {
+        sentence_editor: true,
+        ..Default::default()
+    });
     s.set_engine(Some(&e));
     type_text(&mut s, "woxihuanni");
     assert!(s
@@ -286,7 +339,10 @@ fn cycling_back_restores_original_without_learning() {
     let e = engine();
     let before = e.export_learning().unwrap();
     let mut s = Session::new();
-    s.configure(wowtype_core::session::Config { sentence_editor: true, ..Default::default() });
+    s.configure(wowtype_core::session::Config {
+        sentence_editor: true,
+        ..Default::default()
+    });
     s.set_engine(Some(&e));
     type_text(&mut s, "woxihuanni");
     s.sentence_action(Action::Focus { at: 9 });

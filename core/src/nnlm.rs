@@ -173,9 +173,7 @@ impl Nnlm {
             bail!("WTNN 版本 {version} 不认识");
         }
         let meta_len = u32_at(data, 8)? as usize;
-        let meta = data
-            .get(12..12 + meta_len)
-            .context("WTNN 说明越界")?;
+        let meta = data.get(12..12 + meta_len).context("WTNN 说明越界")?;
         let meta = std::str::from_utf8(meta).ok().map(str::to_owned);
         let mut at = 12 + meta_len;
         let vocab_size = u32_at(data, at)? as usize;
@@ -552,12 +550,16 @@ fn f16_to_f32(h: u16) -> f32 {
 }
 
 fn u32_at(d: &[u8], at: usize) -> Result<u32> {
-    let b = d.get(at..at.checked_add(4).context("越界")?).context("越界")?;
+    let b = d
+        .get(at..at.checked_add(4).context("越界")?)
+        .context("越界")?;
     Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
 }
 
 fn u16_at(d: &[u8], at: usize) -> Result<u16> {
-    let b = d.get(at..at.checked_add(2).context("越界")?).context("越界")?;
+    let b = d
+        .get(at..at.checked_add(2).context("越界")?)
+        .context("越界")?;
     Ok(u16::from_le_bytes([b[0], b[1]]))
 }
 
@@ -779,8 +781,13 @@ mod tests {
         assert_eq!(model.vocab_size(), vocab_size);
         assert_eq!(model.token('你'), 3);
         assert_eq!(model.token('他'), UNK);
-        assert!(model.meta().unwrap().starts_with("wowtype-data: nnlm.bin 2026.1.1.0"));
-        assert!(model.next_char_logprob(&model.context_tokens("我说"), '你').is_finite());
+        assert!(model
+            .meta()
+            .unwrap()
+            .starts_with("wowtype-data: nnlm.bin 2026.1.1.0"));
+        assert!(model
+            .next_char_logprob(&model.context_tokens("我说"), '你')
+            .is_finite());
         let s = model.score(&model.context_tokens("我说"), "你好");
         assert!(s.is_finite() && s < 0.0, "{s}");
         assert!(Nnlm::from_bytes(&blob[..blob.len() / 2]).is_err());
@@ -791,7 +798,10 @@ mod tests {
         for offset in [blob.len() - 2, blob.len() - 2 * D - 2] {
             let mut bad = blob.clone();
             bad[offset..offset + 2].copy_from_slice(&0x7e00u16.to_le_bytes());
-            assert!(Nnlm::from_bytes(&bad).is_err(), "accepted non-finite weight at {offset}");
+            assert!(
+                Nnlm::from_bytes(&bad).is_err(),
+                "accepted non-finite weight at {offset}"
+            );
         }
         let mut trailing = blob;
         trailing.extend_from_slice(b"unexpected trailing data");
@@ -800,9 +810,14 @@ mod tests {
 
     #[test]
     fn bundled_model_scores_chinese_context() {
-        let Some(path) = std::env::var_os("FREETYPE_TEST_NNLM") else { return };
+        let Some(path) = std::env::var_os("FREETYPE_TEST_NNLM") else {
+            return;
+        };
         let model = Nnlm::load(path).expect("随包模型必须可以读取");
-        assert!(model.meta().unwrap().starts_with("wowtype-data: nnlm.bin 2026.11.17.0"));
+        assert!(model
+            .meta()
+            .unwrap()
+            .starts_with("wowtype-data: nnlm.bin 2026.11.17.0"));
         let prefix = model.context_tokens("我今天");
         let score = model.next_char_logprob(&prefix, '很');
         assert!(score.is_finite() && score < 0.0, "{score}");

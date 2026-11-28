@@ -14,13 +14,18 @@ fn engine(words: &str) -> Engine {
 #[test]
 fn rare_exact_words_remain_reachable_among_frequent_fuzzy_words_without_learning() {
     let mut words = String::from("shang ping\t上屏\t323\nshang pin\t商品\t489240\n");
-    for i in 0..60 { words.push_str(&format!("shan pin\t近音{i}\t100000\n")); }
+    for i in 0..60 {
+        words.push_str(&format!("shan pin\t近音{i}\t100000\n"));
+    }
     let mut e = engine(&words);
     e.set_fuzzy(true);
     e.set_fuzzy_groups(0xffff);
     e.set_long_word_completion(true);
     let found = e.input("shangping");
-    assert!(found.iter().take(5).any(|c| c.text == "上屏"), "首次输入的精确词不能被近音词挤掉：{found:?}");
+    assert!(
+        found.iter().take(5).any(|c| c.text == "上屏"),
+        "首次输入的精确词不能被近音词挤掉：{found:?}"
+    );
     assert!(e.user_words().is_empty());
 }
 
@@ -90,13 +95,17 @@ fn known_erhua_completion_preserves_whole_mixed_words_and_legitimate_erhua() {
     let mut e = engine("shu ru fa\t输入法\t50000\nshu r\t数儿\t10000\nfa\t发\t20000\nhua r\t花儿\t10000\nhua rong fu\t华荣府\t50000\nhao\t好\t20000\n");
     for typo in [false, true] {
         e.set_typo_correction(typo);
-        for (input, whole, erhua) in [("shurf","输入法","数儿发"),("huarf","华荣府","花儿发")] {
-            let found=e.input(input);
-            assert_eq!(found[0].text,whole,"{input}, typo={typo}: {found:?}");
-            assert!(found.iter().any(|c|c.text==erhua),"legitimate erhua + abbreviation remains reachable");
+        for (input, whole, erhua) in [("shurf", "输入法", "数儿发"), ("huarf", "华荣府", "花儿发")]
+        {
+            let found = e.input(input);
+            assert_eq!(found[0].text, whole, "{input}, typo={typo}: {found:?}");
+            assert!(
+                found.iter().any(|c| c.text == erhua),
+                "legitimate erhua + abbreviation remains reachable"
+            );
         }
-        assert_eq!(e.input("huarhao")[0].text,"花儿好");
-        assert_eq!(e.input("huar")[0].text,"花儿");
+        assert_eq!(e.input("huarhao")[0].text, "花儿好");
+        assert_eq!(e.input("huar")[0].text, "花儿");
     }
 }
 

@@ -29,21 +29,61 @@ pub const EMAIL_DOMAINS: [&str; 16] = [
 ];
 
 /// 网址、邮箱结尾。
-pub const TLDS: [&str; 10] = ["com", "cn", "net", "org", "com.cn", "io", "co", "edu.cn", "gov.cn", "top"];
+pub const TLDS: [&str; 10] = [
+    "com", "cn", "net", "org", "com.cn", "io", "co", "edu.cn", "gov.cn", "top",
+];
 
 /// 按句号就进补全的名字（打完这些再按句号多半是在写网址、邮箱，不是句末）。
 const SITE_NAMES: [&str; 40] = [
-    "www", "gmail", "outlook", "hotmail", "qq", "163", "126", "yahoo", "icloud", "foxmail", "sina", "sohu",
-    "aliyun", "github", "gitlab", "google", "baidu", "taobao", "tmall", "jd", "bilibili", "zhihu", "weibo",
-    "youtube", "twitter", "facebook", "microsoft", "apple", "amazon", "live", "msn", "csdn", "douyin",
-    "wikipedia", "reddit", "openai", "chatgpt", "mail", "http", "https",
+    "www",
+    "gmail",
+    "outlook",
+    "hotmail",
+    "qq",
+    "163",
+    "126",
+    "yahoo",
+    "icloud",
+    "foxmail",
+    "sina",
+    "sohu",
+    "aliyun",
+    "github",
+    "gitlab",
+    "google",
+    "baidu",
+    "taobao",
+    "tmall",
+    "jd",
+    "bilibili",
+    "zhihu",
+    "weibo",
+    "youtube",
+    "twitter",
+    "facebook",
+    "microsoft",
+    "apple",
+    "amazon",
+    "live",
+    "msn",
+    "csdn",
+    "douyin",
+    "wikipedia",
+    "reddit",
+    "openai",
+    "chatgpt",
+    "mail",
+    "http",
+    "https",
 ];
 
 /// 这串字母后面按句号要不要进补全。`english`：引擎把它当成英文单词（首选就是它）。
 pub fn wants_completion(input: &str, english: bool) -> bool {
     let lower = input.to_ascii_lowercase();
     !lower.is_empty()
-        && lower.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        && lower
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
         && (english || SITE_NAMES.contains(&lower.as_str()) || lower.starts_with("www"))
 }
 
@@ -93,7 +133,9 @@ impl Raw {
 
     pub fn current(&self) -> String {
         let all = self.candidates();
-        all.get(self.cursor.min(all.len() - 1)).cloned().unwrap_or_default()
+        all.get(self.cursor.min(all.len() - 1))
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// 到了全部候选的两头就停住，不绕到另一头（和主候选列表一致）。
@@ -156,7 +198,11 @@ mod tests {
 
         let all = Raw::new("abc@g").candidates();
         assert_eq!(all, vec!["abc@g", "abc@gmail.com"]);
-        assert_eq!(Raw::new("abc@qq.com").candidates(), vec!["abc@qq.com"], "写完了就不补");
+        assert_eq!(
+            Raw::new("abc@qq.com").candidates(),
+            vec!["abc@qq.com"],
+            "写完了就不补"
+        );
     }
 
     #[test]
@@ -166,7 +212,13 @@ mod tests {
         assert_eq!(all[1], "gmail.com");
         assert_eq!(
             Raw::new("www.baidu.c").candidates(),
-            vec!["www.baidu.c", "www.baidu.com", "www.baidu.cn", "www.baidu.com.cn", "www.baidu.co"]
+            vec![
+                "www.baidu.c",
+                "www.baidu.com",
+                "www.baidu.cn",
+                "www.baidu.com.cn",
+                "www.baidu.co"
+            ]
         );
         assert_eq!(Raw::new("a@company.").candidates()[1], "a@company.com");
         assert_eq!(Raw::new(".").candidates(), vec!["."]);
@@ -180,9 +232,15 @@ mod tests {
         for _ in 0..EMAIL_DOMAINS.len() + 2 {
             raw.move_cursor(false);
         }
-        assert_eq!(raw.current(), format!("x@{}", EMAIL_DOMAINS[EMAIL_DOMAINS.len() - 1]));
+        assert_eq!(
+            raw.current(),
+            format!("x@{}", EMAIL_DOMAINS[EMAIL_DOMAINS.len() - 1])
+        );
         raw.move_cursor(true);
-        assert_eq!(raw.current(), format!("x@{}", EMAIL_DOMAINS[EMAIL_DOMAINS.len() - 2]));
+        assert_eq!(
+            raw.current(),
+            format!("x@{}", EMAIL_DOMAINS[EMAIL_DOMAINS.len() - 2])
+        );
         raw.push('q');
         assert_eq!(raw.cursor, 0);
         assert!(raw.pop());

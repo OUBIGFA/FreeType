@@ -58,26 +58,45 @@ fn enter_commits_raw_letters_and_still_learns_them() {
     let engine = new_engine();
     let mut session = Session::with_engine(&engine);
     for count in 1..=engine.config().auto_learn_threshold {
-        for ch in "apimode".chars() { session.key(&Key::char(ch)); }
-        assert_eq!(session.key(&Key::press(keysym::RETURN)).commit.as_deref(), Some("apimode"));
+        for ch in "apimode".chars() {
+            session.key(&Key::char(ch));
+        }
+        assert_eq!(
+            session.key(&Key::press(keysym::RETURN)).commit.as_deref(),
+            Some("apimode")
+        );
         assert_eq!(engine.history_count("apimode"), count);
     }
-    assert!(engine.user_words().iter().any(|(code, word, _)| code == "apimode" && word == "apimode"));
+    assert!(engine
+        .user_words()
+        .iter()
+        .any(|(code, word, _)| code == "apimode" && word == "apimode"));
 }
 
 #[test]
 fn undo_learning_preserves_intervening_choices_and_drops_abandoned_picks() {
     let engine = new_engine();
     let mut session = Session::with_engine(&engine);
-    for ch in "datag".chars() { session.key(&Key::char(ch)); }
-    let head = session.candidates().iter().position(|item| item.text == "打").unwrap();
+    for ch in "datag".chars() {
+        session.key(&Key::char(ch));
+    }
+    let head = session
+        .candidates()
+        .iter()
+        .position(|item| item.text == "打")
+        .unwrap();
     assert!(session.choose(head).commit.is_none());
     assert_eq!(engine.history_count("打"), 1);
     session.key(&Key::press(keysym::BACKSPACE));
     assert_eq!(engine.history_count("打"), 0);
     session.reset(false);
-    for ch in "apimode".chars() { session.key(&Key::char(ch)); }
-    assert_eq!(session.key(&Key::press(keysym::RETURN)).commit.as_deref(), Some("apimode"));
+    for ch in "apimode".chars() {
+        session.key(&Key::char(ch));
+    }
+    assert_eq!(
+        session.key(&Key::press(keysym::RETURN)).commit.as_deref(),
+        Some("apimode")
+    );
     engine.record_selection("你好");
     assert!(session.undo_commit_learning());
     assert_eq!(engine.history_count("apimode"), 0);
@@ -89,8 +108,13 @@ fn explicitly_sensitive_session_does_not_learn_raw_letters() {
     let engine = new_engine();
     let mut session = Session::with_engine(&engine);
     session.set_no_learn(true);
-    for ch in "apimode".chars() { session.key(&Key::char(ch)); }
-    assert_eq!(session.key(&Key::press(keysym::RETURN)).commit.as_deref(), Some("apimode"));
+    for ch in "apimode".chars() {
+        session.key(&Key::char(ch));
+    }
+    assert_eq!(
+        session.key(&Key::press(keysym::RETURN)).commit.as_deref(),
+        Some("apimode")
+    );
     assert_eq!(engine.history_count("apimode"), 0);
 }
 
@@ -207,9 +231,7 @@ fn mixed_words_history_and_pairs_survive_restart_and_backup() {
         1,
         "学习备份应为单行紧凑 JSON，避免逐字段换行膨胀"
     );
-    restored
-        .import_learning(&exported)
-        .unwrap();
+    restored.import_learning(&exported).unwrap();
     assert_eq!(restored.input("datag")[0].text, "打tag");
     assert_eq!(restored.history_count("tag"), 2);
     assert_eq!(restored.history_count("打tag"), 2);

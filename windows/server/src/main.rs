@@ -50,7 +50,11 @@ mod app {
             let started = std::time::Instant::now();
             let result = load_engine(&resources, &store_dir, &lexicon);
             match &result {
-                Ok(loaded) => log(&format!("词库载入完成（{}），用时 {} ms", loaded.path.display(), started.elapsed().as_millis())),
+                Ok(loaded) => log(&format!(
+                    "词库载入完成（{}），用时 {} ms",
+                    loaded.path.display(),
+                    started.elapsed().as_millis()
+                )),
                 Err(e) => log(e),
             }
             let _ = events.send(Event::Loaded(generation, result));
@@ -86,16 +90,25 @@ mod app {
 
     pub fn run() -> i32 {
         let args: Vec<String> = std::env::args().skip(1).collect();
-        let marker = args.iter().position(|arg| arg == "--marker")
-            .and_then(|index| args.get(index + 1)).map(PathBuf::from);
+        let marker = args
+            .iter()
+            .position(|arg| arg == "--marker")
+            .and_then(|index| args.get(index + 1))
+            .map(PathBuf::from);
         match args.first().map(String::as_str) {
             Some("--compile-lexicon") => {
                 let result = match args.as_slice() {
                     [_, source, target] => wowtype_core::lexicon::MappedLexicon::compile(
-                        std::path::Path::new(source), std::path::Path::new(target)).map_err(|e| format!("{e:#}")),
+                        std::path::Path::new(source),
+                        std::path::Path::new(target),
+                    )
+                    .map_err(|e| format!("{e:#}")),
                     _ => Err("需要源词库和输出索引两个路径".into()),
                 };
-                if let Err(error) = result { eprintln!("{error}"); return 1; }
+                if let Err(error) = result {
+                    eprintln!("{error}");
+                    return 1;
+                }
                 return 0;
             }
             Some("--serve") => return serve(),
@@ -104,21 +117,31 @@ mod app {
                     [_, path] => freetype_server::brand_icon::apply(std::path::Path::new(path)),
                     _ => Err("需要品牌 ICO 图像路径".into()),
                 };
-                if let Err(error) = &result { eprintln!("{error}"); }
+                if let Err(error) = &result {
+                    eprintln!("{error}");
+                }
                 return report(result, "更新系统品牌图标");
             }
             Some("--set-brand-icon-elevated") => {
                 use std::io::Write;
                 let result = match args.as_slice() {
                     [_, path, result_file] => {
-                        let result = freetype_server::brand_icon::install(std::path::Path::new(path));
+                        let result =
+                            freetype_server::brand_icon::install(std::path::Path::new(path));
                         let response = match &result {
                             Ok(()) => freetype_protocol::Response::ok(),
                             Err(error) => freetype_protocol::Response::error(error.clone()),
                         };
-                        let recorded = serde_json::to_vec(&response).map_err(|error| error.to_string())
-                            .and_then(|data| std::fs::OpenOptions::new().write(true).create_new(true).open(result_file)
-                                .and_then(|mut file| file.write_all(&data)).map_err(|error| error.to_string()));
+                        let recorded = serde_json::to_vec(&response)
+                            .map_err(|error| error.to_string())
+                            .and_then(|data| {
+                                std::fs::OpenOptions::new()
+                                    .write(true)
+                                    .create_new(true)
+                                    .open(result_file)
+                                    .and_then(|mut file| file.write_all(&data))
+                                    .map_err(|error| error.to_string())
+                            });
                         result.and(recorded)
                     }
                     _ => Err("需要品牌 ICO 图像和结果文件路径".into()),
@@ -135,24 +158,33 @@ mod app {
                     Some(bin) => setup::register_tsf(&bin),
                     None => Err("找不到输入法组件目录".to_string()),
                 };
-                return report(setup::record_setup_result(result, marker.as_deref()), "注册输入法");
+                return report(
+                    setup::record_setup_result(result, marker.as_deref()),
+                    "注册输入法",
+                );
             }
             Some("--unregister-tsf") => {
-                return report(setup::record_setup_result(setup::unregister_tsf(), marker.as_deref()), "注销输入法");
+                return report(
+                    setup::record_setup_result(setup::unregister_tsf(), marker.as_deref()),
+                    "注销输入法",
+                );
             }
             Some("--enable") => return report(setup::enable_for_user(true), "加入输入法列表"),
             Some("--disable") => return report(setup::enable_for_user(false), "移出输入法列表"),
-            Some("--start-and-check") => return report(setup::start_and_check(), "启动并核对新版服务"),
+            Some("--start-and-check") => {
+                return report(setup::start_and_check(), "启动并核对新版服务")
+            }
             Some("--stop") => {
-                let result = pipe_path().and_then(|name| {
-                    match pipe::request(&name, &Request::Shutdown) {
+                let result =
+                    pipe_path().and_then(|name| match pipe::request(&name, &Request::Shutdown) {
                         Ok(reply) if reply.ok => Ok(()),
                         Ok(reply) => Err(reply.error.unwrap_or_else(|| "服务未完成保存".into())),
                         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
                         Err(error) => Err(error.to_string()),
-                    }
-                });
-                if result.is_ok() { stop_watchdog(); }
+                    });
+                if result.is_ok() {
+                    stop_watchdog();
+                }
                 return report(result, "停止服务");
             }
             Some(other) if other.starts_with("--") => {
@@ -161,13 +193,20 @@ mod app {
             }
             _ => {}
         }
-        if instance_suffix().is_empty() { supervise() } else { serve() }
+        if instance_suffix().is_empty() {
+            supervise()
+        } else {
+            serve()
+        }
     }
 
     fn stop_watchdog() {
         use windows::Win32::Foundation::CloseHandle;
         use windows::Win32::System::Threading::{OpenEventW, SetEvent, EVENT_MODIFY_STATE};
-        let name = windows::core::HSTRING::from(format!(r"Local\FreeType.StopWatchdog{}", instance_suffix()));
+        let name = windows::core::HSTRING::from(format!(
+            r"Local\FreeType.StopWatchdog{}",
+            instance_suffix()
+        ));
         unsafe {
             if let Ok(event) = OpenEventW(EVENT_MODIFY_STATE, false, &name) {
                 let _ = SetEvent(event);
@@ -179,30 +218,49 @@ mod app {
     fn supervise() -> i32 {
         use std::os::windows::process::CommandExt;
         use std::time::Instant;
-        if !pipe::single_watchdog() { return 0; }
-        let exe = match std::env::current_exe() { Ok(exe) => exe, Err(error) => return report(Err(error.to_string()), "定位服务") };
+        if !pipe::single_watchdog() {
+            return 0;
+        }
+        let exe = match std::env::current_exe() {
+            Ok(exe) => exe,
+            Err(error) => return report(Err(error.to_string()), "定位服务"),
+        };
         use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
         use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
-        let name = windows::core::HSTRING::from(format!(r"Local\FreeType.StopWatchdog{}", instance_suffix()));
+        let name = windows::core::HSTRING::from(format!(
+            r"Local\FreeType.StopWatchdog{}",
+            instance_suffix()
+        ));
         let stop = match unsafe { CreateEventW(None, true, false, &name) } {
             Ok(event) => event,
             Err(error) => return report(Err(error.to_string()), "创建服务停机事件"),
         };
         let mut delay = 1u64;
         loop {
-            if unsafe { WaitForSingleObject(stop, 0) } == WAIT_OBJECT_0 { break; }
+            if unsafe { WaitForSingleObject(stop, 0) } == WAIT_OBJECT_0 {
+                break;
+            }
             let started = Instant::now();
-            let status = std::process::Command::new(&exe).arg("--serve").creation_flags(0x08000000).status();
+            let status = std::process::Command::new(&exe)
+                .arg("--serve")
+                .creation_flags(0x08000000)
+                .status();
             match status {
                 Ok(exit) if exit.success() => break, // 正常退出/升级后不要再拉起。
                 Ok(exit) => log(&format!("服务意外退出：{exit}")),
                 Err(error) => log(&format!("无法启动服务：{error}")),
             }
-            if started.elapsed() >= Duration::from_secs(120) { delay = 1; }
-            if unsafe { WaitForSingleObject(stop, (delay * 1000) as u32) } == WAIT_OBJECT_0 { break; }
+            if started.elapsed() >= Duration::from_secs(120) {
+                delay = 1;
+            }
+            if unsafe { WaitForSingleObject(stop, (delay * 1000) as u32) } == WAIT_OBJECT_0 {
+                break;
+            }
             delay = (delay * 2).min(60);
         }
-        unsafe { let _ = CloseHandle(stop); }
+        unsafe {
+            let _ = CloseHandle(stop);
+        }
         0
     }
 
@@ -282,7 +340,8 @@ mod app {
                 next_save = std::time::Instant::now() + SAVE_INTERVAL;
             }
             clipboard_on.store(host.config().clipboard_history, Ordering::Relaxed);
-            match inbox.recv_timeout(next_save.saturating_duration_since(std::time::Instant::now())) {
+            match inbox.recv_timeout(next_save.saturating_duration_since(std::time::Instant::now()))
+            {
                 Ok(Event::Bar(event)) => {
                     let request = match event {
                         BarEvent::Foreground(app) => {
@@ -290,7 +349,9 @@ mod app {
                             continue;
                         }
                         BarEvent::ToggleMode => Request::ToggleMode { shift: None },
-                        BarEvent::TogglePunct => Request::Command { command: Command::TogglePunct },
+                        BarEvent::TogglePunct => Request::Command {
+                            command: Command::TogglePunct,
+                        },
                         BarEvent::ToggleTraditional => Request::Command {
                             command: Command::ToggleTraditional,
                         },
@@ -298,7 +359,9 @@ mod app {
                             desktop::open_emoji_panel();
                             continue;
                         }
-                        BarEvent::OpenSettings => Request::Command { command: Command::OpenSettings },
+                        BarEvent::OpenSettings => Request::Command {
+                            command: Command::OpenSettings,
+                        },
                         BarEvent::HideBar => Request::Command {
                             command: Command::ToggleStatusBar,
                         },
@@ -336,7 +399,7 @@ mod app {
                         return 0;
                     }
                 }
-                Err(mpsc::RecvTimeoutError::Timeout) => {},
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => return 1,
             }
         }

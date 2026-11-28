@@ -84,7 +84,9 @@ fn source_stamp(path: &Path) -> Option<(u64, u64)> {
         .ok()?
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?
-        .as_nanos().try_into().ok()?;
+        .as_nanos()
+        .try_into()
+        .ok()?;
     Some((meta.len(), mtime))
 }
 
@@ -169,8 +171,15 @@ pub trait Lexicon: Send + Sync {
         None
     }
     /// 有限的备选集合供引擎筛选质量，避免词频最高的切词残片挡住真实长词。
-    fn long_completions(&self, prefix: &[SyllableKey], word_prefix: &str, _limit: usize) -> Vec<LexEntry> {
-        self.complete_long_word(prefix, word_prefix).into_iter().collect()
+    fn long_completions(
+        &self,
+        prefix: &[SyllableKey],
+        word_prefix: &str,
+        _limit: usize,
+    ) -> Vec<LexEntry> {
+        self.complete_long_word(prefix, word_prefix)
+            .into_iter()
+            .collect()
     }
     /// Static dictionaries can supply the same prediction priors directly from disk.
     fn prediction_index(&self) -> Option<&dyn PredictionIndex> {
@@ -232,12 +241,23 @@ pub trait Lexicon: Send + Sync {
     ///
     /// 束搜索对同一结束位置也按这个顺序只留 `limit` 个不同的词，所以先截断结果不变；
     /// 单音节常有上千条、模糊音再翻几倍，省掉逐条建立候选。[`MemoLexicon`] 跨按键缓存它。
-    fn lookup_ranked(&self, query: &[SyllableQuery], all: bool, skip_ext: bool, limit: usize) -> Vec<(f64, LexEntry)> {
-        let mut entries = if all { self.lookup(query) } else { self.lookup_common(query) };
+    fn lookup_ranked(
+        &self,
+        query: &[SyllableQuery],
+        all: bool,
+        skip_ext: bool,
+        limit: usize,
+    ) -> Vec<(f64, LexEntry)> {
+        let mut entries = if all {
+            self.lookup(query)
+        } else {
+            self.lookup_common(query)
+        };
         if skip_ext {
             entries.retain(|e| !e.is_ext_char());
         }
-        let mut costed: Vec<(f64, LexEntry)> = entries.into_iter().map(|e| (self.cost(&e), e)).collect();
+        let mut costed: Vec<(f64, LexEntry)> =
+            entries.into_iter().map(|e| (self.cost(&e), e)).collect();
         if costed.len() > limit {
             costed.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.word.cmp(&b.1.word)));
             let mut seen = HashSet::new();
@@ -260,7 +280,16 @@ pub struct LookupMemo {
 struct MemoState {
     salt: u64,
     entries: usize,
-    map: HashMap<u64, Vec<(Vec<SyllableQuery>, bool, bool, usize, Arc<Vec<(f64, LexEntry)>>)>>,
+    map: HashMap<
+        u64,
+        Vec<(
+            Vec<SyllableQuery>,
+            bool,
+            bool,
+            usize,
+            Arc<Vec<(f64, LexEntry)>>,
+        )>,
+    >,
 }
 
 impl LookupMemo {
@@ -284,7 +313,12 @@ pub struct MemoLexicon<'a> {
 }
 
 impl Lexicon for MemoLexicon<'_> {
-    fn long_completions(&self, prefix: &[SyllableKey], word_prefix: &str, limit: usize) -> Vec<LexEntry> {
+    fn long_completions(
+        &self,
+        prefix: &[SyllableKey],
+        word_prefix: &str,
+        limit: usize,
+    ) -> Vec<LexEntry> {
         self.inner.long_completions(prefix, word_prefix, limit)
     }
     fn complete_long_word(&self, prefix: &[SyllableKey], word_prefix: &str) -> Option<LexEntry> {
@@ -324,17 +358,33 @@ impl Lexicon for MemoLexicon<'_> {
         self.inner.cost(entry)
     }
 
-    fn lookup_ranked(&self, query: &[SyllableQuery], all: bool, skip_ext: bool, limit: usize) -> Vec<(f64, LexEntry)> {
+    fn lookup_ranked(
+        &self,
+        query: &[SyllableQuery],
+        all: bool,
+        skip_ext: bool,
+        limit: usize,
+    ) -> Vec<(f64, LexEntry)> {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         (query, all, skip_ext, limit).hash(&mut hasher);
         let hash = hasher.finish();
-        let same = |item: &&(Vec<SyllableQuery>, bool, bool, usize, Arc<Vec<(f64, LexEntry)>>)| {
+        let same = |item: &&(
+            Vec<SyllableQuery>,
+            bool,
+            bool,
+            usize,
+            Arc<Vec<(f64, LexEntry)>>,
+        )| {
             item.0 == query && item.1 == all && item.2 == skip_ext && item.3 == limit
         };
         if let Ok(state) = self.memo.state.lock() {
             if state.salt == self.salt {
-                if let Some(found) = state.map.get(&hash).and_then(|bucket| bucket.iter().find(same)) {
+                if let Some(found) = state
+                    .map
+                    .get(&hash)
+                    .and_then(|bucket| bucket.iter().find(same))
+                {
                     return found.4.as_ref().clone();
                 }
             }
@@ -347,10 +397,19 @@ impl Lexicon for MemoLexicon<'_> {
         }
         if let Ok(mut state) = self.memo.state.lock() {
             if state.salt != self.salt || state.entries + found.len() > LookupMemo::MAX_ENTRIES {
-                *state = MemoState { salt: self.salt, ..MemoState::default() };
+                *state = MemoState {
+                    salt: self.salt,
+                    ..MemoState::default()
+                };
             }
             state.entries += found.len().max(1);
-            state.map.entry(hash).or_default().push((query.to_vec(), all, skip_ext, limit, Arc::new(found.clone())));
+            state.map.entry(hash).or_default().push((
+                query.to_vec(),
+                all,
+                skip_ext,
+                limit,
+                Arc::new(found.clone()),
+            ));
         }
         found
     }
@@ -425,7 +484,10 @@ impl MemoryLexicon {
         let rare = self.entries[idx].is_rare();
         let entries = &self.entries;
         if keys.len() > 2 {
-            self.long_prefix_index.entry(keys[..2].try_into().unwrap()).or_default().push(idx);
+            self.long_prefix_index
+                .entry(keys[..2].try_into().unwrap())
+                .or_default()
+                .push(idx);
         }
         // 每组里生僻字（LexEntry::is_rare）排在最后，lookup_common 读到它们就停
         let push = |list: &mut Vec<usize>| {
@@ -812,19 +874,38 @@ impl MemoryLexicon {
 }
 
 impl Lexicon for MemoryLexicon {
-    fn long_completions(&self, prefix: &[SyllableKey], word_prefix: &str, limit: usize) -> Vec<LexEntry> {
-        let Some(head) = prefix.get(..2).and_then(|slice| <[SyllableKey; 2]>::try_from(slice).ok()) else { return Vec::new(); };
-        let Some(indices) = self.long_prefix_index.get(&head) else { return Vec::new(); };
-        let mut entries: Vec<_> = indices.iter().map(|&i| &self.entries[i])
-            .filter(|entry| long_word_matches(entry, prefix, word_prefix)).collect();
+    fn long_completions(
+        &self,
+        prefix: &[SyllableKey],
+        word_prefix: &str,
+        limit: usize,
+    ) -> Vec<LexEntry> {
+        let Some(head) = prefix
+            .get(..2)
+            .and_then(|slice| <[SyllableKey; 2]>::try_from(slice).ok())
+        else {
+            return Vec::new();
+        };
+        let Some(indices) = self.long_prefix_index.get(&head) else {
+            return Vec::new();
+        };
+        let mut entries: Vec<_> = indices
+            .iter()
+            .map(|&i| &self.entries[i])
+            .filter(|entry| long_word_matches(entry, prefix, word_prefix))
+            .collect();
         entries.sort_unstable_by(|a, b| long_word_order(b, a));
         entries.into_iter().take(limit.min(32)).cloned().collect()
     }
     fn complete_long_word(&self, prefix: &[SyllableKey], word_prefix: &str) -> Option<LexEntry> {
         let head: [SyllableKey; 2] = prefix.get(..2)?.try_into().ok()?;
-        self.long_prefix_index.get(&head)?.iter().map(|&i| &self.entries[i])
+        self.long_prefix_index
+            .get(&head)?
+            .iter()
+            .map(|&i| &self.entries[i])
             .filter(|entry| long_word_matches(entry, prefix, word_prefix))
-            .max_by(|a, b| long_word_order(a, b)).cloned()
+            .max_by(|a, b| long_word_order(a, b))
+            .cloned()
     }
 
     fn lookup(&self, query: &[SyllableQuery]) -> Vec<LexEntry> {
@@ -868,7 +949,8 @@ impl Lexicon for MemoryLexicon {
     }
 
     fn prepare_fuzzy(&self) {
-        self.fuzzy_prefixes.get_or_init(|| self.build_fuzzy_prefixes());
+        self.fuzzy_prefixes
+            .get_or_init(|| self.build_fuzzy_prefixes());
         // 55 万条的词库约 0.2 秒
         self.fuzzy_index.get_or_init(|| self.build_fuzzy_index());
     }
@@ -1090,14 +1172,24 @@ impl UserLexicon {
     pub(crate) fn merge_words(&self, incoming: &[(String, String, f64)]) -> Result<usize> {
         let mut checked = Vec::with_capacity(incoming.len());
         for (pinyin, word, frequency) in incoming {
-            checked.push((user_reading(pinyin, word, *frequency)?, word.clone(), *frequency));
+            checked.push((
+                user_reading(pinyin, word, *frequency)?,
+                word.clone(),
+                *frequency,
+            ));
         }
         let mut changed = 0;
         {
-            let mut words = self.words.write().map_err(|_| anyhow!("user words lock poisoned"))?;
+            let mut words = self
+                .words
+                .write()
+                .map_err(|_| anyhow!("user words lock poisoned"))?;
             // 整份备份只扫描一次现有词表，重复词仍保留本机读音。
-            let mut positions: HashMap<String, usize> = words.iter().enumerate()
-                .map(|(index, (_, word, _))| (word.clone(), index)).collect();
+            let mut positions: HashMap<String, usize> = words
+                .iter()
+                .enumerate()
+                .map(|(index, (_, word, _))| (word.clone(), index))
+                .collect();
             for (pinyin, word, frequency) in checked {
                 if let Some(&index) = positions.get(&word) {
                     if frequency > words[index].2 {
@@ -1132,13 +1224,24 @@ impl UserLexicon {
     }
 
     pub(crate) fn user_word(&self, word: &str) -> Option<(String, f64)> {
-        self.words.read().ok()?.iter().find(|(_, text, _)| text == word)
+        self.words
+            .read()
+            .ok()?
+            .iter()
+            .find(|(_, text, _)| text == word)
             .map(|(code, _, freq)| (code.clone(), *freq))
     }
 
     /// 只在词条仍是这次自动学习写入的值时撤销，保留用户随后手工改的值。
-    pub(crate) fn restore_word(&self, word: &str, before: Option<(String, f64)>, after: (String, f64)) -> bool {
-        if self.user_word(word) != Some(after) { return false; }
+    pub(crate) fn restore_word(
+        &self,
+        word: &str,
+        before: Option<(String, f64)>,
+        after: (String, f64),
+    ) -> bool {
+        if self.user_word(word) != Some(after) {
+            return false;
+        }
         match before {
             Some((code, freq)) => self.add(&code, word, freq).is_ok(),
             None => self.remove(word),
@@ -1170,9 +1273,15 @@ impl UserLexicon {
         let mut added = 0;
         let mut nonempty = false;
         // 批量合并后只建一次索引；逐条调用 add 会使启动耗时随学习词数平方增长。
-        let mut words = self.words.write().map_err(|_| anyhow!("user words lock poisoned"))?;
-        let mut positions: HashMap<String, usize> = words.iter().enumerate()
-            .map(|(i, (_, word, _))| (word.clone(), i)).collect();
+        let mut words = self
+            .words
+            .write()
+            .map_err(|_| anyhow!("user words lock poisoned"))?;
+        let mut positions: HashMap<String, usize> = words
+            .iter()
+            .enumerate()
+            .map(|(i, (_, word, _))| (word.clone(), i))
+            .collect();
         for line in data.lines() {
             if line.trim().is_empty() || line.starts_with('#') {
                 continue;
@@ -1259,7 +1368,9 @@ impl UserLexicon {
         if let Ok(mut slot) = self.phrases.write() {
             *slot = phrases;
         }
-        if rebuild { self.rebuild(); }
+        if rebuild {
+            self.rebuild();
+        }
         count
     }
 
@@ -1308,19 +1419,50 @@ impl UserLexicon {
 
     /// 与自定义编码一样只命中完整输入；保留读音/输入码供后续选词继续计数。
     pub(crate) fn learned_code_words(&self, code: &str) -> Vec<(String, String, f64)> {
-        let code: String = code.chars().filter(|c| !c.is_whitespace() && *c != '\'').flat_map(char::to_lowercase).collect();
-        self.learned_codes.read().map(|words| {
-            words.iter().filter(|(input, _, _)| input == &code).cloned().collect()
-        }).unwrap_or_default()
+        let code: String = code
+            .chars()
+            .filter(|c| !c.is_whitespace() && *c != '\'')
+            .flat_map(char::to_lowercase)
+            .collect();
+        self.learned_codes
+            .read()
+            .map(|words| {
+                words
+                    .iter()
+                    .filter(|(input, _, _)| input == &code)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
-    pub(crate) fn learned_code_prefix(&self,code:&str)->Vec<(String,String,f64)>{
-        let code=code.to_ascii_lowercase();
-        self.learned_codes.read().map(|words|words.iter().filter(|(input,word,_)|input.starts_with(&code)&&input.len()>code.len()&&word.bytes().all(|b|b.is_ascii_alphabetic())).cloned().collect()).unwrap_or_default()
+    pub(crate) fn learned_code_prefix(&self, code: &str) -> Vec<(String, String, f64)> {
+        let code = code.to_ascii_lowercase();
+        self.learned_codes
+            .read()
+            .map(|words| {
+                words
+                    .iter()
+                    .filter(|(input, word, _)| {
+                        input.starts_with(&code)
+                            && input.len() > code.len()
+                            && word.bytes().all(|b| b.is_ascii_alphabetic())
+                    })
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
-    pub(crate) fn personal_long_completions(&self,prefix:&[SyllableKey],word_prefix:&str)->Vec<LexEntry>{
-        self.snapshot.read().map(|s|s.long_completions(prefix,word_prefix,32)).unwrap_or_default()
+    pub(crate) fn personal_long_completions(
+        &self,
+        prefix: &[SyllableKey],
+        word_prefix: &str,
+    ) -> Vec<LexEntry> {
+        self.snapshot
+            .read()
+            .map(|s| s.long_completions(prefix, word_prefix, 32))
+            .unwrap_or_default()
     }
 
     pub fn custom_words(&self) -> Vec<(String, String, f64)> {
@@ -1349,7 +1491,8 @@ impl UserLexicon {
         if let Ok(mut slot) = self.extra_snapshot.write() {
             *slot = Arc::new(snapshot);
         }
-        self.generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         count
     }
 
@@ -1373,9 +1516,14 @@ impl UserLexicon {
                 let _ = lexicon.insert(input, word, *freq);
             }
         }
-        if let Ok(mut slot) = self.snapshot.write() { *slot = Arc::new(lexicon); }
-        if let Ok(mut slot) = self.learned_codes.write() { *slot = learned_codes; }
-        self.generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if let Ok(mut slot) = self.snapshot.write() {
+            *slot = Arc::new(lexicon);
+        }
+        if let Ok(mut slot) = self.learned_codes.write() {
+            *slot = learned_codes;
+        }
+        self.generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// 词库内容的代数：学到的词、自定义词或导入词库变了就加一。
@@ -1387,17 +1535,28 @@ impl UserLexicon {
 /// 中文词仍校验音节；英文、混输词无法拆成拼音时保存实际输入码。
 /// 使用同一校验入口，保证直接添加、TSV 重载和 JSON 备份恢复接受相同词条。
 fn user_reading(input: &str, word: &str, frequency: f64) -> Result<String> {
-    if word.trim().is_empty() || word.contains(['\t', '\r', '\n', '\0']) || input.trim().is_empty()
-        || input.contains(['\t', '\r', '\n', '\0']) {
+    if word.trim().is_empty()
+        || word.contains(['\t', '\r', '\n', '\0'])
+        || input.trim().is_empty()
+        || input.contains(['\t', '\r', '\n', '\0'])
+    {
         bail!("用户词及其输入不能为空，也不能包含换行或制表符");
     }
-    if !frequency.is_finite() || frequency < 0.0 { bail!("频次必须是非负有限数"); }
+    if !frequency.is_finite() || frequency < 0.0 {
+        bail!("频次必须是非负有限数");
+    }
     match parse_pinyin_keys(input.trim()) {
         Ok(_) => Ok(input.trim().to_string()),
         Err(error) => {
-            let code: String = input.chars().filter(|c| *c != ' ' && *c != '\'').flat_map(char::to_lowercase).collect();
-            if word.chars().any(|c| c.is_ascii_alphabetic()) && code.bytes().any(|b| b.is_ascii_alphanumeric())
-                && code.bytes().all(|b| b.is_ascii_alphanumeric() || b == b';') {
+            let code: String = input
+                .chars()
+                .filter(|c| *c != ' ' && *c != '\'')
+                .flat_map(char::to_lowercase)
+                .collect();
+            if word.chars().any(|c| c.is_ascii_alphabetic())
+                && code.bytes().any(|b| b.is_ascii_alphanumeric())
+                && code.bytes().all(|b| b.is_ascii_alphanumeric() || b == b';')
+            {
                 Ok(code)
             } else {
                 Err(error).context("用户词拼音无法解析")
@@ -1407,10 +1566,19 @@ fn user_reading(input: &str, word: &str, frequency: f64) -> Result<String> {
 }
 
 impl Lexicon for UserLexicon {
-    fn long_completions(&self, prefix: &[SyllableKey], word_prefix: &str, limit: usize) -> Vec<LexEntry> {
+    fn long_completions(
+        &self,
+        prefix: &[SyllableKey],
+        word_prefix: &str,
+        limit: usize,
+    ) -> Vec<LexEntry> {
         let mut entries = self.base.long_completions(prefix, word_prefix, limit);
-        if let Ok(snapshot) = self.snapshot.read() { entries.extend(snapshot.long_completions(prefix, word_prefix, limit)); }
-        if let Ok(snapshot) = self.extra_snapshot.read() { entries.extend(snapshot.long_completions(prefix, word_prefix, limit)); }
+        if let Ok(snapshot) = self.snapshot.read() {
+            entries.extend(snapshot.long_completions(prefix, word_prefix, limit));
+        }
+        if let Ok(snapshot) = self.extra_snapshot.read() {
+            entries.extend(snapshot.long_completions(prefix, word_prefix, limit));
+        }
         entries.sort_unstable_by(|a, b| long_word_order(b, a));
         let mut seen = std::collections::HashSet::new();
         entries.retain(|entry| seen.insert(entry.word.clone()));
@@ -1421,9 +1589,18 @@ impl Lexicon for UserLexicon {
         // 学习和导入数据沿用各自的快照，删除或换词库后不留下过期补全。
         [
             self.base.complete_long_word(prefix, word_prefix),
-            self.snapshot.read().ok().and_then(|s| s.complete_long_word(prefix, word_prefix)),
-            self.extra_snapshot.read().ok().and_then(|s| s.complete_long_word(prefix, word_prefix)),
-        ].into_iter().flatten().max_by(long_word_order)
+            self.snapshot
+                .read()
+                .ok()
+                .and_then(|s| s.complete_long_word(prefix, word_prefix)),
+            self.extra_snapshot
+                .read()
+                .ok()
+                .and_then(|s| s.complete_long_word(prefix, word_prefix)),
+        ]
+        .into_iter()
+        .flatten()
+        .max_by(long_word_order)
     }
 
     fn lookup(&self, query: &[SyllableQuery]) -> Vec<LexEntry> {
@@ -1455,13 +1632,25 @@ impl Lexicon for UserLexicon {
                 .read()
                 .map(|s| s.has_longer(query))
                 .unwrap_or(true)
-            || self.extra_snapshot.read().map(|s| s.has_longer(query)).unwrap_or(true)
+            || self
+                .extra_snapshot
+                .read()
+                .map(|s| s.has_longer(query))
+                .unwrap_or(true)
     }
 
     fn has_longer_fuzzy(&self, query: &[SyllableQuery]) -> bool {
         self.base.has_longer_fuzzy(query)
-            || self.snapshot.read().map(|s| s.has_longer_fuzzy(query)).unwrap_or(true)
-            || self.extra_snapshot.read().map(|s| s.has_longer_fuzzy(query)).unwrap_or(true)
+            || self
+                .snapshot
+                .read()
+                .map(|s| s.has_longer_fuzzy(query))
+                .unwrap_or(true)
+            || self
+                .extra_snapshot
+                .read()
+                .map(|s| s.has_longer_fuzzy(query))
+                .unwrap_or(true)
     }
 
     fn prepare_fuzzy(&self) {
@@ -1480,19 +1669,26 @@ impl Lexicon for UserLexicon {
     }
 
     fn total_freq(&self) -> f64 {
-        self.base.total_freq() + self.snapshot.read().map(|s| s.total_freq()).unwrap_or(0.0)
-            + self.extra_snapshot.read().map(|s| s.total_freq()).unwrap_or(0.0)
+        self.base.total_freq()
+            + self.snapshot.read().map(|s| s.total_freq()).unwrap_or(0.0)
+            + self
+                .extra_snapshot
+                .read()
+                .map(|s| s.total_freq())
+                .unwrap_or(0.0)
     }
 
     fn len(&self) -> usize {
-        self.base.len() + self.snapshot.read().map(|s| s.len()).unwrap_or(0)
+        self.base.len()
+            + self.snapshot.read().map(|s| s.len()).unwrap_or(0)
             + self.extra_snapshot.read().map(|s| s.len()).unwrap_or(0)
     }
 }
 
 /// 补全只返回词库已有、一个音节对应一个汉字的更长词，避免混输或符号扩写。
 fn long_word_matches(entry: &LexEntry, prefix: &[SyllableKey], word_prefix: &str) -> bool {
-    entry.keys.len() > prefix.len() && entry.keys.starts_with(prefix)
+    entry.keys.len() > prefix.len()
+        && entry.keys.starts_with(prefix)
         && entry.word.starts_with(word_prefix)
         && entry.word.chars().count() == entry.keys.len()
         && entry.word.chars().all(crate::autospace::is_han)
@@ -1500,8 +1696,11 @@ fn long_word_matches(entry: &LexEntry, prefix: &[SyllableKey], word_prefix: &str
 
 /// 同频时先取短词，再按文字和读音稳定排序，内存与编译词库得到同一结果。
 fn long_word_order(a: &LexEntry, b: &LexEntry) -> std::cmp::Ordering {
-    a.freq.total_cmp(&b.freq).then_with(|| b.keys.len().cmp(&a.keys.len()))
-        .then_with(|| b.word.cmp(&a.word)).then_with(|| b.keys.cmp(&a.keys))
+    a.freq
+        .total_cmp(&b.freq)
+        .then_with(|| b.keys.len().cmp(&a.keys.len()))
+        .then_with(|| b.word.cmp(&a.word))
+        .then_with(|| b.keys.cmp(&a.keys))
 }
 
 /// 查询每个音节的声母（全拼音节取首字母，和词条的 initials 一样）。
@@ -1537,7 +1736,9 @@ pub(crate) fn fuzzy_query_key(query: &[SyllableQuery]) -> Option<Vec<u32>> {
 
 fn fuzzy_hash(key: &[u32]) -> u64 {
     key.iter().fold(KEY_HASH_SEED, |hash, id| {
-        id.to_le_bytes().iter().fold(hash, |h, &byte| (h ^ u64::from(byte)).wrapping_mul(0x1000_0000_01b3))
+        id.to_le_bytes().iter().fold(hash, |h, &byte| {
+            (h ^ u64::from(byte)).wrapping_mul(0x1000_0000_01b3)
+        })
     })
 }
 
@@ -1797,19 +1998,39 @@ mod tests {
         lex.add("ni", "你", 400.0).unwrap();
         assert_eq!(lex.total_freq(), 700.0);
         lex.clear();
-        assert_eq!(lex.lookup(&q).len(), 2, "clearing learning must keep imported and custom words");
+        assert_eq!(
+            lex.lookup(&q).len(),
+            2,
+            "clearing learning must keep imported and custom words"
+        );
         lex.set_extra_words(Vec::new());
-        assert_eq!(lex.lookup(&q).iter().map(|e| e.word.as_str()).collect::<Vec<_>>(), vec!["妮"]);
+        assert_eq!(
+            lex.lookup(&q)
+                .iter()
+                .map(|e| e.word.as_str())
+                .collect::<Vec<_>>(),
+            vec!["妮"]
+        );
         lex.set_custom_tsv("");
         assert!(lex.lookup(&q).is_empty());
     }
 
     #[test]
     fn backup_validation_matches_dictionary_loading_without_building_indexes() {
-        for text in ["ni\t你\t3\n", "unknown\t字\t3\n", "ni\t你\tNaN\n",
-            "# comment\n", "ni\t你\tbad\n", "ni\t你\n", "ni\t你\t3\textra\n"] {
-            assert_eq!(MemoryLexicon::validate_tsv_str(text).is_ok(),
-                MemoryLexicon::from_tsv_str(text).is_ok(), "{text:?}");
+        for text in [
+            "ni\t你\t3\n",
+            "unknown\t字\t3\n",
+            "ni\t你\tNaN\n",
+            "# comment\n",
+            "ni\t你\tbad\n",
+            "ni\t你\n",
+            "ni\t你\t3\textra\n",
+        ] {
+            assert_eq!(
+                MemoryLexicon::validate_tsv_str(text).is_ok(),
+                MemoryLexicon::from_tsv_str(text).is_ok(),
+                "{text:?}"
+            );
         }
     }
 
@@ -1979,7 +2200,10 @@ mod tests {
         lex.save_tsv(&path).unwrap();
         let mut text = String::new();
         previous.read_to_string(&mut text).unwrap();
-        assert_eq!(text, old, "an existing reader must retain the complete previous file");
+        assert_eq!(
+            text, old,
+            "an existing reader must retain the complete previous file"
+        );
         assert!(std::fs::read_to_string(&path).unwrap().contains("好"));
         drop(previous);
         cleanup(&path);
@@ -2054,8 +2278,12 @@ mod tests {
         let base = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
         for (offset, word) in [(100, "你"), (200, "泥")] {
             fs::write(&path, format!("ni\t{word}\t100\n")).unwrap();
-            fs::OpenOptions::new().write(true).open(&path).unwrap()
-                .set_modified(base + Duration::from_millis(offset)).unwrap();
+            fs::OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(base + Duration::from_millis(offset))
+                .unwrap();
             let lex = MemoryLexicon::from_tsv_path_cached(&path).unwrap();
             assert_eq!(lex.entries[0].word, word);
         }

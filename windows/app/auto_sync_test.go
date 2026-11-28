@@ -588,10 +588,10 @@ func TestSyncRecoveryUIResetsLocalRecordsResetsCloudAndForceRestores(t *testing.
 		t.Fatal(s.syncMessage)
 	}
 	store := &memStore{files: map[string][]byte{
-		"sync-20260101000000-bad.json":           []byte("corrupt"),
-		"devices/" + deviceB + ".json":           []byte("legacy-index"),
-		"devices/" + deviceB + "/100-1.json":     []byte("legacy-snap"),
-		"notes.txt":                              []byte("keep-unrelated-user-file"),
+		"sync-20260101000000-bad.json":       []byte("corrupt"),
+		"devices/" + deviceB + ".json":       []byte("legacy-index"),
+		"devices/" + deviceB + "/100-1.json": []byte("legacy-snap"),
+		"notes.txt":                          []byte("keep-unrelated-user-file"),
 	}}
 	s.newStore = func(syncSettings) (remoteStore, error) { return store, nil }
 	manager, err := newAutoSync(s.syncDir, b)

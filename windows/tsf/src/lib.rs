@@ -6,19 +6,19 @@
 pub mod keys;
 
 #[cfg(windows)]
+mod brand_icon;
+#[cfg(windows)]
 mod client;
 #[cfg(windows)]
 mod langbar;
-#[cfg(windows)]
-mod brand_icon;
 #[cfg(windows)]
 mod log;
 #[cfg(windows)]
 mod register;
 #[cfg(windows)]
-mod service;
-#[cfg(windows)]
 mod reload;
+#[cfg(windows)]
+mod service;
 #[cfg(windows)]
 mod ui;
 
@@ -68,7 +68,12 @@ mod exports {
     }
 
     impl IClassFactory_Impl for ClassFactory_Impl {
-        fn CreateInstance(&self, outer: Ref<IUnknown>, iid: *const GUID, object: *mut *mut c_void) -> Result<()> {
+        fn CreateInstance(
+            &self,
+            outer: Ref<IUnknown>,
+            iid: *const GUID,
+            object: *mut *mut c_void,
+        ) -> Result<()> {
             if object.is_null() || iid.is_null() {
                 return Err(E_POINTER.into());
             }
@@ -102,7 +107,11 @@ mod exports {
     }
 
     #[no_mangle]
-    unsafe extern "system" fn DllGetClassObject(clsid: *const GUID, iid: *const GUID, object: *mut *mut c_void) -> HRESULT {
+    unsafe extern "system" fn DllGetClassObject(
+        clsid: *const GUID,
+        iid: *const GUID,
+        object: *mut *mut c_void,
+    ) -> HRESULT {
         if clsid.is_null() || iid.is_null() || object.is_null() {
             return E_POINTER;
         }
@@ -111,7 +120,10 @@ mod exports {
             if *clsid != crate::register::clsid() {
                 return CLASS_E_CLASSNOTAVAILABLE;
             }
-            let factory: IClassFactory = ClassFactory { _dll: DllRef::new() }.into();
+            let factory: IClassFactory = ClassFactory {
+                _dll: DllRef::new(),
+            }
+            .into();
             factory.query(iid, object)
         }
     }

@@ -266,7 +266,11 @@ pub fn parse_hex_rgb(raw: &str) -> Option<(u8, u8, u8)> {
         }
         3 => {
             let nibble = |s: &str| u8::from_str_radix(s, 16).ok().map(|v| v * 17);
-            Some((nibble(&hex[0..1])?, nibble(&hex[1..2])?, nibble(&hex[2..3])?))
+            Some((
+                nibble(&hex[0..1])?,
+                nibble(&hex[1..2])?,
+                nibble(&hex[2..3])?,
+            ))
         }
         _ => None,
     }
@@ -568,13 +572,28 @@ impl Default for Config {
 }
 
 /// 双拼方案。
-pub const SHUANGPIN_SCHEMES: [&str; 7] = ["ziranma", "xiaohe", "microsoft", "sogou", "abc", "ziguang", "pinyinjiajia"];
+pub const SHUANGPIN_SCHEMES: [&str; 7] = [
+    "ziranma",
+    "xiaohe",
+    "microsoft",
+    "sogou",
+    "abc",
+    "ziguang",
+    "pinyinjiajia",
+];
 pub const CANDIDATE_STYLES: [&str; 5] = ["pink", "blue", "green", "sogou", "custom"];
 pub const SHIFT_TOGGLES: [&str; 4] = ["both", "left", "right", "off"];
 pub const SELECT_KEYS: [&str; 3] = ["off", "semicolon", "quote"];
 pub const ARROW_KEYS: [&str; 2] = ["candidates", "caret"];
 pub const MODE_SCOPES: [&str; 2] = ["global", "app"];
-pub const HINT_POSITIONS: [&str; 6] = ["top-left", "top", "top-right", "bottom-left", "bottom", "bottom-right"];
+pub const HINT_POSITIONS: [&str; 6] = [
+    "top-left",
+    "top",
+    "top-right",
+    "bottom-left",
+    "bottom",
+    "bottom-right",
+];
 pub const HOTKEYS_EMOJI: [&str; 3] = ["off", "ctrl+shift+e", "ctrl+alt+e"];
 pub const HOTKEYS_PUNCT: [&str; 2] = ["off", "ctrl+period"];
 pub const HOTKEYS_TRADITIONAL: [&str; 3] = ["off", "ctrl+shift+f", "ctrl+shift+t"];
@@ -585,11 +604,25 @@ pub const MAX_APP_PRESETS: usize = 200;
 /// 规则里的程序名统一成小写文件名：去掉路径，没写扩展名的补上 `.exe`。写不成文件名的返回 None。
 pub fn normalize_app_name(name: &str) -> Option<String> {
     let name = name.trim().trim_matches('"');
-    let name = name.rsplit(['\\', '/']).next().unwrap_or(name).trim().to_lowercase();
-    if name.is_empty() || name.len() > 260 || name.chars().any(|c| c.is_control() || r#"<>:"|?*"#.contains(c)) {
+    let name = name
+        .rsplit(['\\', '/'])
+        .next()
+        .unwrap_or(name)
+        .trim()
+        .to_lowercase();
+    if name.is_empty()
+        || name.len() > 260
+        || name
+            .chars()
+            .any(|c| c.is_control() || r#"<>:"|?*"#.contains(c))
+    {
         return None;
     }
-    Some(if name.ends_with(".exe") { name } else { name + ".exe" })
+    Some(if name.ends_with(".exe") {
+        name
+    } else {
+        name + ".exe"
+    })
 }
 
 /// 不在 `allowed` 里就换成 `fallback`。
@@ -605,7 +638,9 @@ impl Config {
         use std::hash::{Hash, Hasher};
         let mut hash = std::collections::hash_map::DefaultHasher::new();
         self.brand_icon.hash(&mut hash);
-        if self.brand_icon == "custom" { self.custom_brand_icon.hash(&mut hash); }
+        if self.brand_icon == "custom" {
+            self.custom_brand_icon.hash(&mut hash);
+        }
         hash.finish()
     }
 
@@ -614,12 +649,29 @@ impl Config {
         let d = Config::default();
         self.page_size = self.page_size.clamp(3, 10);
         self.font_size = self.font_size.clamp(12, 36);
-        if self.preedit_size != 0 { self.preedit_size = self.preedit_size.clamp(10, 36); }
-        pick(&mut self.inline_preedit, &["segmented", "spaces", "raw", "off"], &d.inline_preedit);
-        pick(&mut self.sentence_editor_position, &["below", "above"], &d.sentence_editor_position);
-        self.font_fallbacks = self.font_fallbacks.split([',', '，']).map(str::trim)
-            .filter(|name| !name.is_empty() && name.len() <= 64 && !name.chars().any(char::is_control))
-            .take(6).collect::<Vec<_>>().join(",");
+        if self.preedit_size != 0 {
+            self.preedit_size = self.preedit_size.clamp(10, 36);
+        }
+        pick(
+            &mut self.inline_preedit,
+            &["segmented", "spaces", "raw", "off"],
+            &d.inline_preedit,
+        );
+        pick(
+            &mut self.sentence_editor_position,
+            &["below", "above"],
+            &d.sentence_editor_position,
+        );
+        self.font_fallbacks = self
+            .font_fallbacks
+            .split([',', '，'])
+            .map(str::trim)
+            .filter(|name| {
+                !name.is_empty() && name.len() <= 64 && !name.chars().any(char::is_control)
+            })
+            .take(6)
+            .collect::<Vec<_>>()
+            .join(",");
         let family = self.font_family.trim();
         self.font_family = if family.is_empty() || family.len() > 64 {
             d.font_family.clone()
@@ -636,27 +688,61 @@ impl Config {
         self.bar_hide_seconds = self.bar_hide_seconds.clamp(1, 60);
         self.bar_parts &= 0xf;
         self.typo_kinds &= 0xf;
-        pick(&mut self.pin_badge, &["off", "paperclip", "pushpin", "dot"], &d.pin_badge);
-        if ![0, 30, 90, 180, 365].contains(&self.stats_retention) { self.stats_retention = d.stats_retention; }
+        pick(
+            &mut self.pin_badge,
+            &["off", "paperclip", "pushpin", "dot"],
+            &d.pin_badge,
+        );
+        if ![0, 30, 90, 180, 365].contains(&self.stats_retention) {
+            self.stats_retention = d.stats_retention;
+        }
         self.page_keys &= 0xf;
         self.digit_punct_fullwidth &= digit_punct::ALL;
-        pick(&mut self.candidate_style, &CANDIDATE_STYLES, &d.candidate_style);
+        pick(
+            &mut self.candidate_style,
+            &CANDIDATE_STYLES,
+            &d.candidate_style,
+        );
         self.candidate_skin = self.candidate_skin.sanitized();
-        pick(&mut self.brand_icon, &["default", "white", "custom"], &d.brand_icon);
+        pick(
+            &mut self.brand_icon,
+            &["default", "white", "custom"],
+            &d.brand_icon,
+        );
         // 显示端只导入 256 px PNG；限制配置体积，保留未选中的自定义图标供再次选择。
-        if self.custom_brand_icon.len() > 512 * 1024 { self.custom_brand_icon.clear(); }
-        if self.brand_icon == "custom" && self.custom_brand_icon.is_empty() { self.brand_icon = d.brand_icon.clone(); }
-        pick(&mut self.shuangpin_scheme, &SHUANGPIN_SCHEMES, &d.shuangpin_scheme);
+        if self.custom_brand_icon.len() > 512 * 1024 {
+            self.custom_brand_icon.clear();
+        }
+        if self.brand_icon == "custom" && self.custom_brand_icon.is_empty() {
+            self.brand_icon = d.brand_icon.clone();
+        }
+        pick(
+            &mut self.shuangpin_scheme,
+            &SHUANGPIN_SCHEMES,
+            &d.shuangpin_scheme,
+        );
         pick(&mut self.shift_toggle, &SHIFT_TOGGLES, &d.shift_toggle);
         pick(&mut self.select_keys, &SELECT_KEYS, &d.select_keys);
         pick(&mut self.arrow_keys, &ARROW_KEYS, &d.arrow_keys);
         pick(&mut self.mode_scope, &MODE_SCOPES, &d.mode_scope);
         pick(&mut self.hint_position, &HINT_POSITIONS, &d.hint_position);
         pick(&mut self.hotkey_emoji, &HOTKEYS_EMOJI, &d.hotkey_emoji);
-        pick(&mut self.hotkey_english, &["off", "ctrl+shift+y", "ctrl+alt+y"], &d.hotkey_english);
-        pick(&mut self.hotkey_radical, &["off", "ctrl+shift+u", "ctrl+alt+u"], &d.hotkey_radical);
+        pick(
+            &mut self.hotkey_english,
+            &["off", "ctrl+shift+y", "ctrl+alt+y"],
+            &d.hotkey_english,
+        );
+        pick(
+            &mut self.hotkey_radical,
+            &["off", "ctrl+shift+u", "ctrl+alt+u"],
+            &d.hotkey_radical,
+        );
         pick(&mut self.hotkey_punct, &HOTKEYS_PUNCT, &d.hotkey_punct);
-        pick(&mut self.hotkey_traditional, &HOTKEYS_TRADITIONAL, &d.hotkey_traditional);
+        pick(
+            &mut self.hotkey_traditional,
+            &HOTKEYS_TRADITIONAL,
+            &d.hotkey_traditional,
+        );
         pick(&mut self.hotkey_mode, &HOTKEYS_MODE, &d.hotkey_mode);
         // 同一个程序只留最先的一条：匹配时不分大小写，重复的规则没有意义
         let mut rules: Vec<AppPreset> = Vec::new();
@@ -665,12 +751,20 @@ impl Config {
                 continue;
             };
             if rules.len() < MAX_APP_PRESETS && rules.iter().all(|r| r.app != app) {
-                rules.push(AppPreset { app, mode: rule.mode });
+                rules.push(AppPreset {
+                    app,
+                    mode: rule.mode,
+                });
             }
         }
         self.app_preset_rules = rules;
-        self.vim_mode_apps = self.vim_mode_apps.iter().filter_map(|name| normalize_app_name(name))
-            .collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+        self.vim_mode_apps = self
+            .vim_mode_apps
+            .iter()
+            .filter_map(|name| normalize_app_name(name))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
         self
     }
 
@@ -719,7 +813,9 @@ pub struct Dictionary {
     pub description: String,
 }
 
-fn dictionary_enabled_default() -> bool { true }
+fn dictionary_enabled_default() -> bool {
+    true
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DictionaryEntry {
@@ -857,26 +953,43 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         shown_revision: Option<u64>,
     },
-    CandidateAction { revision: u64, action: CandidateAction },
+    CandidateAction {
+        revision: u64,
+        action: CandidateAction,
+    },
     ListTypingStats,
     ClearTypingStats,
     GetCandidateDiagnostics,
     ClearCandidateDiagnostics,
-    ExportCandidateDiagnostics { path: String, #[serde(default)] evaluation: bool },
+    ExportCandidateDiagnostics {
+        path: String,
+        #[serde(default)]
+        evaluation: bool,
+    },
     /// Windows 宿主识别敏感输入框时，不保留编辑区、上下文和联想。
-    SensitiveFocus { active: bool },
+    SensitiveFocus {
+        active: bool,
+    },
     /// TSF 已核对紧接的退格确实删除了刚上屏的字符。
     UndoCommitLearning,
     /// TSF 已验证右标点存在，先把当前输入候选上屏，不再追加一个右符号。
     ClosePair,
     /// 鼠标点候选：当前页里的序号。
-    Select { index: usize },
+    Select {
+        index: usize,
+    },
     /// 候选窗上的翻页按钮。
-    Page { next: bool },
+    Page {
+        next: bool,
+    },
     /// 忘掉当前页里第 index 个候选（长按候选、右键菜单）。
-    Forget { index: usize },
+    Forget {
+        index: usize,
+    },
     /// 输入框失去焦点、应用要求结束组字：`commit` 时把编辑区原样上屏。
-    Reset { commit: bool },
+    Reset {
+        commit: bool,
+    },
     /// 输入框得到 / 失去焦点。`before` 同 [`Request::Key`]。
     Focus {
         active: bool,
@@ -889,15 +1002,23 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         shift: Option<String>,
     },
-    Command { command: Command },
+    Command {
+        command: Command,
+    },
     /// 大写锁定开了 / 关了（DLL 在按下 Caps Lock 和输入框得到焦点时报）。
     /// 开着时一律按英文输入，关掉后回到原来的中英文状态。
-    CapsLock { on: bool },
+    CapsLock {
+        on: bool,
+    },
     /// 服务状态（版本、词库是否载入、模式）。
     Status,
     EnhancementStatus,
-    SetEnhancement { enabled: bool },
-    RefreshEnhancement { revision: u64 },
+    SetEnhancement {
+        enabled: bool,
+    },
+    RefreshEnhancement {
+        revision: u64,
+    },
     /// 现在开着窗口的程序（设置里添加指定软件时挑）。
     ListApps,
     GetConfig,
@@ -907,40 +1028,76 @@ pub enum Request {
         known_revision: Option<u64>,
     },
     /// 仅设置程序可用；None 移除外部模型并回退随包版本。
-    SetNeuralModel { path: Option<String> },
-    SetConfig { config: Config },
+    SetNeuralModel {
+        path: Option<String>,
+    },
+    SetConfig {
+        config: Config,
+    },
     ListQuickPhrases,
     /// 整份替换快捷短语。
-    SetQuickPhrases { phrases: Vec<QuickPhrase> },
+    SetQuickPhrases {
+        phrases: Vec<QuickPhrase>,
+    },
     /// 从水杉格式文件导入；`replace` 时清掉原有的。
     ImportQuickPhrases {
         path: String,
         #[serde(default)]
         replace: bool,
     },
-    ExportQuickPhrases { path: String },
+    ExportQuickPhrases {
+        path: String,
+    },
     /// 工具栏里的独立常用语，不使用拼音编码。
     ListCommonPhrases,
-    SetCommonPhrases { phrases: Vec<String> },
+    SetCommonPhrases {
+        phrases: Vec<String>,
+    },
     ImportCommonPhrases {
         path: String,
         #[serde(default)]
         replace: bool,
     },
-    ExportCommonPhrases { path: String },
+    ExportCommonPhrases {
+        path: String,
+    },
     ListDictionaries,
     /// 导入水杉格式词库文件，存为 `dicts\<name>.txt`。
-    ImportDictionary { path: String, name: String },
-    RemoveDictionary { name: String },
-    QueryDictionary { name: String, query: String, offset: usize, limit: usize },
-    UpdateDictionary { name: String, new_name: String, enabled: bool, description: String },
-    DeleteDictionaryEntries { name: String, entries: Vec<DictionaryEntry> },
+    ImportDictionary {
+        path: String,
+        name: String,
+    },
+    RemoveDictionary {
+        name: String,
+    },
+    QueryDictionary {
+        name: String,
+        query: String,
+        offset: usize,
+        limit: usize,
+    },
+    UpdateDictionary {
+        name: String,
+        new_name: String,
+        enabled: bool,
+        description: String,
+    },
+    DeleteDictionaryEntries {
+        name: String,
+        entries: Vec<DictionaryEntry>,
+    },
     /// 导出学到的用户词（水杉词库格式）。
-    ExportUserDictionary { path: String },
+    ExportUserDictionary {
+        path: String,
+    },
     /// 完整学习备份（JSON）：词条、次数、时间和搭配。
-    ExportLearning { path: String },
+    ExportLearning {
+        path: String,
+    },
     /// 合并完整学习备份，不清空现有记录，也不重复累加次数。
-    ImportLearning { path: String },
+    ImportLearning {
+        path: String,
+    },
     /// 全部设置和用户数据的版本化备份；校验预览不改动当前数据。
     /// `parts` 是要导出的类别，不写就是全部。
     ExportSettings {
@@ -949,7 +1106,9 @@ pub enum Request {
         parts: Option<Vec<BackupPart>>,
     },
     /// 自动同步的完整快照及数据修改时间；导出本身不算修改。
-    ExportSyncSettings { path: String },
+    ExportSyncSettings {
+        path: String,
+    },
     /// 仅当当前数据仍与 expected_path 一致且没有组字时整份恢复。
     ImportSyncSettings {
         path: String,
@@ -959,16 +1118,29 @@ pub enum Request {
     },
     /// 重建本机同步变更记录，用于同步记录损坏或与正文不一致时恢复。
     ResetSyncRecords,
-    InspectSettingsBackup { path: String },
-    ImportSettings { path: String },
-    PreviewSyncMerge { path: String },
-    MergeSyncSettings { path: String, expected_path: String },
+    InspectSettingsBackup {
+        path: String,
+    },
+    ImportSettings {
+        path: String,
+    },
+    PreviewSyncMerge {
+        path: String,
+    },
+    MergeSyncSettings {
+        path: String,
+        expected_path: String,
+    },
     /// 把一份全部设置备份合并进当前数据（数据同步的恢复）：不删除、不替换本机已有的内容。
-    MergeSettings { path: String },
+    MergeSettings {
+        path: String,
+    },
     /// 学到的词（用户词库）。
     ListUserWords,
     /// 忘掉这些学到的词（用户词库和选词习惯都去掉）。
-    ForgetWords { words: Vec<String> },
+    ForgetWords {
+        words: Vec<String>,
+    },
     /// 自己加一个词（进用户词库，马上能打出来）。拼音空着时按常用读音自动注音。
     AddUserWord {
         word: String,
@@ -1001,7 +1173,10 @@ pub enum Panel {
 /// TSF 自身验证并执行的文档动作，不携带实际正文。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum PairEdit { Skip, Erase }
+pub enum PairEdit {
+    Skip,
+    Erase,
+}
 
 /// 一次按键之后 DLL 要做的事。
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -1133,16 +1308,23 @@ pub struct Frame {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SentenceBlock {
-    pub from: usize, pub to: usize, pub text: String,
-    pub confirmed: bool, pub corrected: bool, pub focused: bool,
+    pub from: usize,
+    pub to: usize,
+    pub text: String,
+    pub confirmed: bool,
+    pub corrected: bool,
+    pub focused: bool,
     #[serde(default)]
     pub uncertain: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SentenceView {
-    pub text: String, pub raw: String, pub cursor: Option<usize>,
-    pub blocks: Vec<SentenceBlock>, pub alternatives: Vec<String>,
+    pub text: String,
+    pub raw: String,
+    pub cursor: Option<usize>,
+    pub blocks: Vec<SentenceBlock>,
+    pub alternatives: Vec<String>,
     pub page: usize,
     pub has_prev: bool,
     pub has_next: bool,
@@ -1211,7 +1393,7 @@ pub struct BrandIcon {
 /// 应答。成功时按请求种类填 `frame`、`status`、`config` 等之一。
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Response {
-    #[serde(default, skip_serializing_if="Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enhancement: Option<EnhancementStatus>,
     pub ok: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1316,9 +1498,12 @@ mod tests {
         let old: Config = serde_json::from_str("{}").unwrap();
         assert!(!old.sentence_editor);
         assert_eq!(old.sentence_editor_position, "below");
-        let above: Config = serde_json::from_str(r#"{"sentence_editor":true,"sentence_editor_position":"above"}"#).unwrap();
+        let above: Config =
+            serde_json::from_str(r#"{"sentence_editor":true,"sentence_editor_position":"above"}"#)
+                .unwrap();
         assert_eq!(above.sanitized().sentence_editor_position, "above");
-        let unknown: Config = serde_json::from_str(r#"{"sentence_editor_position":"sideways"}"#).unwrap();
+        let unknown: Config =
+            serde_json::from_str(r#"{"sentence_editor_position":"sideways"}"#).unwrap();
         assert_eq!(unknown.sanitized().sentence_editor_position, "below");
     }
 
@@ -1342,8 +1527,10 @@ mod tests {
 
     #[test]
     fn missing_config_fields_take_defaults() {
-        let config: Config =
-            serde_json::from_str(r#"{"page_size": 50, "shuangpin_scheme": "x", "hint_position": "left"}"#).unwrap();
+        let config: Config = serde_json::from_str(
+            r#"{"page_size": 50, "shuangpin_scheme": "x", "hint_position": "left"}"#,
+        )
+        .unwrap();
         let config = config.sanitized();
         assert_eq!(config.page_size, 10);
         assert_eq!(config.shuangpin_scheme, "xiaohe");
@@ -1368,13 +1555,20 @@ mod tests {
             })).unwrap();
             let saved = serde_json::to_value(config.sanitized()).unwrap();
             assert_eq!(saved["brand_icon"], variant);
-            assert!(saved["custom_brand_icon"].as_str().is_some_and(|data| !data.is_empty()));
+            assert!(saved["custom_brand_icon"]
+                .as_str()
+                .is_some_and(|data| !data.is_empty()));
         }
-        let unknown: Config = serde_json::from_value(serde_json::json!({"brand_icon":"other"})).unwrap();
-        assert_eq!(serde_json::to_value(unknown.sanitized()).unwrap()["brand_icon"], "default");
+        let unknown: Config =
+            serde_json::from_value(serde_json::json!({"brand_icon":"other"})).unwrap();
+        assert_eq!(
+            serde_json::to_value(unknown.sanitized()).unwrap()["brand_icon"],
+            "default"
+        );
         let oversized: Config = serde_json::from_value(serde_json::json!({
             "brand_icon":"custom", "custom_brand_icon":"A".repeat(512 * 1024 + 1)
-        })).unwrap();
+        }))
+        .unwrap();
         let saved = serde_json::to_value(oversized.sanitized()).unwrap();
         assert_eq!(saved["brand_icon"], "default");
         assert!(saved.get("custom_brand_icon").is_none());
@@ -1403,17 +1597,26 @@ mod tests {
         let mut config: Config = serde_json::from_str("{}").unwrap();
         assert!(!config.auto_update, "旧配置不能自动开启软件更新");
         config.auto_update = true;
-        let restored: Config = serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
+        let restored: Config =
+            serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
         assert!(restored.auto_update);
     }
 
     #[test]
     fn showing_settings_after_update_defaults_off_and_round_trips() {
         let old: Config = serde_json::from_str("{}").unwrap();
-        assert_eq!(serde_json::to_value(old).unwrap()["show_settings_after_update"], false);
-        let enabled: Config = serde_json::from_str(r#"{"show_settings_after_update":true}"#).unwrap();
-        let restored: Config = serde_json::from_str(&serde_json::to_string(&enabled).unwrap()).unwrap();
-        assert_eq!(serde_json::to_value(restored).unwrap()["show_settings_after_update"], true);
+        assert_eq!(
+            serde_json::to_value(old).unwrap()["show_settings_after_update"],
+            false
+        );
+        let enabled: Config =
+            serde_json::from_str(r#"{"show_settings_after_update":true}"#).unwrap();
+        let restored: Config =
+            serde_json::from_str(&serde_json::to_string(&enabled).unwrap()).unwrap();
+        assert_eq!(
+            serde_json::to_value(restored).unwrap()["show_settings_after_update"],
+            true
+        );
     }
 
     #[test]
@@ -1430,13 +1633,29 @@ mod tests {
         assert_eq!(config.mode_scope, "global");
         assert_eq!(config.font_family, DEFAULT_FONT);
         assert_eq!(config.candidate_style, "pink");
-        let sogou = Config { candidate_style: "sogou".into(), ..Config::default() }.sanitized();
+        let sogou = Config {
+            candidate_style: "sogou".into(),
+            ..Config::default()
+        }
+        .sanitized();
         assert_eq!(sogou.candidate_style, "sogou");
-        let custom = Config { candidate_style: "custom".into(), ..Config::default() }.sanitized();
+        let custom = Config {
+            candidate_style: "custom".into(),
+            ..Config::default()
+        }
+        .sanitized();
         assert_eq!(custom.candidate_style, "custom");
-        let arrow = Config { arrow_keys: "other".into(), ..Config::default() }.sanitized();
+        let arrow = Config {
+            arrow_keys: "other".into(),
+            ..Config::default()
+        }
+        .sanitized();
         assert_eq!(arrow.arrow_keys, "candidates");
-        let caret = Config { arrow_keys: "caret".into(), ..Config::default() }.sanitized();
+        let caret = Config {
+            arrow_keys: "caret".into(),
+            ..Config::default()
+        }
+        .sanitized();
         assert_eq!(caret.arrow_keys, "caret");
         let fuzzy = Config {
             fuzzy_groups: fuzzy::AN_AI | fuzzy::ENG_ONG | (1 << 20),
@@ -1445,7 +1664,10 @@ mod tests {
         }
         .sanitized();
         assert_eq!(fuzzy.fuzzy_groups, fuzzy::AN_AI | fuzzy::ENG_ONG);
-        assert_eq!(fuzzy.digit_punct_fullwidth, digit_punct::DUNHAO | digit_punct::COLON);
+        assert_eq!(
+            fuzzy.digit_punct_fullwidth,
+            digit_punct::DUNHAO | digit_punct::COLON
+        );
     }
 
     #[test]
@@ -1465,13 +1687,22 @@ mod tests {
         assert_eq!(
             config.app_preset_rules,
             vec![
-                AppPreset { app: "code.exe".into(), mode: Mode::English },
-                AppPreset { app: "wechat.exe".into(), mode: Mode::Chinese },
+                AppPreset {
+                    app: "code.exe".into(),
+                    mode: Mode::English
+                },
+                AppPreset {
+                    app: "wechat.exe".into(),
+                    mode: Mode::Chinese
+                },
             ],
             "统一成小写文件名，重复的只留第一条，写不成文件名的丢掉"
         );
         let old: Config = serde_json::from_str("{}").unwrap();
-        assert!(!old.app_presets && old.app_preset_rules.is_empty(), "旧配置不能自动开启");
+        assert!(
+            !old.app_presets && old.app_preset_rules.is_empty(),
+            "旧配置不能自动开启"
+        );
     }
 
     #[test]
@@ -1480,7 +1711,10 @@ mod tests {
             decode::<Request>(br#"{"op":"caps_lock","on":true}"#).unwrap(),
             Request::CapsLock { on: true }
         );
-        assert_eq!(decode::<Request>(br#"{"op":"list_apps"}"#).unwrap(), Request::ListApps);
+        assert_eq!(
+            decode::<Request>(br#"{"op":"list_apps"}"#).unwrap(),
+            Request::ListApps
+        );
         assert_eq!(
             decode::<Request>(br#"{"op":"toggle_mode"}"#).unwrap(),
             Request::ToggleMode { shift: None }
@@ -1503,7 +1737,10 @@ mod tests {
             Request::ResetSyncRecords
         );
         assert_eq!(
-            decode::<Request>(br#"{"op":"import_sync_settings","path":"a.json","expected_path":"b.json"}"#).unwrap(),
+            decode::<Request>(
+                br#"{"op":"import_sync_settings","path":"a.json","expected_path":"b.json"}"#
+            )
+            .unwrap(),
             Request::ImportSyncSettings {
                 path: "a.json".into(),
                 expected_path: "b.json".into(),
@@ -1547,14 +1784,19 @@ mod tests {
                 "accent_text": "bad-hex",
                 "accent_fill": false
             }
-        })).unwrap().sanitized();
+        }))
+        .unwrap()
+        .sanitized();
         assert_eq!(dirty.candidate_style, "custom");
         assert_eq!(dirty.candidate_skin.background, "#fbf8f1");
         assert_eq!(dirty.candidate_skin.border, CandidateSkin::default().border);
         assert_eq!(dirty.candidate_skin.text, "#112233");
         assert_eq!(dirty.candidate_skin.muted, "#6b5c63");
         assert_eq!(dirty.candidate_skin.accent, "#c44569");
-        assert_eq!(dirty.candidate_skin.accent_text, CandidateSkin::default().accent_text);
+        assert_eq!(
+            dirty.candidate_skin.accent_text,
+            CandidateSkin::default().accent_text
+        );
         assert!(!dirty.candidate_skin.accent_fill);
 
         let restored: Config = decode(&encode(&dirty)).unwrap();

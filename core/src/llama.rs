@@ -535,9 +535,15 @@ mod tests {
             find_server("llama-server", empty.clone(), Some(downloaded.clone())),
             Some(downloaded.clone())
         );
-        assert_eq!(find_server("llama-server", None, Some(downloaded.clone())), Some(downloaded));
+        assert_eq!(
+            find_server("llama-server", None, Some(downloaded.clone())),
+            Some(downloaded)
+        );
         // 下载的那份不能执行（没下完、被删）时当作没有
-        assert_eq!(find_server("llama-server", empty, Some(dir.join("data/none"))), None);
+        assert_eq!(
+            find_server("llama-server", empty, Some(dir.join("data/none"))),
+            None
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 }

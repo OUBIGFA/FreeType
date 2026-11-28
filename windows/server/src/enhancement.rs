@@ -208,11 +208,18 @@ impl Native {
         revision: u64,
         latest: &AtomicU64,
     ) -> Result<Option<Answer>, String> {
-        let result=self.run_active(q,revision,latest);
-        unsafe{(self.idle)(self.model);}
+        let result = self.run_active(q, revision, latest);
+        unsafe {
+            (self.idle)(self.model);
+        }
         result
     }
-    fn run_active(&mut self,q:&Query,revision:u64,latest:&AtomicU64)->Result<Option<Answer>,String>{
+    fn run_active(
+        &mut self,
+        q: &Query,
+        revision: u64,
+        latest: &AtomicU64,
+    ) -> Result<Option<Answer>, String> {
         let mut queries = vec![q.clone()];
         for (pinyin, letters) in &q.variants {
             let mut variant = q.clone();
@@ -388,7 +395,7 @@ impl Native {
                     entities.as_mut_ptr(),
                 ) != 0
         };
-        let mut words: Vec<(String,String)> = Vec::new();
+        let mut words: Vec<(String, String)> = Vec::new();
         let mut start = 0;
         for i in 1..=chars.len() {
             let inside_entity =
@@ -401,13 +408,25 @@ impl Native {
                 start = i;
             }
         }
-        let peak=scores.iter().copied().fold(f32::NEG_INFINITY,f32::max);
-        let weights:Vec<_>=scores.iter().map(|s|(*s-peak).exp()).collect();let total: f32=weights.iter().sum();
-        let mut uncertain=vec![false;chars.len()];let mut at=0;
-        for (word,_) in &words {
-            let n=word.chars().count();
-            let mass:f32=all.iter().zip(&weights).filter(|((candidate,_),_)|candidate.chars().skip(at).take(n).collect::<String>()==*word).map(|(_,w)|*w).sum();
-            if mass<total*0.075{uncertain[at..at+n].fill(true);}at+=n;
+        let peak = scores.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let weights: Vec<_> = scores.iter().map(|s| (*s - peak).exp()).collect();
+        let total: f32 = weights.iter().sum();
+        let mut uncertain = vec![false; chars.len()];
+        let mut at = 0;
+        for (word, _) in &words {
+            let n = word.chars().count();
+            let mass: f32 = all
+                .iter()
+                .zip(&weights)
+                .filter(|((candidate, _), _)| {
+                    candidate.chars().skip(at).take(n).collect::<String>() == *word
+                })
+                .map(|(_, w)| *w)
+                .sum();
+            if mass < total * 0.075 {
+                uncertain[at..at + n].fill(true);
+            }
+            at += n;
         }
         Ok(Some(Answer {
             key: q.key.clone(),
@@ -528,7 +547,9 @@ fn run_worker(s: Arc<Shared>, dir: PathBuf) {
         // A loading request can be cancelled while its file is read. Recheck
         // the generation after dropping the native allocation, never load again
         // under the superseded enabled state.
-        if generation != c.model_generation { continue; }
+        if generation != c.model_generation {
+            continue;
+        }
         if !c.enabled {
             let old = model.take();
             drop(c);
@@ -564,7 +585,7 @@ fn run_worker(s: Arc<Shared>, dir: PathBuf) {
                 }
             }
         }
-        if c.enabled && c.status.state=="ready" {
+        if c.enabled && c.status.state == "ready" {
             if let (Some(m), Some(q)) = (model.as_mut(), c.query.take()) {
                 let revision = s.latest.load(Ordering::Relaxed);
                 c.running = Some(q.key.clone());
@@ -579,7 +600,7 @@ fn run_worker(s: Arc<Shared>, dir: PathBuf) {
                         // stays with the base result and must not poll forever.
                         let answer = answer.or_else(|| {
                             q.candidates.first().map(|text| Answer {
-                                uncertain:Vec::new(),
+                                uncertain: Vec::new(),
                                 key: q.key.clone(),
                                 text: text.clone(),
                                 pinyin: q.pinyin.clone(),

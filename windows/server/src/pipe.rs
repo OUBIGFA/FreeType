@@ -10,27 +10,30 @@ use std::sync::mpsc::{self, Sender};
 use freetype_protocol::{decode, encode, Request, Response};
 use windows::core::{HSTRING, PWSTR};
 use windows::Win32::Foundation::{
-    CloseHandle, GetLastError, LocalFree, ERROR_ALREADY_EXISTS, ERROR_PIPE_CONNECTED, GENERIC_READ,
-    GENERIC_WRITE, HANDLE, HLOCAL, INVALID_HANDLE_VALUE, ERROR_INSUFFICIENT_BUFFER,
+    CloseHandle, GetLastError, LocalFree, ERROR_ALREADY_EXISTS, ERROR_INSUFFICIENT_BUFFER,
+    ERROR_PIPE_CONNECTED, GENERIC_READ, GENERIC_WRITE, HANDLE, HLOCAL, INVALID_HANDLE_VALUE,
 };
 use windows::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
 };
 use windows::Win32::Security::{
-    GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, RevertToSelf, TokenIntegrityLevel,
-    TokenIsAppContainer, TokenUser, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES, TOKEN_INFORMATION_CLASS,
-    TOKEN_MANDATORY_LABEL, TOKEN_QUERY, TOKEN_USER,
+    GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, RevertToSelf,
+    TokenIntegrityLevel, TokenIsAppContainer, TokenUser, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES,
+    TOKEN_INFORMATION_CLASS, TOKEN_MANDATORY_LABEL, TOKEN_QUERY, TOKEN_USER,
 };
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, FlushFileBuffers, ReadFile, WriteFile, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_NONE,
     OPEN_EXISTING, PIPE_ACCESS_DUPLEX,
 };
 use windows::Win32::System::Pipes::{
-    ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, GetNamedPipeServerProcessId, ImpersonateNamedPipeClient, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS,
-    PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+    ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, GetNamedPipeServerProcessId,
+    ImpersonateNamedPipeClient, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE,
+    PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
 };
 use windows::Win32::System::SystemServices::SECURITY_MANDATORY_MEDIUM_RID;
-use windows::Win32::System::Threading::{CreateMutexW, GetCurrentProcess, GetCurrentThread, OpenProcessToken, OpenThreadToken};
+use windows::Win32::System::Threading::{
+    CreateMutexW, GetCurrentProcess, GetCurrentThread, OpenProcessToken, OpenThreadToken,
+};
 
 use crate::host::ClientId;
 
@@ -48,7 +51,9 @@ struct Token(HANDLE);
 
 impl Drop for Token {
     fn drop(&mut self) {
-        unsafe { let _ = CloseHandle(self.0); }
+        unsafe {
+            let _ = CloseHandle(self.0);
+        }
     }
 }
 
@@ -56,11 +61,19 @@ fn token_information(token: HANDLE, class: TOKEN_INFORMATION_CLASS) -> io::Resul
     let mut length = 0;
     unsafe {
         if let Err(error) = GetTokenInformation(token, class, None, 0, &mut length) {
-            if error.code() != ERROR_INSUFFICIENT_BUFFER.to_hresult() { return Err(error.into()); }
+            if error.code() != ERROR_INSUFFICIENT_BUFFER.to_hresult() {
+                return Err(error.into());
+            }
         }
         // TOKEN_USER 等结构含指针，缓冲区需满足指针对齐，而不仅是字节对齐。
         let mut buffer = vec![0usize; (length as usize).div_ceil(std::mem::size_of::<usize>())];
-        GetTokenInformation(token, class, Some(buffer.as_mut_ptr().cast()), length, &mut length)?;
+        GetTokenInformation(
+            token,
+            class,
+            Some(buffer.as_mut_ptr().cast()),
+            length,
+            &mut length,
+        )?;
         Ok(buffer)
     }
 }
@@ -80,23 +93,32 @@ fn token_sid(token: HANDLE) -> io::Result<String> {
 /// 当前用户的 SID（S-1-5-21-...）。
 pub fn current_user_sid() -> io::Result<String> {
     let mut handle = HANDLE::default();
-    unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut handle)?; }
+    unsafe {
+        OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut handle)?;
+    }
     let token = Token(handle);
     token_sid(token.0)
 }
 
 fn client_can_manage(pipe: HANDLE, owner: &str) -> io::Result<bool> {
     // 只用操作系统提供的客户端令牌，不相信 Hello 中的应用名称或 session 标志。
-    unsafe { ImpersonateNamedPipeClient(pipe)?; }
+    unsafe {
+        ImpersonateNamedPipeClient(pipe)?;
+    }
     let mut handle = HANDLE::default();
     let opened = unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, true, &mut handle) };
     let token = Token(handle);
     // 在解析请求或交给引擎之前恢复身份；失败时调用方必须结束此连接线程。
-    unsafe { RevertToSelf()?; }
+    unsafe {
+        RevertToSelf()?;
+    }
     opened?;
     let sid = token_sid(token.0)?;
     if sid != owner && sid != "S-1-5-18" {
-        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "客户端不是当前用户"));
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "客户端不是当前用户",
+        ));
     }
     let integrity = token_information(token.0, TokenIntegrityLevel)?;
     let container = token_information(token.0, TokenIsAppContainer)?;
@@ -110,19 +132,37 @@ fn client_can_manage(pipe: HANDLE, owner: &str) -> io::Result<bool> {
 }
 
 fn input_request(request: &Request) -> bool {
-    matches!(request,
-        Request::Hello { .. } | Request::Key { .. } | Request::PhysicalKey { .. }
-        | Request::CandidateAction { .. } | Request::ClosePair | Request::SensitiveFocus { .. }
-        | Request::UndoCommitLearning | Request::Select { .. } | Request::Page { .. }
-        | Request::Forget { .. } | Request::Reset { .. } | Request::Focus { .. }
-        | Request::ToggleMode { .. } | Request::Command { .. } | Request::CapsLock { .. } | Request::Status
-        | Request::GetBrandIcon { .. } | Request::RefreshEnhancement { .. })
+    matches!(
+        request,
+        Request::Hello { .. }
+            | Request::Key { .. }
+            | Request::PhysicalKey { .. }
+            | Request::CandidateAction { .. }
+            | Request::ClosePair
+            | Request::SensitiveFocus { .. }
+            | Request::UndoCommitLearning
+            | Request::Select { .. }
+            | Request::Page { .. }
+            | Request::Forget { .. }
+            | Request::Reset { .. }
+            | Request::Focus { .. }
+            | Request::ToggleMode { .. }
+            | Request::Command { .. }
+            | Request::CapsLock { .. }
+            | Request::Status
+            | Request::GetBrandIcon { .. }
+            | Request::RefreshEnhancement { .. }
+    )
 }
 
 /// 同一登录会话里只跑一个服务进程。返回 false 表示已经有一个了。
-pub fn single_instance() -> bool { single_process("Server") }
+pub fn single_instance() -> bool {
+    single_process("Server")
+}
 
-pub fn single_watchdog() -> bool { single_process("Watchdog") }
+pub fn single_watchdog() -> bool {
+    single_process("Watchdog")
+}
 
 fn single_process(role: &str) -> bool {
     unsafe {
@@ -195,10 +235,15 @@ const SLOW_REQUEST: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// 只记操作名和用时，不记按键、路径等请求内容。
 fn log_slow(line: &[u8], elapsed: std::time::Duration) {
-    if elapsed < SLOW_REQUEST { return; }
+    if elapsed < SLOW_REQUEST {
+        return;
+    }
     #[derive(serde::Deserialize)]
-    struct Op { op: String }
-    let op = serde_json::from_slice::<Op>(line).map_or_else(|_| "未知".into(), |request| request.op);
+    struct Op {
+        op: String,
+    }
+    let op =
+        serde_json::from_slice::<Op>(line).map_or_else(|_| "未知".into(), |request| request.op);
     crate::log(&format!("请求 {op} 用时 {} ms", elapsed.as_millis()));
 }
 
@@ -234,7 +279,9 @@ fn serve(pipe: Pipe, id: ClientId, engine: Sender<Message>, owner: &str) {
         };
         // 输入节奏只给可管理的客户端；低完整性宿主不能借状态轮询推断其他应用里的按键时间。
         if !can_manage {
-            if let Some(status) = response.status.as_mut() { status.input_idle_seconds = None; }
+            if let Some(status) = response.status.as_mut() {
+                status.input_idle_seconds = None;
+            }
         }
         if write_all(pipe.0, &encode(&response)).is_err() {
             break;
@@ -322,7 +369,8 @@ pub fn request_with_server(name: &str, request: &Request) -> io::Result<(Respons
             OPEN_EXISTING,
             FILE_FLAGS_AND_ATTRIBUTES(0),
             None,
-        ).map_err(|error| {
+        )
+        .map_err(|error| {
             // windows-result converts HRESULT directly to an I/O code. Preserve the
             // missing-pipe case so stopping an already stopped service is idempotent.
             if error.code() == windows::core::HRESULT::from_win32(2) {
@@ -342,11 +390,15 @@ pub fn request_with_server(name: &str, request: &Request) -> io::Result<(Respons
     }
     let handle = Handle(handle);
     let mut server = 0;
-    unsafe { GetNamedPipeServerProcessId(handle.0, &mut server)?; }
+    unsafe {
+        GetNamedPipeServerProcessId(handle.0, &mut server)?;
+    }
     write_all(handle.0, &encode(request))?;
     let mut reader = LineReader { buf: Vec::new() };
     let line = reader
         .next_line(handle.0)
         .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "服务进程没有应答"))?;
-    decode(&line).map(|response| (response, server)).map_err(io::Error::other)
+    decode(&line)
+        .map(|response| (response, server))
+        .map_err(io::Error::other)
 }
