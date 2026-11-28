@@ -134,7 +134,7 @@ pub struct Host {
     sync_modified_ms: u64,
     /// 最近一次实际按键或选词的时间。
     last_input: Option<std::time::Instant>,
-    /// 同步计算和同步记录登记的后台线程。
+    /// 同步计算、同步记录登记和旧引擎释放的后台线程。
     tasks: crate::tasks::Tasks,
 }
 
@@ -335,7 +335,11 @@ impl Host {
                 if self.enhancement.status().enabled {
                     engine.set_enhancement(Some(self.enhancement.clone()));
                 }
-                self.engine = Some(Box::new(engine));
+                if let Some(previous) = self.engine.replace(Box::new(engine)) {
+                    // detach 已移除全部会话借用。大词库及模型析构可能耗时数秒，
+                    // 交给现有低优先级任务线程，输入线程只交换已就绪的引擎。
+                    self.discard_engine(previous);
+                }
                 self.engine_error = None;
                 self.apply_user_data();
                 self.prepare_prediction();
@@ -343,6 +347,18 @@ impl Host {
             Err(error) => self.engine_error = Some(error),
         }
         self.attach();
+    }
+
+    /// 在后台释放已脱离会话的旧引擎，或被更新一次载入取代的过期结果。
+    /// 所有权交给任务线程，确保词库及模型的最后一次释放不会阻塞按键。
+    pub fn discard_engine(&self, engine: Box<Engine>) {
+        self.tasks.submit(
+            Box::new(move || {
+                drop(engine);
+                Step::Done
+            }),
+            None,
+        );
     }
 
     pub fn connect(&mut self, id: ClientId, app: String) {

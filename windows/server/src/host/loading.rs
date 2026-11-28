@@ -80,6 +80,9 @@ pub fn load_engine_from(
     // 模糊音和默认开启的纠错兜底都使用此索引。必须在后台载入阶段建好，
     // 否则 ready 后的首次按键仍会遍历整份词库，可能超过 TSF 的 1.5 秒等待上限。
     engine.prepare_fuzzy();
+    // 文本词库的联想词频表也要遍历全部词条。无论当前开关是否开启，都在
+    // 后台准备，避免交接引擎或稍后开启联想时阻塞输入；编译词库直接复用索引。
+    engine.prepare_prediction();
     let _ = engine.load_english(dictionary.join("english.txt"));
     let _ = engine.load_conversion(resources.join("s2t.tsv"));
     if resources.join("INPUT-TOOLS.json").is_file() {

@@ -22,7 +22,7 @@ flowchart LR
 
 固定安装包在构建时生成 `data/lexicon.ftd`，只携带预编译索引，原始 `lexicon.tsv` 留作本地构建输入和独立来源重建产物。索引保留完整默认词库、候选顺序和词频精度，复用现有 TSV 解析与词频估算，并用 `fst` 和 `memmap2` 进行只读映射。FTD2 对记录长度和候选位置使用变长整数及有符号差值编码，相同词频先验共用精确浮点值；仍能读取旧 FTD1。全拼、简拼、模糊音、补全和上屏联想共用同一文件。安装或更新后首次启动完整校验索引 CRC，通过后将索引的大小和修改时间记在 `%LOCALAPPDATA%\FreeType\cache\lexicon.verified`；文件未变化时只检查文件头和边界。原地损坏且修改时间不变仍不会被发现。自定义 TSV 和旧安装的文本回退继续受支持。词级语言模型 `words.lm` 同样只读映射。做法参考 [Rime 的静态词库映射](https://github.com/rime/librime/blob/master/src/rime/dict/mapped_file.cc)。
 
-旧安装目录和自选 TSV 主词库仍使用现有载入入口。服务报告就绪前，后台线程会建好需要的模糊音索引；默认编译词库已经包含这份索引。`tests/windows/test_update_handoff.py` 使用完整随包词库，覆盖旧 TSV 首次载入、快照重启和编译词库，并验证模糊音开启、关闭时的首次与再次输入。
+旧安装目录和自选 TSV 主词库仍使用现有载入入口。服务报告就绪前，后台线程会建好模糊音和联想词频索引；默认编译词库直接复用已有索引。切换主词库时，旧引擎和晚到的过期载入结果交给后台线程释放，避免大量内存释放阻塞按键。`tests/windows/test_update_handoff.py` 覆盖完整词库的旧 TSV 首次载入、快照重启和编译词库，并验证模糊音开启、关闭时的首次与再次输入；`tests/windows/test_input_performance.py` 对比主词库切换期间的实际按键响应，并检查词库交接及随后的输入。
 
 任务栏右键先排队到应用的消息循环，再显示原生菜单。参照小狼毫，菜单依附输入文档窗口，并使用 `TPM_NONOTIFY | TPM_RETURNCMD` 返回所选命令。菜单打开期间连续右键合并处理，候选窗和提示窗的隐藏计时器可以独立运行；文本服务停用时取消菜单。相关回归在私有桌面执行。[小狼毫语言栏实现](https://github.com/rime/weasel/blob/master/WeaselTSF/LanguageBar.cpp)
 

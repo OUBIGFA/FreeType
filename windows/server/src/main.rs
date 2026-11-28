@@ -396,6 +396,9 @@ mod app {
                 Ok(Event::Loaded(gen, result)) => {
                     if gen == generation {
                         host.finish_loading(result);
+                    } else if let Ok(loaded) = result {
+                        // 连续换词库时，晚到的过期结果同样不能在输入线程析构。
+                        host.discard_engine(Box::new(loaded.engine));
                     }
                 }
                 Ok(Event::Pipe(Message::Connected(_))) => {}

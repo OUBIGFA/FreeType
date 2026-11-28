@@ -151,6 +151,52 @@ class InputPerformanceTests(ServerFixture, unittest.TestCase):
         self.assertTrue(any(word["word"] == "你好" for word in self.call(connection, "list_user_words")["user_words"]))
         self.assertLess(max(elapsed), 0.15, f"Learning rebuilt the imported dictionary: {elapsed}")
 
+    def test_switching_large_main_dictionary_keeps_input_responsive(self):
+        # A text dictionary owns many allocations. Replacing it must not free them
+        # on the input thread, even after the background loader has finished.
+        dictionary = self.root / "large-main.tsv"
+        with dictionary.open("w", encoding="utf-8") as stream:
+            stream.write(self.complete)
+            for index in range(500000):
+                stream.write(f"ce shi\t测试{index}\t1\n")
+        source = ROOT / ".local/data"
+        self.env["FREETYPE_RESOURCE_DIR"] = str(source)
+        original = str(source / "lexicon.tsv")
+        (self.data / "config.json").write_text(json.dumps({
+            "lexicon": original, "predict_next": True,
+            "typo_correction": False, "fuzzy": False,
+        }), encoding="utf-8")
+        _, connection = self.ready()
+        self.type_word(connection)
+        config = self.call(connection, "get_config")["config"]
+        # The load, activation and following keys all count; a slow status reply
+        # must not hide a pause between two individually fast key requests.
+        measurements = []
+        for target in (str(dictionary), original):
+            config["lexicon"] = target
+            started = time.perf_counter()
+            self.call(connection, "set_config", config=config)
+            measurements.append(time.perf_counter() - started)
+            deadline = time.monotonic() + 30
+            finished = False
+            while not finished:
+                self.assertLess(time.monotonic(), deadline, "Dictionary switch never finished")
+                for char in "nihao ":
+                    started = time.perf_counter()
+                    for preview in (True, False):
+                        frame = self.call(connection, "physical_key",
+                                          key={"keysym": ord(char), "modifiers": 0, "test": preview},
+                                          scan=0)["frame"]
+                    status = self.call(connection, "status")["status"]
+                    measurements.append(time.perf_counter() - started)
+                    self.assertTrue(status["ready"])
+                    finished = finished or not status["lexicon_loading"]
+                    if char == " ":
+                        self.assertEqual(frame["commit"], "你好")
+            self.type_word(connection)
+        self.assertLess(max(measurements), 0.2,
+                        f"Dictionary activation blocked input for {max(measurements):.3f} seconds")
+
     def test_learning_is_saved_while_requests_keep_arriving(self):
         _, connection = self.ready()
         self.type_word(connection)
