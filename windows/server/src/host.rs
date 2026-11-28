@@ -60,6 +60,9 @@ pub struct BarState {
     pub mode: Mode,
     pub chinese_punct: bool,
     pub traditional: bool,
+    pub brand_icon: String,
+    pub brand_revision: u64,
+    pub custom_brand_icon: std::sync::Arc<str>,
 }
 
 /// 服务进程的桌面部分（状态栏、打开设置程序）。测试里没有。
@@ -785,6 +788,11 @@ impl Host {
             mode: self.effective(self.current_mode()),
             chinese_punct: self.config.fullwidth_punct,
             traditional: self.config.traditional,
+            brand_icon: self.config.brand_icon.clone(),
+            brand_revision: self.brand_icon_revision,
+            // 普通按键只复制共享引用，不能反复复制自定义 PNG 的 Base64 内容。
+            custom_brand_icon: self.last_bar.as_ref().filter(|state| state.brand_revision == self.brand_icon_revision)
+                .map(|state| state.custom_brand_icon.clone()).unwrap_or_else(|| self.config.custom_brand_icon.clone().into()),
         };
         if self.last_bar.as_ref() == Some(&state) {
             return;
@@ -848,6 +856,7 @@ impl Host {
         frame.candidate_skin = (self.config.candidate_style == "custom").then(|| self.config.candidate_skin.clone());
         frame.candidate_wheel = self.config.candidate_wheel;
         frame.hide_candidate_preedit = !self.config.candidate_preedit;
+        frame.sentence_editor_above = self.config.sentence_editor_position == "above";
         frame.preedit_size = self.config.preedit_size;
         frame.lock_candidate_position = !self.config.candidate_follow;
         frame.wrap_candidates = !self.config.candidate_single_line;

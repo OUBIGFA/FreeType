@@ -94,7 +94,13 @@ impl Engine {
         }
         let top_heat=self.history_heat(&top.text,at);
         let top_score=top.score;
-        let mut position=1;
+        // 已输入完整读音时，先保留同音整词，再放未经学习的长词扩展。
+        // 组句和半词前缀仍可在第二位补全，用户反复选择的补全仍按热度提升。
+        let mut position = if prefix.len() >= 4 { 1 } else { candidates.iter().enumerate().filter(|(_, c)| {
+            c.consumed == raw.len() && c.pinyin == top.pinyin && !c.long_completion
+                && c.features.typo_count == 0.0 && c.features.prefix_completion == 0.0
+                && c.words.len() == 1 && c.words[0].known
+        }).map(|(i, _)| i + 1).max().unwrap_or(1) };
         let mut promoted=0;
         for entry in entries {
         let text = self.shown_text(&entry.word);

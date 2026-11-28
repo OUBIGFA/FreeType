@@ -36,16 +36,17 @@ type Config struct {
 	CandidateStyle string        `json:"candidate_style"`
 	CandidateSkin  CandidateSkin `json:"candidate_skin"`
 	// 品牌图标更新窗口、托盘和系统输入指示器；自定义 PNG 随设置保存。
-	BrandIcon           string `json:"brand_icon"`
-	CustomBrandIcon     string `json:"custom_brand_icon,omitempty"`
-	CandidateWheel      bool   `json:"candidate_wheel"`
-	InlinePreedit       string `json:"inline_preedit"`
-	CandidatePreedit    bool   `json:"candidate_preedit"`
-	SentenceEditor      bool   `json:"sentence_editor"`
-	PreeditSize         int    `json:"preedit_size"`
-	CandidateFollow     bool   `json:"candidate_follow"`
-	CandidateSingleLine bool   `json:"candidate_single_line"`
-	FontFallbacks       string `json:"font_fallbacks"`
+	BrandIcon              string `json:"brand_icon"`
+	CustomBrandIcon        string `json:"custom_brand_icon,omitempty"`
+	CandidateWheel         bool   `json:"candidate_wheel"`
+	InlinePreedit          string `json:"inline_preedit"`
+	CandidatePreedit       bool   `json:"candidate_preedit"`
+	SentenceEditor         bool   `json:"sentence_editor"`
+	SentenceEditorPosition string `json:"sentence_editor_position"`
+	PreeditSize            int    `json:"preedit_size"`
+	CandidateFollow        bool   `json:"candidate_follow"`
+	CandidateSingleLine    bool   `json:"candidate_single_line"`
+	FontFallbacks          string `json:"font_fallbacks"`
 
 	Fuzzy             bool   `json:"fuzzy"`
 	FuzzyGroups       int    `json:"fuzzy_groups"`
@@ -129,7 +130,7 @@ func defaultConfig() Config {
 	return Config{
 		EnglishCorrection: true, EnglishSpace: true, EnglishGloss: true, HotkeyEnglish: "off", HotkeyRadical: "off",
 		PageSize: 7, Horizontal: true, FontSize: 18, FontFamily: "Microsoft YaHei", CandidateStyle: "pink", CandidateSkin: defaultCandidateSkin(), BrandIcon: "default", PinBadge: "paperclip",
-		InlinePreedit: "segmented", CandidatePreedit: true, CandidateFollow: true, CandidateSingleLine: true,
+		InlinePreedit: "segmented", CandidatePreedit: true, CandidateFollow: true, CandidateSingleLine: true, SentenceEditorPosition: "below",
 		FuzzyGroups: fuzzyDefault, ShuangpinScheme: "xiaohe", TypoCorrection: true, TypoKinds: 15,
 		ShiftToggle: "both", PageKeys: pageKeyMinus, SelectKeys: "off", PickChar: true, ArrowKeys: "candidates", NumpadDot: true,
 		FullwidthPunct: true, DigitHalfwidthPunct: true, DigitPunctExceptions: true, DigitPunctFullwidth: digitPunctDefault,
@@ -300,7 +301,7 @@ type typingDay struct {
 
 // Response 是一条应答。
 type Response struct {
-    Enhancement *EnhancementStatus `json:"enhancement,omitempty"`
+	Enhancement          *EnhancementStatus    `json:"enhancement,omitempty"`
 	CandidateDiagnostics *CandidateDiagnostics `json:"candidate_diagnostics,omitempty"`
 	OK                   bool                  `json:"ok"`
 	ModifiedUnixMS       int64                 `json:"modified_unix_ms,omitempty"`

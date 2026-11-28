@@ -1,4 +1,21 @@
 //! 长词补全通过真实词库和输入会话验证；不能把完整词学成只输入的前缀读音。
+
+#[test]
+fn exact_homophones_stay_ahead_of_unlearned_extensions() {
+    let engine = |completion| {
+        let mut e = wowtype_core::Engine::new(std::sync::Arc::new(wowtype_core::MemoryLexicon::from_tsv_str(
+            "zhi ding\t指定\t90000\nzhi ding\t置顶\t80000\nzhi ding\t制定\t70000\nzhi ding\t制订\t60000\nzhi ding de\t指定的\t95000\nzhi ding le\t指定了\t94000\nzhi ding chu\t指定出\t93000\n"
+        ).unwrap()), std::sync::Arc::new(wowtype_core::BigramLm::default()));
+        e.set_long_word_completion(completion);
+        e
+    };
+    let baseline = engine(false).input("zhiding");
+    let e = engine(true);
+    let result = e.input("zhiding");
+    let exact: Vec<_> = baseline.iter().filter(|c| c.pinyin == "zhi ding" && c.consumed == 7).take(4).map(|c| c.text.as_str()).collect();
+    assert_eq!(result.iter().take(exact.len()).map(|c| c.text.as_str()).collect::<Vec<_>>(), exact);
+    assert!(result.iter().any(|c| c.long_completion), "补全仍应可选");
+}
 use std::sync::Arc;
 
 use wowtype_core::session::{Key, Session};

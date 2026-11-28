@@ -12,6 +12,19 @@ fn engine(words: &str) -> Engine {
 }
 
 #[test]
+fn rare_exact_words_remain_reachable_among_frequent_fuzzy_words_without_learning() {
+    let mut words = String::from("shang ping\t上屏\t323\nshang pin\t商品\t489240\n");
+    for i in 0..60 { words.push_str(&format!("shan pin\t近音{i}\t100000\n")); }
+    let mut e = engine(&words);
+    e.set_fuzzy(true);
+    e.set_fuzzy_groups(0xffff);
+    e.set_long_word_completion(true);
+    let found = e.input("shangping");
+    assert!(found.iter().take(5).any(|c| c.text == "上屏"), "首次输入的精确词不能被近音词挤掉：{found:?}");
+    assert!(e.user_words().is_empty());
+}
+
+#[test]
 fn invalid_shuangpin_syllables_use_only_enabled_fuzzy_groups() {
     let mut e = engine("ding\t定\t50000\nting\t听\t50000\nzhong\t中\t40000\n");
     e.set_shuangpin(true);

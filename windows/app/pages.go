@@ -291,8 +291,11 @@ func (s *settings) statusBarAppearance(c *ui.Context) (changed bool) {
 	changed = switchLine(c, "阴影", "", &s.config.BarShadow, true) || changed
 	subRow(c, "显示组件", "", func() {
 		ui.Row(c).Wrap().Gap(10).Children(func() {
-			for i, label := range []string{"标点", "简繁", "Windows 表情", "设置"} {
-				bit := 1 << i
+			for _, part := range []struct {
+				label string
+				bit   int
+			}{{"品牌标识（设置）", 8}, {"标点", 1}, {"简繁", 2}, {"Windows 表情", 4}} {
+				label, bit := part.label, part.bit
 				on := s.config.BarParts&bit != 0
 				if checkbox(c, &on, label).Changed() {
 					s.config.BarParts ^= bit
@@ -435,6 +438,11 @@ func (s *settings) candidatesPage(c *ui.Context) {
 		})
 		changed = s.settingSwitch(c, "candidates/候选窗预编辑", false, &s.config.CandidatePreedit) || changed
 		changed = s.settingSwitch(c, "candidates/整句编辑区", false, &s.config.SentenceEditor) || changed
+		if s.config.SentenceEditor || s.showSetting("candidates/整句编辑区位置") {
+			s.settingSubRow(c, "candidates/整句编辑区位置", func() {
+				changed = choose(c, "整句编辑区位置", []choice{{"below", "候选窗下方"}, {"above", "候选窗上方"}}, &s.config.SentenceEditorPosition, 160) || changed
+			})
+		}
 		s.settingRow(c, "candidates/预编辑字号", func() {
 			size := float64(s.config.PreeditSize)
 			if size == 0 {
@@ -683,68 +691,127 @@ func (s *settings) candidatePreview(c *ui.Context) {
 		popupBg, popupBorder, mutedText, normalText = p.card, p.border, p.muted, t.Text
 	}
 	family, size := s.config.FontFamily, textSize(c, float32(s.config.FontSize))
+	if s.config.FontFallbacks != "" {
+		family += "," + s.config.FontFallbacks
+	}
 	all := []string{"你好", "拟好", "你", "泥", "妮", "逆", "呢", "倪", "腻", "溺"}
 	words := all[:min(max(s.config.PageSize, 1), len(all))]
-	ui.Column(c).FillWidth().Gap(8).Margin(4, 0, 0, 0).Children(func() {
-		ui.Text(c, "预览").FontSize(textSize(c, 13)).FontWeight(600).TextColor(p.muted).Padding(0, 4)
+	ui.Column(c).FillWidth().Gap(8).Margin(4, 0, 0, 0).Padding(0, 0, 8, 0).Background(p.page).Sticky().Top(0).Children(func() {
+		ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(8).Children(func() {
+			ui.Text(c, "预览").FontSize(textSize(c, 13)).FontWeight(500).TextColor(p.muted).Grow(1)
+			s.logo(c, 24)
+			if ui.Button(c, "移动示例光标").Clicked() {
+				s.previewCaretMoved = !s.previewCaretMoved
+			}
+		})
 		// 外层画安静的预览舞台，横排按真实字号绘制；超出可用宽度时在预览内滚动，不压缩候选词。
 		ui.Column(c).FillWidth().Padding(16, rowInset, 12, rowInset).Radius(panelRadius).
 			Background(p.subtle).Border(1, p.border).Children(func() {
+			ui.Row(c).FillWidth().Gap(4).Padding(0, 4, 8, 4).Children(func() {
+				ui.Text(c, "输入位置").FontSize(textSize(c, 12)).TextColor(p.muted)
+				if s.previewCaretMoved {
+					ui.Text(c, "示例文字").Font(family).FontSize(size)
+				}
+				inline := "ni'hao"
+				switch s.config.InlinePreedit {
+				case "raw":
+					inline = "nihao"
+				case "spaces":
+					inline = "ni hao"
+				case "off":
+					inline = ""
+				}
+				ui.Text(c, inline+"│").Font(family).FontSize(size).TextColor(normalText)
+			})
 			// 外层用可视宽度对齐；内层按候选宽度收起，放不下时才缩到可视宽度。
 			ui.Row(c).FillWidth().Justify(ui.Center).Label("候选预览区域").Children(func() {
+				if s.config.CandidateFollow && s.previewCaretMoved {
+					ui.Column(c).Width(72).Shrink(0)
+				}
 				ui.ScrollHorizontal(c).MinWidth(0).Shrink(1).Padding(2, 2, 10, 2).Children(func() {
-					popup := ui.Column(c).Padding(8, 10).Radius(panelRadius).Background(popupBg).Border(1, popupBorder).
-						Label("候选预览窗口").AlignSelf(ui.Start).Shrink(0).Gap(4)
-					if !c.Preferences().HighContrast {
-						alpha := float32(0.06)
-						if t.Dark {
-							alpha = 0.28
+					ui.Column(c).Gap(6).MaxWidthPercent(100).Children(func() {
+						if s.config.SentenceEditor && s.config.SentenceEditorPosition == "above" {
+							s.sentencePreview(c, family, size, ct)
 						}
-						popup.Shadow(0, 2, 8, 0, ui.RGBA(0, 0, 0, alpha))
-					}
-					popup.Children(func() {
-						if s.config.CandidatePreedit {
-							preedit := "ni hao"
-							if s.config.Shuangpin && s.shuangpinExample != "" {
-								preedit = s.shuangpinExample
+						popup := ui.Column(c).Padding(8, 10).Radius(panelRadius).Background(popupBg).Border(1, popupBorder).
+							Label("候选预览窗口").AlignSelf(ui.Start).Shrink(0).Gap(4)
+						if s.config.Horizontal && !s.config.CandidateSingleLine {
+							popup.MaxWidth(460).Shrink(1)
+						}
+						if !c.Preferences().HighContrast {
+							alpha := float32(0.06)
+							if t.Dark {
+								alpha = 0.28
 							}
-							preeditSize := size * 0.78
-							if s.config.PreeditSize > 0 {
-								preeditSize = textSize(c, float32(s.config.PreeditSize))
-							}
-							ui.Text(c, preedit).Font(family).FontSize(preeditSize).TextColor(mutedText).Padding(0, 4)
+							popup.Shadow(0, 2, 8, 0, ui.RGBA(0, 0, 0, alpha))
 						}
-						list := ui.Row(c).Gap(2)
-						if !s.config.Horizontal {
-							list = ui.Column(c).Gap(2)
-						}
-						list.Children(func() {
-							defer func() {
-								// 和真的候选窗一样，最后是翻页箭头
-								ui.Row(c).Gap(6).Padding(3, 8).Children(func() {
-									ui.Text(c, "‹").Font(family).FontSize(size).TextColor(mutedText)
-									ui.Text(c, "›").Font(family).FontSize(size).TextColor(normalText)
-								})
-							}()
-							for i, w := range words {
-								item := ui.Row(c).Gap(4).Padding(4, 8).Radius(controlRadius).AlignItems(ui.Center).Shrink(0)
-								label, text := mutedText, normalText
-								if i == 0 {
-									if ct.block {
-										item.Background(ct.accent)
-									}
-									label, text = ct.accentText, ct.accentText
+						popup.Children(func() {
+							if s.config.CandidatePreedit {
+								preedit := "ni hao"
+								if s.config.Shuangpin && s.shuangpinExample != "" {
+									preedit = s.shuangpinExample
 								}
-								item.Children(func() {
-									ui.Text(c, fmt.Sprint((i+1)%10)).Font(family).FontSize(size * 0.78).TextColor(label)
-									ui.Text(c, w).Font(family).FontSize(size).TextColor(text)
-								})
+								preeditSize := size * 0.78
+								if s.config.PreeditSize > 0 {
+									preeditSize = textSize(c, float32(s.config.PreeditSize))
+								}
+								ui.Text(c, preedit).Font(family).FontSize(preeditSize).TextColor(mutedText).Padding(0, 4)
 							}
+							list := ui.Row(c).Gap(2)
+							if !s.config.Horizontal {
+								list = ui.Column(c).Gap(2)
+							} else if !s.config.CandidateSingleLine {
+								list.Wrap().MaxWidth(440)
+							}
+							list.Children(func() {
+								defer func() {
+									// 和真的候选窗一样，最后是翻页箭头
+									ui.Row(c).Gap(6).Padding(3, 8).Children(func() {
+										ui.Text(c, "‹").Font(family).FontSize(size).TextColor(mutedText)
+										ui.Text(c, "›").Font(family).FontSize(size).TextColor(normalText)
+									})
+								}()
+								for i, w := range words {
+									item := ui.Row(c).Gap(4).Padding(4, 8).Radius(controlRadius).AlignItems(ui.Center).Shrink(0)
+									label, text := mutedText, normalText
+									if i == 0 {
+										if ct.block {
+											item.Background(ct.accent)
+										}
+										label, text = ct.accentText, ct.accentText
+									}
+									item.Children(func() {
+										ui.Text(c, fmt.Sprint((i+1)%10)).Font(family).FontSize(size * 0.78).TextColor(label)
+										ui.Text(c, w).Font(family).FontSize(size).TextColor(text)
+										if i == 0 && s.config.PinBadge != "off" {
+											badge := map[string]string{"paperclip": "📎", "pushpin": "📌", "dot": "•"}[s.config.PinBadge]
+											ui.Text(c, badge).FontSize(size * 0.65).TextColor(label)
+										}
+									})
+								}
+							})
 						})
+						if s.config.SentenceEditor && s.config.SentenceEditorPosition != "above" {
+							s.sentencePreview(c, family, size, ct)
+						}
 					})
 				})
 			})
 		})
+	})
+}
+
+// 与独立编辑区保持相同的内容层级：词块、原始字母、低强调提示；不画投影。
+func (s *settings) sentencePreview(c *ui.Context, family string, size float32, ct candidateTheme) {
+	ui.Column(c).AlignSelf(ui.Start).Padding(8).Gap(4).Radius(controlRadius).
+		Background(ct.background).Border(1, ct.border).Label("整句编辑区预览").Children(func() {
+		ui.Row(c).Gap(3).Children(func() {
+			for _, word := range []string{"你", "好"} {
+				ui.Text(c, word).Font(family).FontSize(max(12, size*0.9)).TextColor(ct.text).Padding(4, 7).Radius(4)
+			}
+		})
+		ui.Text(c, "nihao").Font(family).FontSize(max(10, size*0.7)).TextColor(ct.muted)
+		ui.Text(c, "点词块修改").Font(family).FontSize(min(max(size*0.65, 11), 14)).TextColor(ct.muted)
 	})
 }
 
@@ -905,7 +972,7 @@ func (s *settings) featuresPage(c *ui.Context) {
 	})
 	section(c, "智能输入", func() {
 		s.neuralModelRow(c)
-        s.enhancementRow(c)
+		s.enhancementRow(c)
 		changed = s.settingSwitch(c, "features/长词前缀补全", false, &s.config.LongWordCompletion) || changed
 		changed = s.settingSwitch(c, "features/邮箱、网址补全", false, &s.config.EmailCompletion) || changed
 		changed = s.settingSwitch(c, "features/日期时间", false, &s.config.DateTime) || changed

@@ -15,10 +15,10 @@ fn sentence_editor_does_not_change_candidate_geometry_or_content() {
     let _desktop = PrivateDesktop::new();
     let instance = HINSTANCE(unsafe { GetModuleHandleW(None).unwrap() }.0);
     let window = CandidateWindow::new(instance).unwrap();
-    for vertical in [false, true] {
+    for (vertical, editor_above) in [(false, false), (false, true), (true, false), (true, true)] {
         window.hide();
         let mut frame = Frame { preedit: "wo'xi'huan'ni".into(), candidates: vec!["我喜欢你".into(), "我".into()],
-            vertical, font_size: 20, font_family: "Microsoft YaHei".into(), page_revision: 1, ..Default::default() };
+            vertical, sentence_editor_above: editor_above, font_size: 20, font_family: "Microsoft YaHei".into(), page_revision: 1, ..Default::default() };
         let caret = rect(300, 400, 2, 24);
         window.update(&frame, Some(caret));
         let mut original = RECT::default();
@@ -42,15 +42,19 @@ fn sentence_editor_does_not_change_candidate_geometry_or_content() {
             unsafe {
                 assert!(IsWindowVisible(editor).as_bool());
                 GetWindowRect(editor, &mut above).unwrap();
-                assert_eq!(GetWindowLongPtrW(editor, GWLP_HWNDPARENT), window.hwnd.0 as isize);
+                assert_eq!(GetWindowLongPtrW(editor, GWLP_HWNDPARENT), GetWindowLongPtrW(window.hwnd, GWLP_HWNDPARENT));
+                use windows::Win32::UI::WindowsAndMessaging::{GetWindow, GW_HWNDPREV, GetClassLongW, GCL_STYLE};
+                assert_eq!(GetWindow(editor, GW_HWNDPREV).unwrap(), window.hwnd, "候选窗始终在辅助区之上");
+                assert_eq!(GetClassLongW(editor, GCL_STYLE) & CS_DROPSHADOW.0, 0, "辅助区不得投影");
             }
-            assert!(above.bottom < original.top, "独立编辑区必须在候选窗上方且不重叠");
+            if editor_above { assert!(above.bottom < original.top); }
+            else { assert!(above.top > original.bottom); }
             if !vertical {
                 let (layout, pixels) = rendered(data.view.clone(), data.scale);
                 save_render("ordinary-with-editor", &layout, &pixels);
                 let editor = data_of(editor).unwrap();
                 let (layout, pixels) = rendered(editor.view.clone(), editor.scale);
-                save_render("independent-editor", &layout, &pixels);
+                save_render(if editor_above { "independent-editor-above" } else { "independent-editor-below" }, &layout, &pixels);
             }
         }
         frame.sentence = None;
@@ -75,7 +79,7 @@ fn sentence_editor_lifecycle_and_pointer_routes_are_independent() {
     let capture = clicks.clone();
     set_click_handler(Some(Box::new(move |c| capture.borrow_mut().push(c))));
     let mut frame = Frame { preedit: "ni'hao".into(), candidates: vec!["你好".into(), "你".into()],
-        has_next: true, candidate_wheel: true, font_size: 20, font_family: "Microsoft YaHei".into(), page_revision: 31,
+        has_next: true, candidate_wheel: true, sentence_editor_above: true, font_size: 20, font_family: "Microsoft YaHei".into(), page_revision: 31,
         sentence: Some(freetype_protocol::SentenceView { raw: "nihao".into(), text: "你好".into(), cursor: Some(2),
             blocks: vec![freetype_protocol::SentenceBlock { text: "你".into(), to: 2, ..Default::default() }],
             alternatives: vec!["泥".into()], has_next: true, ..Default::default() }), ..Default::default() };
@@ -113,6 +117,14 @@ fn sentence_editor_lifecycle_and_pointer_routes_are_independent() {
     assert_eq!(r.top, work.top+28);
     window.reposition(rect(300, 400, 2, 24));
     assert!(unsafe { IsWindowVisible(editor).as_bool() });
+    // 下方不足也只收起辅助窗；候选窗保持普通翻转后的矩形。
+    frame.sentence_editor_above = false;
+    frame.page_revision += 1;
+    let bottom = rect(work.left + 20, work.bottom - 24, 2, 24);
+    window.update(&frame, Some(bottom));
+    assert!(!unsafe { IsWindowVisible(editor).as_bool() });
+    frame.sentence_editor_above = true;
+    window.update(&frame, Some(rect(300, 400, 2, 24)));
     window.hide();
     assert!(!window.visible());
     assert!(!unsafe { IsWindowVisible(editor).as_bool() });
@@ -318,7 +330,9 @@ impl Drop for PrivateDesktop {
 fn rendered(view: View, scale: f32) -> (Layout, Vec<u8>) {
     unsafe {
         let dc = CreateCompatibleDC(None);
-        let fonts = Fonts::new(view.font_size.max(12) as f32 * scale, &view.font_family).unwrap();
+        let fonts = Fonts::styled(view.font_size.max(12) as f32 * scale, &view.font_family,
+            view.preedit_size as f32 * scale, &view.font_fallbacks,
+            (view.font_size as f32 * 0.72).clamp(11.0, 14.0) * scale).unwrap();
         let layout = layout(&view, &fonts, scale).unwrap();
         let info = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {

@@ -81,6 +81,30 @@ class InputPerformanceTests(ServerFixture, unittest.TestCase):
         self.env["FREETYPE_RESOURCE_DIR"] = os.environ.get("FREETYPE_TEST_RESOURCES", str(root / ".local/data"))
         (self.data / "config.json").write_text("{}", encoding="utf-8")
         server, connection = self.ready()
+        # 首次输入回归：不靠已选词热度掩盖模糊音召回、补全排序和编辑区提交缺陷。
+        for editor in (False, True):
+            config = self.call(connection, "get_config")["config"]
+            config.update(sentence_editor=editor, sentence_editor_position="below", fuzzy=True, fuzzy_groups=65535, page_size=5)
+            self.call(connection, "set_config", config=config)
+            for code, expected in [("zhiding", "置顶"), ("shangping", "上屏"), ("zuiqianm", "最前面")]:
+                self.call(connection, "reset", commit=False)
+                for char in code:
+                    # 与 TSF 一样先预判再执行，不能把预判当成学习或提交。
+                    key = {"keysym": ord(char), "modifiers": 0, "test": True}
+                    self.call(connection, "key", key=key)
+                    key["test"] = False
+                    frame = self.call(connection, "key", key=key)["frame"]
+                self.assertIn(expected, frame["candidates"], (editor, code, frame["candidates"]))
+                if code == "zuiqianm":
+                    self.assertEqual(frame["candidates"][0], expected)
+                    if editor:
+                        self.assertEqual(frame["sentence"]["text"], expected)
+                    self.call(connection, "key", key={"keysym": 32, "modifiers": 0, "test": True})
+                    committed = self.call(connection, "key", key={"keysym": 32, "modifiers": 0, "test": False})["frame"]
+                    self.assertEqual(committed.get("commit"), expected)
+                    self.assertFalse(committed["preedit"])
+        config.update(sentence_editor=False, fuzzy=False, page_size=7)
+        self.call(connection, "set_config", config=config)
         for _ in range(10):
             self.call(connection, "focus", active=True, before="")
             for code, expected in [("nihao", "你好"), ("zhongguo", "中国"), ("yingai", "应该"), ("shijie", "世界")]:

@@ -1,7 +1,7 @@
 //! 服务进程的桌面部分，在单独一个线程里：
 //!
 //! - **悬浮状态栏**（照水杉输入法的悬浮工具栏）：中 / 英、中文 / 英文标点、简 / 繁三个按钮和设置按钮；
-//!   左边的握把能拖动，位置记在 `%APPDATA%\FreeType\statusbar.txt`；右键菜单能打开设置、隐藏状态栏。
+//!   品牌入口在最前，末端握把能拖动；位置记在 `%APPDATA%\FreeType\statusbar.txt`。
 //!   有输入框在用 FreeType 时显示。不抢焦点，点按钮不会让应用的输入框失去焦点。
 //! - **剪贴板历史**：设置里打开时，系统剪贴板一有文字就交给核心记下（只在内存里）。
 //!   密码管理器标了「不进剪贴板历史」的不记。
@@ -78,11 +78,11 @@ const HIDE_TIMER: usize = 1;
 /// 鼠标离开窗口（TrackMouseEvent）。
 const WM_MOUSELEAVE: u32 = 0x02a3;
 /// 握把宽、按钮宽高（96 DPI 下）。
-const GRIP: f32 = 12.0;
-const BUTTON: f32 = 30.0;
-const HEIGHT: f32 = 32.0;
+const GRIP: f32 = 14.0;
+const BUTTON: f32 = 34.0;
+const HEIGHT: f32 = 38.0;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Part {
     Mode,
     Punct,
@@ -92,8 +92,9 @@ enum Part {
 }
 
 fn visible_parts(mask: u8) -> impl Iterator<Item = Part> {
-    std::iter::once(Part::Mode).chain([Part::Punct, Part::Traditional, Part::Emoji, Part::Settings]
-        .into_iter().enumerate().filter_map(move |(i, part)| (mask & (1 << i) != 0).then_some(part)))
+    // 组件位掩码保持兼容，品牌入口始终排在第一个可见按钮。
+    [(Part::Settings, 8), (Part::Mode, 0), (Part::Punct, 1), (Part::Traditional, 2), (Part::Emoji, 4)]
+        .into_iter().filter_map(move |(part, bit)| (bit == 0 || mask & bit != 0).then_some(part))
 }
 
 fn bar_state() -> BarState {
@@ -515,18 +516,18 @@ fn scale_of(hwnd: HWND, state: &BarState) -> f32 {
 
 fn size_of_bar(scale: f32, parts: u8) -> (i32, i32) {
     (
-        ((GRIP + BUTTON * visible_parts(parts).count() as f32 + 6.0) * scale).round() as i32,
+        ((GRIP + BUTTON * visible_parts(parts).count() as f32 + 8.0) * scale).round() as i32,
         (HEIGHT * scale).round() as i32,
     )
 }
 
 fn part_rect(i: usize, scale: f32) -> RECT {
-    let x = ((GRIP + BUTTON * i as f32) * scale).round() as i32;
-    let pad = (3.0 * scale).round() as i32;
+    let x = ((4.0 + BUTTON * i as f32) * scale).round() as i32;
+    let pad = (4.0 * scale).round() as i32;
     RECT {
         left: x,
         top: pad,
-        right: x + (BUTTON * scale).round() as i32,
+        right: x + ((BUTTON - 2.0) * scale).round() as i32,
         bottom: (HEIGHT * scale).round() as i32 - pad,
     }
 }
@@ -564,7 +565,7 @@ fn label(part: Part, state: &BarState) -> &'static str {
             }
         }
         Part::Emoji => "☺",
-        Part::Settings => "⚙",
+        Part::Settings => "",
     }
 }
 
@@ -574,7 +575,7 @@ fn tip(part: Part) -> &'static str {
         Part::Punct => "中文 / 英文标点",
         Part::Traditional => "简体 / 繁体",
         Part::Emoji => "表情与符号",
-        Part::Settings => "设置",
+        Part::Settings => "打开 FreeType 设置",
     }
 }
 
@@ -582,7 +583,56 @@ fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().collect()
 }
 
-fn paint(hwnd: HWND) {
+struct BarIcon {
+    appearance: String,
+    custom: Arc<str>,
+    size: i32,
+    icon: windows::Win32::UI::WindowsAndMessaging::HICON,
+}
+impl Drop for BarIcon {
+    fn drop(&mut self) { unsafe { let _ = windows::Win32::UI::WindowsAndMessaging::DestroyIcon(self.icon); } }
+}
+thread_local! { static BRAND: std::cell::RefCell<Option<BarIcon>> = const { std::cell::RefCell::new(None) }; }
+
+// 图像解码只在桌面线程的品牌或 DPI 变化时执行，不进入按键线程。
+fn draw_brand(hdc: windows::Win32::Graphics::Gdi::HDC, area: RECT, state: &BarState, size: i32) {
+    use windows::Win32::UI::WindowsAndMessaging::{CreateIconFromResourceEx, DrawIconEx, DI_NORMAL, IMAGE_FLAGS};
+    BRAND.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.as_ref().is_none_or(|c| c.appearance != state.brand_icon || c.custom != state.custom_brand_icon || c.size != size) {
+            let custom;
+            let bytes: &[u8] = match state.brand_icon.as_str() {
+                "white" => include_bytes!("../../assets/freetype-white-logo.png"),
+                "custom" => {
+                    use windows::Win32::Security::Cryptography::{CryptStringToBinaryW, CRYPT_STRING_BASE64};
+                    let encoded = wide(&state.custom_brand_icon);
+                    let mut length = 0;
+                    let decoded = (|| -> windows::core::Result<Vec<u8>> { unsafe {
+                        CryptStringToBinaryW(&encoded, CRYPT_STRING_BASE64, None, &mut length, None, None)?;
+                        let mut bytes = vec![0; length as usize];
+                        CryptStringToBinaryW(&encoded, CRYPT_STRING_BASE64, Some(bytes.as_mut_ptr()), &mut length, None, None)?;
+                        bytes.truncate(length as usize);
+                        Ok(bytes)
+                    } })();
+                    match decoded { Ok(bytes) => { custom = bytes; &custom }, Err(error) => {
+                        crate::log(&format!("状态栏品牌图标读取失败：{error}")); return;
+                    } }
+                }
+                _ => include_bytes!("../../assets/freetype-logo.png"),
+            };
+            match unsafe { CreateIconFromResourceEx(bytes, true, 0x0003_0000, size, size, IMAGE_FLAGS(0)) } {
+                Ok(icon) => *cache = Some(BarIcon { appearance: state.brand_icon.clone(), custom: state.custom_brand_icon.clone(), size, icon }),
+                Err(error) => { crate::log(&format!("状态栏品牌图标创建失败：{error}")); return; }
+            }
+        }
+        if let Some(icon) = cache.as_ref() { unsafe {
+            let _ = DrawIconEx(hdc, (area.left + area.right - size) / 2, (area.top + area.bottom - size) / 2,
+                icon.icon, size, size, 0, None, DI_NORMAL);
+        } }
+    });
+}
+
+fn paint(hwnd: HWND, print_dc: Option<windows::Win32::Graphics::Gdi::HDC>) {
     let Some(shared) = shared() else {
         return;
     };
@@ -592,13 +642,13 @@ fn paint(hwnd: HWND) {
     let (w, h) = size_of_bar(scale, state.parts);
     let light = light_mode();
     let (background, border, text, muted, hover, accent) = if light {
-        (rgb(0xfb, 0xfb, 0xfb), rgb(0xd9, 0xd9, 0xd9), rgb(0x1f, 0x1f, 0x1f), rgb(0xa0, 0xa0, 0xa0), rgb(0xea, 0xea, 0xea), rgb(0x2b, 0x6c, 0xe6))
+        (rgb(0xfa, 0xf8, 0xf9), rgb(0xd5, 0xcc, 0xd0), rgb(0x35, 0x2e, 0x32), rgb(0x87, 0x7b, 0x82), rgb(0xee, 0xe3, 0xe8), rgb(0xa4, 0x45, 0x70))
     } else {
-        (rgb(0x2b, 0x2b, 0x2b), rgb(0x45, 0x45, 0x45), rgb(0xee, 0xee, 0xee), rgb(0x80, 0x80, 0x80), rgb(0x3a, 0x3a, 0x3a), rgb(0x6c, 0x9e, 0xff))
+        (rgb(0x28, 0x25, 0x29), rgb(0x53, 0x49, 0x50), rgb(0xed, 0xe7, 0xeb), rgb(0xa6, 0x98, 0xa1), rgb(0x42, 0x35, 0x3e), rgb(0xe4, 0xa1, 0xbf))
     };
     unsafe {
         let mut ps = PAINTSTRUCT::default();
-        let target = BeginPaint(hwnd, &mut ps);
+        let target = print_dc.unwrap_or_else(|| BeginPaint(hwnd, &mut ps));
         let hdc = CreateCompatibleDC(Some(target));
         let bitmap = CreateCompatibleBitmap(target, w, h);
         let old_bitmap = SelectObject(hdc, bitmap.into());
@@ -614,12 +664,12 @@ fn paint(hwnd: HWND) {
         SelectObject(hdc, old_pen);
         let _ = DeleteObject(pen.into());
 
-        // 握把：两列小点
+        // 握把放末端，品牌成为最前面的入口；拖动命中区独立于按钮。
         let dot = CreateSolidBrush(muted);
         let size = (2.0 * scale).round().max(1.0) as i32;
         for row in 0..3 {
             for col in 0..2 {
-                let x = (4.0 * scale) as i32 + col * size * 2;
+                let x = w - (GRIP * scale) as i32 + col * size * 2;
                 let y = h / 2 - size * 3 + row * size * 2 + size / 2;
                 FillRect(hdc, &RECT { left: x, top: y, right: x + size, bottom: y + size }, dot);
             }
@@ -658,6 +708,10 @@ fn paint(hwnd: HWND) {
                 let _ = DeleteObject(b.into());
                 let _ = DeleteObject(p.into());
             }
+            if part == Part::Settings {
+                draw_brand(hdc, r, &state, ((state.icon_size.clamp(12, 23) + 5) as f32 * scale).round() as i32);
+                continue;
+            }
             let label = wide(label(part, &state));
             let mut size = windows::Win32::Foundation::SIZE::default();
             let _ = GetTextExtentPoint32W(hdc, &label, &mut size);
@@ -676,7 +730,7 @@ fn paint(hwnd: HWND) {
         SelectObject(hdc, old_bitmap);
         let _ = DeleteObject(bitmap.into());
         let _ = DeleteDC(hdc);
-        let _ = EndPaint(hwnd, &ps);
+        if print_dc.is_none() { let _ = EndPaint(hwnd, &ps); }
     }
 }
 
@@ -792,7 +846,11 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             LRESULT(0)
         }
         WM_PAINT => {
-            paint(hwnd);
+            paint(hwnd, None);
+            LRESULT(0)
+        }
+        windows::Win32::UI::WindowsAndMessaging::WM_PRINTCLIENT => {
+            paint(hwnd, Some(windows::Win32::Graphics::Gdi::HDC(wparam.0 as *mut _)));
             LRESULT(0)
         }
         WM_NCHITTEST => {
@@ -802,7 +860,7 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 let _ = GetWindowRect(hwnd, &mut rect);
             }
             let local = x - rect.left;
-            if local < (GRIP * scale_of(hwnd, &bar_state())) as i32 {
+            if local >= rect.right - rect.left - (GRIP * scale_of(hwnd, &bar_state())) as i32 {
                 LRESULT(HTCAPTION as isize)
             } else {
                 LRESULT(HTCLIENT as isize)
@@ -903,3 +961,7 @@ fn set_tooltip(hwnd: HWND, text: &str) {
         let _ = windows::Win32::UI::WindowsAndMessaging::SetWindowTextW(hwnd, &HSTRING::from(format!("FreeType {text}")));
     }
 }
+
+#[cfg(test)]
+#[path = "desktop_tests.rs"]
+mod tests;

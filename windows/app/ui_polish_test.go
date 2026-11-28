@@ -211,6 +211,65 @@ func TestCandidatePreviewCentersWhenItFits(test *testing.T) {
 	}
 }
 
+func TestCandidatePreviewTracksEditorPositionAndVisibleOptions(test *testing.T) {
+	state, _ := newTestSettings()
+	state.page = "candidates"
+	view := ui.NewTester(state.view, 1100, 1000)
+	if _, ok := view.Find("整句编辑区预览"); ok {
+		test.Fatal("关闭时不应显示编辑区")
+	}
+	state.config.SentenceEditor = true
+	for _, position := range []string{"below", "above"} {
+		state.config.SentenceEditorPosition = position
+		view.Frame()
+		editor, ok := view.Find("整句编辑区预览")
+		popup, _ := view.Find("候选预览窗口")
+		if !ok || (position == "below" && editor.Y < popup.Y+popup.H) || (position == "above" && editor.Y+editor.H > popup.Y) {
+			test.Fatalf("编辑区位置未同步：%s %+v %+v", position, editor, popup)
+		}
+		saveUIFrame(test, "candidate-editor-"+position, view)
+	}
+	state.config.PinBadge = "pushpin"
+	state.config.InlinePreedit = "raw"
+	state.config.CandidatePreedit = false
+	view.Frame()
+	if !view.HasText("📌") || !view.HasText("nihao│") || view.HasText("ni hao") {
+		test.Fatalf("角标或预编辑未同步：%q", view.Texts())
+	}
+	state.config.PinBadge = "off"
+	state.config.InlinePreedit = "off"
+	view.Frame()
+	if view.HasText("📌") || view.HasText("nihao│") {
+		test.Fatal("关闭后仍显示预览")
+	}
+	state.config.CandidateFollow = false
+	before, _ := view.Find("候选预览窗口")
+	if err := view.Click("移动示例光标"); err != nil {
+		test.Fatal(err)
+	}
+	view.Frame()
+	after, _ := view.Find("候选预览窗口")
+	if before.X != after.X {
+		test.Fatal("不跟随光标时不应移动候选预览")
+	}
+	state.config.CandidateFollow = true
+	view.Frame()
+	after, _ = view.Find("候选预览窗口")
+	if before.X == after.X {
+		test.Fatal("开启跟随后应跟随示例光标")
+	}
+	state.config.FontSize, state.config.PageSize = 36, 10
+	state.config.CandidateSingleLine = false
+	view.Frame()
+	wrapped, _ := view.Find("候选预览窗口")
+	state.config.CandidateSingleLine = true
+	view.Frame()
+	single, _ := view.Find("候选预览窗口")
+	if wrapped.H <= single.H {
+		test.Fatalf("关闭单行后应换行：%+v %+v", wrapped, single)
+	}
+}
+
 func TestCandidatePreviewKeepsLargeCandidatesReadableAndScrollable(test *testing.T) {
 	state, _ := newTestSettings()
 	state.page = "candidates"

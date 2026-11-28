@@ -313,23 +313,8 @@ impl State {
                     .then_some(*a)
             })
             .filter(|at| *at > 0);
-        if let Some(at) = pending_from {
-            // The incomplete final syllable must not rewrite the complete prefix.
-            if self.view.raw == raw[..at] && !self.view.blocks.is_empty() {
-                blocks = self.view.blocks.clone();
-            } else {
-                let chars: Vec<_> = text.chars().collect();
-                let p: Vec<_> = pinyin.split_whitespace().collect();
-                blocks.retain(|b| b.from < at);
-                if let Some(b) = blocks.last_mut().filter(|b| b.to > at) {
-                    let start = ranges.iter().position(|(a, _)| *a == b.from).unwrap_or(0);
-                    let end = ranges.len() - 1;
-                    b.to = at;
-                    b.text = chars[start..end].iter().collect();
-                    b.pinyin = p[start..end].join(" ");
-                }
-            }
-        }
+        // 末尾只输入声母也可能已有完整候选（zuiqianm → 最前面）。显示本次候选的
+        // 全部词块；pending_from 仅限制增强模型，不保留上一按键的旧前缀。
         self.view = View {
             text: text.into(),
             raw: raw.into(),
@@ -439,7 +424,8 @@ impl State {
             let at = self.view.cursor.unwrap_or(b.to).saturating_sub(b.from);
             if let Some(&(a, z)) = chars.iter().find(|(a, z)| at > *a && at <= *z) {
                 if z - a < raw.len() {
-                    ranges.insert(0, (b.from + a, b.from + z));
+                    // 点击词块首先是在改整个词；单字纠正排在整词备选之后。
+                    ranges.push((b.from + a, b.from + z));
                 }
             }
         }

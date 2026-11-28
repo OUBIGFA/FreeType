@@ -32,14 +32,15 @@ pub struct Fonts {
     pub small: Font,
     pub preedit: Font,
     pub hint: Font,
+    pub caption: Font,
 }
 
 impl Fonts {
     pub fn new(size: f32, family: &str) -> Result<Self> {
-        Self::styled(size, family, 0.0, "")
+        Self::styled(size, family, 0.0, "", 0.0)
     }
 
-    pub fn styled(size: f32, family: &str, preedit_size: f32, fallbacks: &str) -> Result<Self> {
+    pub fn styled(size: f32, family: &str, preedit_size: f32, fallbacks: &str, caption_size: f32) -> Result<Self> {
         let factory: IDWriteFactory = unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)? };
         let family = if family.trim().is_empty() {
             freetype_protocol::DEFAULT_FONT
@@ -73,6 +74,7 @@ impl Fonts {
             small: make((size * 0.78).round(), DWRITE_FONT_WEIGHT_NORMAL)?,
             preedit: make(if preedit_size > 0.0 { preedit_size } else { (size * 0.78).round() }, DWRITE_FONT_WEIGHT_NORMAL)?,
             hint: make(size, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
+            caption: make(if caption_size > 0.0 { caption_size } else { size * 0.72 }, DWRITE_FONT_WEIGHT_NORMAL)?,
         })
     }
 }

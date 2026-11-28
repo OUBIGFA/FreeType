@@ -1034,7 +1034,53 @@ impl Engine {
         if raw_display.is_none() {
             promote_split_reading(&mut result, raw.len());
         }
+        if self.config.fuzzy {
+            self.keep_literal_words(&normalized, raw.len(), at_ms, &mut result)?;
+        }
         Ok(result)
+    }
+
+    /// 模糊音扩大召回时仍给完整拼写的整词保留位置。只查 2–4 音节的索引，
+    /// 不再跑束搜索；保留原首选，最多补回三个精确词，避免低频词首次输入就消失。
+    fn keep_literal_words(&self, raw: &str, consumed: usize, at_ms: u64, found: &mut Vec<Candidate>) -> Result<()> {
+        let parsed = parse(raw)?;
+        let graph = SyllableGraph::build(&parsed, GraphOptions {
+            mode: GraphMode::Full, allow_erhua: false, typo: false, completion: false,
+        });
+        let mut paths = Vec::new();
+        exact_segmentations(&graph, 0, 4, &mut Vec::new(), &mut paths);
+        let mut entries = Vec::new();
+        for path in paths.iter().filter(|p| (2..=4).contains(&p.len())) {
+            let query: Vec<_> = path.iter().map(|edge| edge.query()).collect();
+            for entry in self.lexicon.lookup_common(&query) {
+                if entries.iter().any(|(e, _): &(crate::lexicon::LexEntry, String)| e.word == entry.word) { continue; }
+                entries.push((entry, query.iter().map(|q| q.display()).collect::<Vec<_>>().join(" ")));
+            }
+        }
+        entries.sort_by(|(a, _), (b, _)| self.history_heat(&b.word, at_ms).total_cmp(&self.history_heat(&a.word, at_ms))
+            .then_with(|| b.freq.total_cmp(&a.freq)));
+        let mut slot = 1;
+        for (entry, pinyin) in entries.into_iter().take(3) {
+            let text = self.shown_text(&entry.word);
+            if let Some(at) = found.iter().position(|c| c.text == text && c.consumed == consumed && !c.long_completion) {
+                if at <= slot { slot = slot.max(at + 1); continue; }
+                let candidate = found.remove(at);
+                found.insert(slot.min(found.len()), candidate);
+            } else {
+                found.insert(slot.min(found.len()), Candidate {
+                    text, pinyin: pinyin.clone(), consumed, score: 0.0, long_completion: false,
+                    features: Feature { coverage_score: 1.0, ..Default::default() },
+                    words: vec![CandidateWord { text: entry.word, pinyin, freq: entry.freq, known: true }],
+                });
+            }
+            slot += 1;
+        }
+        // 保持后续合并所需的单调分数；原样字母候选仍留在末尾可选。
+        for i in 1..found.len() { if found[i].score >= found[i-1].score { found[i].score = found[i-1].score - 1e-3; } }
+        while found.len() > self.config.max_candidates.max(1) {
+            if let Some(i) = found.iter().rposition(|c| !is_raw_candidate(c)) { found.remove(i); } else { break; }
+        }
+        Ok(())
     }
 
     /// 句首词候选：从输入开头起、但没有用完整个输入的词。

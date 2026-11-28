@@ -43,6 +43,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::Win32::System::Threading::GetCurrentThreadId;
 
 const CLASS_NAME: PCWSTR = w!("FreeTypeCandidateWindow");
+const EDITOR_CLASS: PCWSTR = w!("FreeTypeSentenceEditor");
 const MENU_CLASS: PCWSTR = w!("FreeTypeCandidateMenu");
 const HINT_TIMER: usize = 1;
 const LONG_TIMER: usize = 2;
@@ -318,6 +319,7 @@ fn theme_for_appearance(style: &str, custom: Option<&CandidateSkin>, light: bool
 #[derive(Clone, Default, PartialEq)]
 struct View {
     sentence: Option<freetype_protocol::SentenceView>,
+    editor_above: bool,
     title: Option<String>,
     preedit: String,
     candidates: Vec<String>,
@@ -505,7 +507,9 @@ fn layout(view: &View, fonts: &Fonts, scale: f32) -> Result<Layout> {
             if text.is_empty() {
                 continue;
             }
-            let text = if part == Part::Preedit { &fonts.preedit } else { &fonts.small }.text(&text)?;
+            let font = if part == Part::Preedit { &fonts.preedit }
+                else if view.sentence.is_some() { &fonts.caption } else { &fonts.small };
+            let text = font.text(&text)?;
             let size = text.size;
             out.parts.push(Piece::new(part, text, (pad + s(4.0)) as f32, y as f32));
             width = width.max(size.cx + s(8.0));
@@ -1017,10 +1021,12 @@ fn register_classes(instance: HINSTANCE) {
         for (name, proc_) in [
             (CLASS_NAME, window_proc as unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT),
             (MENU_CLASS, menu::proc_),
+            (EDITOR_CLASS, window_proc),
         ] {
             let class = WNDCLASSEXW {
                 cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-                style: CS_HREDRAW | CS_VREDRAW | CS_DROPSHADOW,
+                // 辅助编辑区不投影，避免阴影覆盖最重要的候选窗。
+                style: CS_HREDRAW | CS_VREDRAW | if name == EDITOR_CLASS { Default::default() } else { CS_DROPSHADOW },
                 lpfnWndProc: Some(proc_),
                 hInstance: instance,
                 lpszClassName: name,
@@ -1133,7 +1139,11 @@ impl CandidateWindow {
         if !self.alive.get() {
             *self = Self::new(self.instance).ok_or_else(|| Error::from_thread())?;
         }
-        set_popup_owner(self.hwnd, owner)
+        set_popup_owner(self.hwnd, owner)?;
+        if let Some(editor) = self.editor.borrow().as_ref().filter(|e| e.alive.get()) {
+            set_popup_owner(editor.hwnd, owner)?;
+        }
+        Ok(())
     }
 
     pub fn hide(&self) {
@@ -1154,6 +1164,11 @@ impl CandidateWindow {
         // Keep our hidden timer/message window alive when the input host closes.
         if let Err(error) = set_popup_owner(self.hwnd, HWND::default()) {
             crate::log::write("取消候选窗关联失败", &error.to_string());
+        }
+        if let Some(editor) = self.editor.borrow().as_ref().filter(|e| e.alive.get()) {
+            if let Err(error) = set_popup_owner(editor.hwnd, HWND::default()) {
+                crate::log::write("取消整句编辑区关联失败", &error.to_string());
+            }
         }
     }
 
@@ -1203,6 +1218,7 @@ impl CandidateWindow {
         }
         let view = View {
             sentence: None,
+            editor_above: frame.sentence_editor_above,
             title: frame.title.clone(),
             preedit: if frame.hide_candidate_preedit { String::new() } else { frame.preedit.clone() },
             candidates: frame.candidates.clone(),
@@ -1322,7 +1338,7 @@ impl CandidateWindow {
             view.available_width = work.right - work.left;
             if view.wrap { view.wrap_width = work.right - work.left; }
             let result = Fonts::styled(view.font_size.max(12) as f32 * scale, &view.font_family,
-                view.preedit_size as f32 * scale, &view.font_fallbacks).and_then(|fonts| layout(&view, &fonts, scale));
+                view.preedit_size as f32 * scale, &view.font_fallbacks, 0.0).and_then(|fonts| layout(&view, &fonts, scale));
             let layout = match result {
                 Ok(layout) => layout,
                 Err(error) => {
@@ -1392,12 +1408,14 @@ impl CandidateWindow {
         let focused = sentence.cursor.is_some();
         let view = View {
             sentence: Some(sentence.clone()),
+            editor_above: candidate.view.editor_above,
             title: Some(if focused { "数字选局部备选；[ ] 调整切分；End 返回整句" }
-                else { "点词块编辑整句" }.into()),
+                else { "点词块修改" }.into()),
             candidates: if focused { sentence.alternatives.clone() } else { Vec::new() },
             has_prev: focused && sentence.has_prev,
             has_next: focused && sentence.has_next,
-            font_size: candidate.view.font_size,
+            // 辅助区域字号略小于主候选，提示行另外限制字号。
+            font_size: (candidate.view.font_size * 9 / 10).max(12),
             font_family: candidate.view.font_family.clone(),
             font_fallbacks: candidate.view.font_fallbacks.clone(),
             candidate_style: candidate.view.candidate_style.clone(),
@@ -1419,7 +1437,9 @@ struct EditorWindow {
 
 impl EditorWindow {
     fn new(instance: HINSTANCE, owner: HWND) -> Option<Self> {
-        let hwnd = popup(instance, CLASS_NAME, Some(owner))?;
+        // 与候选窗共享宿主，而不是成为候选窗的 owned popup；后者会被系统强制压在主窗上面。
+        let host = HWND(unsafe { GetWindowLongPtrW(owner, GWLP_HWNDPARENT) } as *mut _);
+        let hwnd = popup(instance, EDITOR_CLASS, Some(host))?;
         let alive = Rc::new(Cell::new(true));
         let data = Box::new(Data {
             alive: alive.clone(), view: View::default(), layout: Layout::default(), scale: 1.0,
@@ -1456,14 +1476,15 @@ impl EditorWindow {
             view.available_width = (work.right - work.left).min((640.0 * scale) as i32);
             view.wrap_width = view.available_width;
             let result = Fonts::styled(view.font_size.max(12) as f32 * scale, &view.font_family,
-                0.0, &view.font_fallbacks).and_then(|fonts| layout(&view, &fonts, scale));
+                0.0, &view.font_fallbacks, (view.font_size as f32 * 0.72).clamp(11.0, 14.0) * scale)
+                .and_then(|fonts| layout(&view, &fonts, scale));
             let layout = match result {
                 Ok(layout) => layout,
                 Err(error) => { crate::log::write("整句编辑区排版失败", &error.to_string()); self.hide(); return; }
             };
             let gap = (6.0 * scale).round() as i32;
-            let y = anchor.top - gap - layout.height;
-            if y < work.top || layout.width > work.right - work.left {
+            let y = if view.editor_above { anchor.top - gap - layout.height } else { anchor.bottom + gap };
+            if y < work.top || y + layout.height > work.bottom || layout.width > work.right - work.left {
                 self.hide();
                 if let Some(data) = data_of(self.hwnd) { data.view = view.clone(); }
                 // 空间不足时退出词块焦点，避免不可见的局部备选截获数字键。
@@ -1484,7 +1505,8 @@ impl EditorWindow {
             data.view = view;
             data.layout = layout;
             data.scale = scale;
-            let _ = SetWindowPos(self.hwnd, Some(HWND_TOPMOST), x, y, target.right-x, target.bottom-y, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            // 插在候选窗之后：同为置顶窗口，主候选仍保持更高的层级。
+            let _ = SetWindowPos(self.hwnd, Some(candidate), x, y, target.right-x, target.bottom-y, SWP_NOACTIVATE | SWP_SHOWWINDOW);
             let _ = InvalidateRect(Some(self.hwnd), None, false);
             let _ = UpdateWindow(self.hwnd);
         }

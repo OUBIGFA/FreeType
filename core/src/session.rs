@@ -735,13 +735,7 @@ impl<'e> Session<'e> {
                 if matches!(sym,keysym::PAGE_UP|keysym::PAGE_DOWN|keysym::MINUS|keysym::EQUAL){self.sentence_action(crate::sentence::Action::Page{next:matches!(sym,keysym::PAGE_DOWN|keysym::EQUAL)});return Some(true);}
                 if matches!(sym,keysym::UP|keysym::DOWN){self.sentence_action(crate::sentence::Action::Cycle{backward:sym==keysym::UP});return Some(true);}
             }
-            if sym==keysym::SPACE {
-                if let Some(at)=self.sentence.view.pending_from {
-                    let suffix=self.input[at..].to_string();let text=self.sentence.view.text.clone();
-                    let reading=self.sentence.view.blocks.iter().map(|b|b.pinyin.as_str()).collect::<Vec<_>>().join(" ");
-                    self.commit_with(&text,&reading);self.input=suffix;self.fresh=false;return Some(true);
-                }
-            }
+            // 空格沿用普通候选的提交路径；辅助区不能把简拼尾音拆成两次上屏。
         }
         if self.calc_active() && self.input.len() > 1 {
             let expr = &self.input[1..];

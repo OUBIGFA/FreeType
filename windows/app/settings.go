@@ -69,6 +69,7 @@ type settings struct {
 	settingQuery, locatedSetting string
 	revealSetting                bool
 	pageScroll, searchScroll     ui.ScrollState
+	previewCaretMoved            bool
 	locatedHandle                ui.Handle
 
 	// 字体列表（第一次打开候选窗页时取）。

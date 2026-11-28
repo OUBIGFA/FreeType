@@ -321,8 +321,10 @@ pub struct Config {
     /// 行内预编辑：segmented、raw、off；候选窗预编辑独立控制。
     pub inline_preedit: String,
     pub candidate_preedit: bool,
-    /// 独立显示在候选窗上方；旧配置缺字段时也默认关闭。
+    /// 独立显示整句编辑区；旧配置缺字段时也默认关闭。
     pub sentence_editor: bool,
+    /// below（默认）或 above；空间不足时收起，不挪动候选窗。
+    pub sentence_editor_position: String,
     /// 0 按候选字号自动缩放。
     pub preedit_size: u32,
     pub candidate_follow: bool,
@@ -486,6 +488,7 @@ impl Default for Config {
             inline_preedit: "segmented".into(),
             candidate_preedit: true,
             sentence_editor: false,
+            sentence_editor_position: "below".into(),
             preedit_size: 0,
             candidate_follow: true,
             candidate_single_line: true,
@@ -613,6 +616,7 @@ impl Config {
         self.font_size = self.font_size.clamp(12, 36);
         if self.preedit_size != 0 { self.preedit_size = self.preedit_size.clamp(10, 36); }
         pick(&mut self.inline_preedit, &["segmented", "spaces", "raw", "off"], &d.inline_preedit);
+        pick(&mut self.sentence_editor_position, &["below", "above"], &d.sentence_editor_position);
         self.font_fallbacks = self.font_fallbacks.split([',', '，']).map(str::trim)
             .filter(|name| !name.is_empty() && name.len() <= 64 && !name.chars().any(char::is_control))
             .take(6).collect::<Vec<_>>().join(",");
@@ -1007,6 +1011,8 @@ pub struct Frame {
     /// Optional sentence editing metadata; offsets refer to the original keys.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sentence: Option<SentenceView>,
+    #[serde(default)]
+    pub sentence_editor_above: bool,
     /// 显示注音/释义，与实际候选及上屏内容分离。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub annotations: Vec<String>,
@@ -1304,6 +1310,17 @@ pub fn decode<'a, T: Deserialize<'a>>(line: &'a [u8]) -> Result<T, serde_json::E
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn editor_position_defaults_below_and_rejects_unknown_values() {
+        let old: Config = serde_json::from_str("{}").unwrap();
+        assert!(!old.sentence_editor);
+        assert_eq!(old.sentence_editor_position, "below");
+        let above: Config = serde_json::from_str(r#"{"sentence_editor":true,"sentence_editor_position":"above"}"#).unwrap();
+        assert_eq!(above.sanitized().sentence_editor_position, "above");
+        let unknown: Config = serde_json::from_str(r#"{"sentence_editor_position":"sideways"}"#).unwrap();
+        assert_eq!(unknown.sanitized().sentence_editor_position, "below");
+    }
 
     #[test]
     fn request_round_trip_uses_op_tag() {

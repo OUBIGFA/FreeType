@@ -16,6 +16,21 @@ fn type_text(s: &mut Session, text: &str) {
 }
 
 #[test]
+fn block_alternatives_offer_whole_homophones_before_single_characters() {
+    let e = Engine::new(Arc::new(MemoryLexicon::from_tsv_str(
+        "zhi ding\t指定\t90000\nzhi ding\t置顶\t80000\nzhi\t指\t90000\nzhi\t只\t80000\nding\t定\t90000\nding\t顶\t80000\nding\t丁\t70000\n"
+    ).unwrap()), Arc::new(BigramLm::default()));
+    let mut s = Session::with_engine(&e);
+    s.configure(wowtype_core::session::Config { sentence_editor: true, ..Default::default() });
+    type_text(&mut s, "zhiding");
+    s.sentence_action(Action::Focus { at: 7 });
+    let alternatives = &s.sentence_view().unwrap().alternatives;
+    assert_eq!(alternatives[0].text, "置顶");
+    assert_eq!((alternatives[0].from, alternatives[0].to), (0, 7));
+    assert!(alternatives.iter().any(|c| c.from == 3 && c.to == 7), "单字备选仍可选");
+}
+
+#[test]
 fn ordinary_input_does_not_enable_sentence_editor_by_default() {
     let e = engine();
     let mut s = Session::new();
@@ -165,15 +180,33 @@ fn windows_history_overwrite_keeps_latest_boundaries() {
 }
 
 #[test]
-fn half_syllable_stays_after_committing_complete_prefix() {
+fn abbreviated_tail_commits_the_visible_candidate_in_one_space() {
     let e = engine();
     let mut s = Session::new();
     s.configure(wowtype_core::session::Config { sentence_editor: true, ..Default::default() });
     s.set_engine(Some(&e));
     type_text(&mut s, "wox");
+    let expected = s.candidates()[0].text.clone();
     let frame = s.key(&Key::char(' '));
-    assert_eq!(frame.commit.as_deref(), Some("我"));
-    assert_eq!(s.input(), "x");
+    assert_eq!(frame.commit.as_deref(), Some(expected.as_str()));
+    assert!(!s.composing());
+}
+
+#[test]
+fn editor_does_not_replace_visible_mixed_input_with_stale_prefix() {
+    let e = Engine::new(Arc::new(MemoryLexicon::from_tsv_str(
+        "zui\t最\t90000\nqian\t前\t90000\nmian\t面\t90000\nma\t吗\t80000\nzui qian mian\t最前面\t100000\nzui qiang\t最强\t90000\n"
+    ).unwrap()), Arc::new(BigramLm::default()));
+    for editor in [false, true] {
+        let mut s = Session::with_engine(&e);
+        s.configure(wowtype_core::session::Config { sentence_editor: editor, ..Default::default() });
+        type_text(&mut s, "zuiqianm");
+        assert_eq!(s.candidates()[0].text, "最前面");
+        if editor { assert_eq!(s.sentence_view().unwrap().text, "最前面"); }
+        let frame = s.key(&Key::char(' '));
+        assert_eq!(frame.commit.as_deref(), Some("最前面"));
+        assert!(!s.composing());
+    }
 }
 
 #[test]
