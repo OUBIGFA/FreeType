@@ -386,7 +386,6 @@ mod tests {
 mod focus_tests;
 
 #[cfg(test)]
-#[path = "service_prediction_tests.rs"]
 mod prediction_tests;
 
 #[cfg(test)]
