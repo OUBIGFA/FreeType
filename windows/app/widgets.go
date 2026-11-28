@@ -12,7 +12,7 @@ import (
 //     分组标题和面板下的说明都与这条边对齐；
 //  2. 同组设置之间只画一条浅色细线；子项靠缩进表达从属，不再套底色框；
 //  3. 分组面板无阴影；只有弹窗、菜单等浮层使用 mygo 默认的一层淡阴影；
-//  4. 中性色占绝大部分面积，品牌粉 brandPink 是唯一强调色。
+//  4. 通用控件沿用中性灰强调色，品牌粉 brandPink 用于复选框勾选。
 const (
 	space1  float32 = 4
 	space2  float32 = 8
@@ -45,15 +45,13 @@ const (
 // 显式字号也跟随 Windows 的文字大小；Theme.Rem 已包含系统文字缩放。
 func textSize(c *ui.Context, size float32) float32 { return c.Theme().Rem(size / 14) }
 
-// brandPink 是 logo 的粉色，也是界面唯一的强调色：勾选、开关、主按钮和关键数据。
-// 它偏浅，上面的字固定用深色 inkOnPink。
+// brandPink 是 logo 和复选框勾选的粉色；上面的字固定用深色 inkOnPink。
 var (
 	brandPink = ui.Hex("#ffb3fa")
 	inkOnPink = ui.Hex("#18181b")
 )
 
-// settingsTheme 统一控件底色、边框、文字和强调色，避免局部主题遗漏控件。
-// 焦点环保持中性深灰，与粉色的“已选中”区分开。
+// settingsTheme 统一控件底色、边框和文字；通用强调色与焦点环沿用中性深浅灰。
 func settingsTheme(c *ui.Context) *ui.Theme {
 	theme := *c.Theme()
 	theme.Radius = controlRadius
@@ -61,17 +59,19 @@ func settingsTheme(c *ui.Context) *ui.Theme {
 		return &theme
 	}
 	p := colors(c)
-	result := theme.WithAccent(brandPink)
-	result.AccentText = inkOnPink
+	gray := ui.Hex("#27272a")
+	if theme.Dark {
+		gray = ui.Hex("#d4d4d8")
+	}
+	result := theme.WithAccent(gray)
+	result.Focus = gray
 	result.Text, result.TextMuted = p.text, p.muted
 	if theme.Dark {
-		result.Focus = ui.Hex("#d4d4d8")
 		result.Surface = ui.Hex("#2c2c30")
 		result.SurfaceHover = ui.Hex("#36363b")
 		result.SurfacePressed = ui.Hex("#404046")
 		result.Border = ui.Hex("#4a4a50")
 	} else {
-		result.Focus = ui.Hex("#3f3f46")
 		result.Surface = ui.Hex("#f2f2f4")
 		result.SurfaceHover = ui.Hex("#e8e8eb")
 		result.SurfacePressed = ui.Hex("#dedee2")
@@ -80,12 +80,11 @@ func settingsTheme(c *ui.Context) *ui.Theme {
 	return result
 }
 
-// checkbox 保留原生勾选、键盘和无障碍行为。未勾选时的悬停边框用中性灰，
-// 勾选后才用强调色，避免鼠标划过一排复选框时到处闪粉色。
+// checkbox 保留原生勾选、键盘和无障碍行为；未勾选时沿用灰色，勾选后才用品牌粉。
 func checkbox(c *ui.Context, checked *bool, label string) ui.Element {
 	theme := *c.Theme()
-	if !*checked && !c.Preferences().HighContrast {
-		theme.Accent = theme.Focus
+	if *checked && !c.Preferences().HighContrast {
+		theme.Accent, theme.AccentText = brandPink, inkOnPink
 	}
 	var control ui.Element
 	ui.Themed(c, &theme).Background(ui.Transparent).Children(func() {

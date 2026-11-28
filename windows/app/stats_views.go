@@ -358,7 +358,11 @@ func statsRanks(c *ui.Context, values [11]uint64) {
 				if value == 0 {
 					nameText.TextColor(p.muted)
 				}
-				ui.Progress(c, float64(value)/float64(peak)).Grow(1).MinWidth(0).Label(label + "命中占比")
+				bar := ui.Progress(c, float64(value)/float64(peak)).Grow(1).MinWidth(0).Label(label + "命中占比")
+				// 统计图保留现有粉色，不随通用控件的强调色改变；高对比度仍跟随系统。
+				if !c.Preferences().HighContrast {
+					bar.TextColor(brandPink)
+				}
 				countText := ui.Text(c, fmt.Sprintf("%d 次", value)).FontSize(textSize(c, fontCaption)).FontFeatures("tnum").
 					Width(textSize(c, 60)).TextAlign(ui.End)
 				if value == 0 {
