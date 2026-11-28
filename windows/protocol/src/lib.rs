@@ -321,6 +321,8 @@ pub struct Config {
     /// 行内预编辑：segmented、raw、off；候选窗预编辑独立控制。
     pub inline_preedit: String,
     pub candidate_preedit: bool,
+    /// 独立显示在候选窗上方；旧配置缺字段时也默认关闭。
+    pub sentence_editor: bool,
     /// 0 按候选字号自动缩放。
     pub preedit_size: u32,
     pub candidate_follow: bool,
@@ -483,6 +485,7 @@ impl Default for Config {
             candidate_wheel: false,
             inline_preedit: "segmented".into(),
             candidate_preedit: true,
+            sentence_editor: false,
             preedit_size: 0,
             candidate_follow: true,
             candidate_single_line: true,

@@ -147,6 +147,7 @@ fn keypad_digit(key: &Key) -> Option<char> {
 
 pub fn session_config(config: &Config) -> session::Config {
     session::Config {
+        sentence_editor: config.sentence_editor,
         page_size: config.page_size as usize,
         calculator: config.calculator,
         date_time: config.date_time,
@@ -479,13 +480,7 @@ impl ClientState {
         out.frame.cursor = core.cand_cursor;
         out.frame.has_prev = core.has_prev;
         out.frame.has_next = core.has_next;
-        if let Some(sentence)=out.frame.sentence.as_ref().filter(|v|v.cursor.is_some()) {
-            out.frame.candidates=sentence.alternatives.clone();
-            out.frame.labels=(1..=sentence.alternatives.len()).map(|n|n.to_string()).collect();
-            out.frame.annotations.clear();out.frame.badges.clear();out.frame.pin_slots.clear();
-            out.frame.cursor=None;out.frame.has_prev=sentence.has_prev;out.frame.has_next=sentence.has_next;out.frame.forgettable=false;
-            out.frame.title=Some("数字选局部备选；[ ] 调整切分；End 返回整句".into());
-        }
+        // 局部备选只属于独立编辑区，不能替换普通候选或改变其排版。
         if out.frame.commit.is_some() {
             // 选的词上屏了：接着联想（原样上屏的字母、标点后面接不上，自然没有）
             self.start_prediction(env);

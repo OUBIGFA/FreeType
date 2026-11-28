@@ -10,6 +10,125 @@ use windows::Win32::System::StationsAndDesktops::{
 use windows::Win32::System::Threading::GetCurrentThreadId;
 
 #[test]
+fn sentence_editor_does_not_change_candidate_geometry_or_content() {
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    let _desktop = PrivateDesktop::new();
+    let instance = HINSTANCE(unsafe { GetModuleHandleW(None).unwrap() }.0);
+    let window = CandidateWindow::new(instance).unwrap();
+    for vertical in [false, true] {
+        window.hide();
+        let mut frame = Frame { preedit: "wo'xi'huan'ni".into(), candidates: vec!["我喜欢你".into(), "我".into()],
+            vertical, font_size: 20, font_family: "Microsoft YaHei".into(), page_revision: 1, ..Default::default() };
+        let caret = rect(300, 400, 2, 24);
+        window.update(&frame, Some(caret));
+        let mut original = RECT::default();
+        unsafe { GetWindowRect(window.hwnd, &mut original).unwrap(); }
+        let items = data_of(window.hwnd).unwrap().layout.items.clone();
+        for text in ["我喜欢你", "这是一个比普通候选窗更长的整句编辑区域"] {
+            frame.sentence = Some(freetype_protocol::SentenceView { text: text.into(), raw: "woxihuanni".into(),
+                blocks: vec![freetype_protocol::SentenceBlock { text: text.into(), to: 10, ..Default::default() }],
+                cursor: Some(10), alternatives: vec!["局部备选".into()], ..Default::default() });
+            frame.page_revision += 1;
+            window.update(&frame, Some(caret));
+            let mut current = RECT::default();
+            unsafe { GetWindowRect(window.hwnd, &mut current).unwrap(); }
+            assert_eq!(current, original, "编辑区不能改变普通候选窗的位置或尺寸");
+            let data = data_of(window.hwnd).unwrap();
+            assert_eq!(data.layout.items, items);
+            assert!(data.layout.parts.iter().any(|p| p.part == Part::Preedit));
+            assert_eq!(data.view.candidates, frame.candidates);
+            let editor = window.editor.borrow().as_ref().unwrap().hwnd;
+            let mut above = RECT::default();
+            unsafe {
+                assert!(IsWindowVisible(editor).as_bool());
+                GetWindowRect(editor, &mut above).unwrap();
+                assert_eq!(GetWindowLongPtrW(editor, GWLP_HWNDPARENT), window.hwnd.0 as isize);
+            }
+            assert!(above.bottom < original.top, "独立编辑区必须在候选窗上方且不重叠");
+            if !vertical {
+                let (layout, pixels) = rendered(data.view.clone(), data.scale);
+                save_render("ordinary-with-editor", &layout, &pixels);
+                let editor = data_of(editor).unwrap();
+                let (layout, pixels) = rendered(editor.view.clone(), editor.scale);
+                save_render("independent-editor", &layout, &pixels);
+            }
+        }
+        frame.sentence = None;
+        window.update(&frame, None);
+        let editor = window.editor.borrow().as_ref().unwrap().hwnd;
+        assert!(!unsafe { IsWindowVisible(editor).as_bool() });
+        window.reposition(rect(320, 420, 2, 24));
+        assert!(!unsafe { IsWindowVisible(editor).as_bool() }, "关闭后挪动光标不能复活编辑区");
+    }
+}
+
+#[test]
+fn sentence_editor_lifecycle_and_pointer_routes_are_independent() {
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::UI::WindowsAndMessaging::{SendMessageW, IsWindow};
+    let _desktop = PrivateDesktop::new();
+    let instance = HINSTANCE(unsafe { GetModuleHandleW(None).unwrap() }.0);
+    let owner = popup(instance, CLASS_NAME, None).unwrap();
+    let mut window = CandidateWindow::new(instance).unwrap();
+    window.set_owner(owner).unwrap();
+    let clicks = Rc::new(RefCell::new(Vec::new()));
+    let capture = clicks.clone();
+    set_click_handler(Some(Box::new(move |c| capture.borrow_mut().push(c))));
+    let mut frame = Frame { preedit: "ni'hao".into(), candidates: vec!["你好".into(), "你".into()],
+        has_next: true, candidate_wheel: true, font_size: 20, font_family: "Microsoft YaHei".into(), page_revision: 31,
+        sentence: Some(freetype_protocol::SentenceView { raw: "nihao".into(), text: "你好".into(), cursor: Some(2),
+            blocks: vec![freetype_protocol::SentenceBlock { text: "你".into(), to: 2, ..Default::default() }],
+            alternatives: vec!["泥".into()], has_next: true, ..Default::default() }), ..Default::default() };
+    window.update(&frame, Some(rect(300, 400, 2, 24)));
+    let editor = window.editor.borrow().as_ref().unwrap().hwnd;
+    let point = |r: RECT| LPARAM((((r.top+r.bottom)/2)<<16 | ((r.left+r.right)/2)) as isize);
+    let click = |hwnd: HWND, p: LPARAM| unsafe {
+        SendMessageW(hwnd, WM_LBUTTONDOWN, Some(WPARAM(0)), Some(p));
+        SendMessageW(hwnd, WM_LBUTTONUP, Some(WPARAM(0)), Some(p));
+    };
+    for (hwnd, expected) in [(window.hwnd, CandidateAction::Select { index: 0 }), (editor, CandidateAction::SentenceChoose { index: 0 })] {
+        clicks.borrow_mut().clear();
+        click(hwnd, point(data_of(hwnd).unwrap().layout.items[0]));
+        assert_eq!(*clicks.borrow(), vec![Click::Candidate { action: expected, revision: 31 }]);
+    }
+    for (hwnd, expected) in [(window.hwnd, CandidateAction::Page { next: true }), (editor, CandidateAction::SentencePage { next: true })] {
+        clicks.borrow_mut().clear();
+        unsafe { SendMessageW(hwnd, WM_MOUSEWHEEL, Some(WPARAM(((-120i16 as u16 as u32)<<16) as usize)), Some(LPARAM(0))); }
+        assert_eq!(*clicks.borrow(), vec![Click::Candidate { action: expected, revision: 31 }]);
+    }
+    // 更新后的页面不能接收上一页按下、这一页松开的词块点击。
+    clicks.borrow_mut().clear();
+    let block = point(data_of(editor).unwrap().layout.sentence_hits[0].0);
+    unsafe { SendMessageW(editor, WM_LBUTTONDOWN, Some(WPARAM(0)), Some(block)); }
+    frame.page_revision += 1;
+    window.update(&frame, Some(rect(300, 400, 2, 24)));
+    unsafe { SendMessageW(editor, WM_LBUTTONUP, Some(WPARAM(0)), Some(block)); }
+    assert!(clicks.borrow().is_empty());
+    // 顶部空间不足只收起辅助窗；主窗仍按原来的光标规则定位。
+    let work = work_area(300, 400);
+    window.reposition(rect(work.left+20, work.top, 2, 24));
+    assert!(!unsafe { IsWindowVisible(editor).as_bool() });
+    let mut r = RECT::default();
+    unsafe { GetWindowRect(window.hwnd, &mut r).unwrap(); }
+    assert_eq!(r.top, work.top+28);
+    window.reposition(rect(300, 400, 2, 24));
+    assert!(unsafe { IsWindowVisible(editor).as_bool() });
+    window.hide();
+    assert!(!window.visible());
+    assert!(!unsafe { IsWindowVisible(editor).as_bool() });
+    assert_eq!(data_of(editor).unwrap().painted_revision, 0);
+    window.set_owner(owner).unwrap();
+    window.update(&frame, Some(rect(300, 400, 2, 24)));
+    unsafe { DestroyWindow(owner).unwrap(); }
+    assert!(!unsafe { IsWindow(Some(editor)).as_bool() });
+    window.set_owner(HWND::default()).unwrap();
+    window.update(&frame, Some(rect(300, 400, 2, 24)));
+    assert!(window.visible());
+    assert!(window.editor.borrow().as_ref().unwrap().alive.get());
+    set_click_handler(None);
+}
+
+#[test]
 fn prediction_highlight_preserves_window_and_item_rectangles() {
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     let _desktop = PrivateDesktop::new();
@@ -79,10 +198,11 @@ fn sentence_pointer_selects_a_block_without_committing_the_sentence(){
     let window=CandidateWindow::new(instance).unwrap();let clicks=Rc::new(RefCell::new(Vec::new()));let capture=clicks.clone();
     set_click_handler(Some(Box::new(move|c|capture.borrow_mut().push(c))));
     let frame=Frame{sentence:Some(freetype_protocol::SentenceView{text:"你好".into(),raw:"nihao".into(),blocks:vec![freetype_protocol::SentenceBlock{from:0,to:5,text:"你好".into(),..Default::default()}],..Default::default()}),candidates:vec!["你好".into()],font_size:20,font_family:"Microsoft YaHei".into(),page_revision:17,..Default::default()};
-    window.update(&frame,Some(rect(100,100,2,24)));
-    let area=data_of(window.hwnd).unwrap().layout.sentence_hits[0].0;
+    window.update(&frame,Some(rect(100,400,2,24)));
+    let editor = window.editor.borrow().as_ref().unwrap().hwnd;
+    let area=data_of(editor).unwrap().layout.sentence_hits[0].0;
     let point=LPARAM((((area.top+area.bottom)/2)<<16|((area.left+area.right)/2))as isize);
-    unsafe{SendMessageW(window.hwnd,WM_LBUTTONDOWN,Some(WPARAM(0)),Some(point));SendMessageW(window.hwnd,WM_LBUTTONUP,Some(WPARAM(0)),Some(point));}
+    unsafe{SendMessageW(editor,WM_LBUTTONDOWN,Some(WPARAM(0)),Some(point));SendMessageW(editor,WM_LBUTTONUP,Some(WPARAM(0)),Some(point));}
     assert!(matches!(clicks.borrow().as_slice(),[Click::Candidate{action:CandidateAction::SentenceFocus{at:5},..}]));
     window.hide();set_click_handler(None);
 }

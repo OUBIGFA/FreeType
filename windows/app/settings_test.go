@@ -6,6 +6,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -945,6 +946,33 @@ func TestLongWordCompletionSwitchSavesAndReloads(t *testing.T) {
 	}
 	if len(findSettings("长词")) == 0 {
 		t.Fatal("搜索应能定位补全设置")
+	}
+}
+
+func TestSentenceEditorDefaultsOffAndSavesIndependently(t *testing.T) {
+	s, backend := newTestSettings()
+	s.locateSetting(setting("candidates/整句编辑区"))
+	tt := ui.NewTester(s.view, 1000, 1800)
+	tt.Frame()
+	if s.config.SentenceEditor {
+		t.Fatal("整句编辑区应默认关闭")
+	}
+	before := s.config
+	for _, enabled := range []bool{true, false} {
+		if err := tt.Click("整句编辑区"); err != nil {
+			t.Fatal(err)
+		}
+		tt.Frame()
+		s.refresh()
+		tt.Frame()
+		if s.config.SentenceEditor != enabled || backend.config.SentenceEditor != enabled {
+			t.Fatal("整句编辑区开关没有保存")
+		}
+		got := s.config
+		got.SentenceEditor = before.SentenceEditor
+		if !reflect.DeepEqual(got, before) {
+			t.Fatal("开关编辑区不应改变候选窗其他设置")
+		}
 	}
 }
 

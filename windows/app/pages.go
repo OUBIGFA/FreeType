@@ -434,6 +434,7 @@ func (s *settings) candidatesPage(c *ui.Context) {
 			changed = choose(c, "行内预编辑", []choice{{"segmented", "拼音分词"}, {"spaces", "空格分音节"}, {"raw", "原始按键"}, {"off", "不显示"}}, &s.config.InlinePreedit, 160) || changed
 		})
 		changed = s.settingSwitch(c, "candidates/候选窗预编辑", false, &s.config.CandidatePreedit) || changed
+		changed = s.settingSwitch(c, "candidates/整句编辑区", false, &s.config.SentenceEditor) || changed
 		s.settingRow(c, "candidates/预编辑字号", func() {
 			size := float64(s.config.PreeditSize)
 			if size == 0 {

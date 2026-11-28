@@ -65,7 +65,8 @@ fn ready_result_updates_sentence_and_commits_exactly_displayed_text() {
         words: vec![("泥".into(), "ni".into()), ("号".into(), "hao".into())],
     });
     assert!(s.refresh_enhancement());
-    assert_eq!(s.sentence_view().unwrap().text, "泥号");
+    assert!(s.sentence_view().is_none(), "模型增强不依赖编辑区开启");
+    assert_eq!(s.candidates()[0].text, "泥号");
     assert_eq!(s.key(&Key::char(' ')).commit.as_deref(), Some("泥号"));
 }
 

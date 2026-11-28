@@ -51,6 +51,7 @@ const CARET_TIMER: usize = 3;
 const CARET_RETRY_MS: u32 = 15;
 /// 发给自己的消息：回到应用的消息循环以后，叫文本服务去挪光标（见 [`set_caret_handler`]）。
 const WM_CARET_TICK: u32 = WM_APP + 1;
+const WM_EDITOR_UNAVAILABLE: u32 = WM_APP + 5;
 pub(crate) const WM_LANGUAGE_MENU: u32 = WM_APP + 2;
 pub(crate) const WM_RESTORE_KEYBOARD_OPEN: u32 = WM_APP + 3;
 const HINT_MS: u32 = 1000;
@@ -432,8 +433,8 @@ struct Data {
     layout: Layout,
     scale: f32,
     hovered: Option<Hover>,
-    /// 按下鼠标时在第几个候选上（长按用）。
-    pressed: Option<usize>,
+    /// 松开时必须仍命中同一目标，避免内容更新或拖出后误选。
+    pressed: Option<Hover>,
     /// 长按已经弹出菜单了（松开时不再选词）。
     long_fired: bool,
     // 精密滚轮可能分多条消息报告一格。
@@ -499,7 +500,7 @@ fn layout(view: &View, fonts: &Fonts, scale: f32) -> Result<Layout> {
         }
         for (text, part) in [
             (view.title.clone().unwrap_or_default(), Part::Title),
-            (if view.sentence.is_some(){String::new()}else{view.preedit.clone()}, Part::Preedit),
+            (view.preedit.clone(), Part::Preedit),
         ] {
             if text.is_empty() {
                 continue;
@@ -876,13 +877,10 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             let (x, y) = lparam_point(lparam);
             if let Some(data) = data_of(hwnd) {
                 data.long_fired = false;
-                data.pressed = match hit(data, x, y) {
-                    Some(Hover::Item(i)) => Some(i),
-                    _ => None,
-                };
+                data.pressed = hit(data, x, y);
                 unsafe {
                     SetCapture(hwnd);
-                    if data.pressed.is_some() && data.view.forgettable {
+                    if matches!(data.pressed, Some(Hover::Item(_))) && data.view.forgettable {
                         SetTimer(Some(hwnd), LONG_TIMER, LONG_PRESS_MS, None);
                     }
                 }
@@ -903,9 +901,9 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
                     return None;
                 }
                 match hit(data, x, y) {
-                    Some(Hover::Item(i)) if pressed == Some(i) => Some(data.click(if data.view.sentence.as_ref().is_some_and(|v|v.cursor.is_some()){CandidateAction::SentenceChoose { index:i }}else{CandidateAction::Select { index: i }})),
-                    Some(Hover::Sentence(at))=>Some(data.click(CandidateAction::SentenceFocus{at})),
-                    Some(Hover::Letter(at))=>Some(data.click(CandidateAction::SentenceCaret{at})),
+                    Some(Hover::Item(i)) if pressed == Some(Hover::Item(i)) => Some(data.click(if data.view.sentence.as_ref().is_some_and(|v|v.cursor.is_some()){CandidateAction::SentenceChoose { index:i }}else{CandidateAction::Select { index: i }})),
+                    Some(Hover::Sentence(at)) if pressed == Some(Hover::Sentence(at))=>Some(data.click(CandidateAction::SentenceFocus{at})),
+                    Some(Hover::Letter(at)) if pressed == Some(Hover::Letter(at))=>Some(data.click(CandidateAction::SentenceCaret{at})),
                     Some(Hover::Arrow(next)) => Some(data.click(if data.view.sentence.as_ref().is_some_and(|v|v.cursor.is_some()){CandidateAction::SentencePage { next }}else{CandidateAction::Page { next }})),
                     _ => None,
                 }
@@ -932,7 +930,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
                 }
             }
             let item = data_of(hwnd).and_then(|data| {
-                let item = data.pressed?;
+                let Some(Hover::Item(item)) = data.pressed else { return None; };
                 data.long_fired = true;
                 Some(item)
             });
@@ -947,6 +945,12 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         }
         WM_CARET_TICK => {
             caret_tick(hwnd);
+            LRESULT(0)
+        }
+        WM_EDITOR_UNAVAILABLE => {
+            if let Some(data) = data_of(hwnd).filter(|d| d.painted_revision != 0 && d.painted_revision == wparam.0 as u64) {
+                dispatch(data.click(CandidateAction::SentenceLeave));
+            }
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == PREDICT_TIMER => {
@@ -1096,6 +1100,8 @@ pub struct CandidateWindow {
     hwnd: HWND,
     instance: HINSTANCE,
     alive: Rc<Cell<bool>>,
+    // 辅助区拥有独立窗口与排版；不能把其尺寸加入候选窗的几何计算。
+    editor: RefCell<Option<EditorWindow>>,
 }
 
 impl CandidateWindow {
@@ -1118,7 +1124,7 @@ impl CandidateWindow {
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(data) as _);
         }
         MENU.with(|m| *m.borrow_mut() = popup(instance, MENU_CLASS, Some(hwnd)));
-        Some(Self { hwnd, instance, alive })
+        Some(Self { hwnd, instance, alive, editor: RefCell::new(None) })
     }
 
     /// Windows shell input requires an owned popup. Reuse it across keystrokes;
@@ -1131,6 +1137,7 @@ impl CandidateWindow {
     }
 
     pub fn hide(&self) {
+        if let Some(editor) = self.editor.borrow().as_ref() { editor.hide(); }
         if !self.alive.get() { return; }
         menu::close();
         if let Some(data) = data_of(self.hwnd) {
@@ -1186,12 +1193,16 @@ impl CandidateWindow {
     /// 按应答更新；`caret` 是编辑区（或光标）在屏幕上的位置。
     pub fn update(&self, frame: &Frame, caret: Option<RECT>) {
         if !self.alive.get() { return; }
+        // 宿主暂未返回光标位置时，也必须立即撤掉已关闭的辅助区。
+        if frame.sentence.is_none() || frame.hint.is_some() || frame.predict {
+            self.update_editor(None);
+        }
         unsafe {
             if frame.enhancement_pending {SetTimer(Some(self.hwnd),ENHANCEMENT_TIMER,100,None);}
             else {let _=KillTimer(Some(self.hwnd),ENHANCEMENT_TIMER);}
         }
         let view = View {
-            sentence: frame.sentence.clone(),
+            sentence: None,
             title: frame.title.clone(),
             preedit: if frame.hide_candidate_preedit { String::new() } else { frame.preedit.clone() },
             candidates: frame.candidates.clone(),
@@ -1244,6 +1255,7 @@ impl CandidateWindow {
                     SetTimer(Some(self.hwnd), PREDICT_TIMER, PREDICT_MS, None);
                 }
                 watch_outside_clicks(self.hwnd, true);
+                self.update_editor(None);
                 return;
             }
         }
@@ -1251,6 +1263,7 @@ impl CandidateWindow {
             return;
         };
         self.show(view, caret);
+        self.update_editor(frame.sentence.as_ref());
         unsafe {
             // 每来一批新的联想词重新计时；换成普通候选就不计了
             if frame.predict {
@@ -1272,6 +1285,13 @@ impl CandidateWindow {
             if data.view.prediction { return; }
             let view = data.view.clone();
             self.show(view, caret);
+            if let Some(editor) = self.editor.borrow().as_ref() {
+                if editor.alive.get() {
+                    if let Some(data) = data_of(editor.hwnd).filter(|d| d.view.sentence.is_some()) {
+                        editor.show(data.view.clone(), self.hwnd);
+                    }
+                }
+            }
         }
     }
 
@@ -1353,6 +1373,127 @@ impl CandidateWindow {
                 let _ = KillTimer(Some(self.hwnd), HINT_TIMER);
             }
         }
+    }
+
+    fn update_editor(&self, sentence: Option<&freetype_protocol::SentenceView>) {
+        let mut editor = self.editor.borrow_mut();
+        let Some(sentence) = sentence.filter(|s| !s.blocks.is_empty() && self.visible()) else {
+            if let Some(editor) = editor.as_ref() { editor.hide(); }
+            return;
+        };
+        let Some(candidate) = data_of(self.hwnd).filter(|d| d.view.hint.is_none() && !d.view.prediction) else {
+            if let Some(editor) = editor.as_ref() { editor.hide(); }
+            return;
+        };
+        if editor.as_ref().is_none_or(|e| !e.alive.get()) {
+            *editor = EditorWindow::new(self.instance, self.hwnd);
+        }
+        let Some(editor) = editor.as_ref() else { return; };
+        let focused = sentence.cursor.is_some();
+        let view = View {
+            sentence: Some(sentence.clone()),
+            title: Some(if focused { "数字选局部备选；[ ] 调整切分；End 返回整句" }
+                else { "点词块编辑整句" }.into()),
+            candidates: if focused { sentence.alternatives.clone() } else { Vec::new() },
+            has_prev: focused && sentence.has_prev,
+            has_next: focused && sentence.has_next,
+            font_size: candidate.view.font_size,
+            font_family: candidate.view.font_family.clone(),
+            font_fallbacks: candidate.view.font_fallbacks.clone(),
+            candidate_style: candidate.view.candidate_style.clone(),
+            candidate_skin: candidate.view.candidate_skin.clone(),
+            candidate_wheel: candidate.view.candidate_wheel,
+            revision: candidate.view.revision,
+            wrap: true,
+            ..View::default()
+        };
+        editor.show(view, self.hwnd);
+    }
+}
+
+/// 整句编辑区只读取普通候选窗的最终矩形；空间不足就收起，不反向挪动候选窗。
+struct EditorWindow {
+    hwnd: HWND,
+    alive: Rc<Cell<bool>>,
+}
+
+impl EditorWindow {
+    fn new(instance: HINSTANCE, owner: HWND) -> Option<Self> {
+        let hwnd = popup(instance, CLASS_NAME, Some(owner))?;
+        let alive = Rc::new(Cell::new(true));
+        let data = Box::new(Data {
+            alive: alive.clone(), view: View::default(), layout: Layout::default(), scale: 1.0,
+            hovered: None, pressed: None, long_fired: false, wheel_delta: 0,
+            painted_revision: 0, anchor: None,
+        });
+        unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(data) as _); }
+        Some(Self { hwnd, alive })
+    }
+
+    fn hide(&self) {
+        if !self.alive.get() { return; }
+        if let Some(data) = data_of(self.hwnd) {
+            data.painted_revision = 0;
+            data.pressed = None;
+            data.hovered = None;
+            data.wheel_delta = 0;
+            data.view.sentence = None;
+        }
+        unsafe {
+            if GetCapture() == self.hwnd { let _ = ReleaseCapture(); }
+            let _ = ShowWindow(self.hwnd, SW_HIDE);
+        }
+    }
+
+    fn show(&self, mut view: View, candidate: HWND) {
+        if !self.alive.get() { return; }
+        unsafe {
+            let mut anchor = RECT::default();
+            if GetWindowRect(candidate, &mut anchor).is_err() { self.hide(); return; }
+            let scale = GetDpiForWindow(candidate).max(96) as f32 / 96.0;
+            let work = work_area(anchor.left, anchor.top);
+            // 编辑区独立换行，局部备选变长也不能传回普通候选布局。
+            view.available_width = (work.right - work.left).min((640.0 * scale) as i32);
+            view.wrap_width = view.available_width;
+            let result = Fonts::styled(view.font_size.max(12) as f32 * scale, &view.font_family,
+                0.0, &view.font_fallbacks).and_then(|fonts| layout(&view, &fonts, scale));
+            let layout = match result {
+                Ok(layout) => layout,
+                Err(error) => { crate::log::write("整句编辑区排版失败", &error.to_string()); self.hide(); return; }
+            };
+            let gap = (6.0 * scale).round() as i32;
+            let y = anchor.top - gap - layout.height;
+            if y < work.top || layout.width > work.right - work.left {
+                self.hide();
+                if let Some(data) = data_of(self.hwnd) { data.view = view.clone(); }
+                // 空间不足时退出词块焦点，避免不可见的局部备选截获数字键。
+                if view.sentence.as_ref().is_some_and(|s| s.cursor.is_some()) {
+                    let _ = PostMessageW(Some(candidate), WM_EDITOR_UNAVAILABLE, WPARAM(view.revision as usize), LPARAM(0));
+                }
+                return;
+            }
+            let x = anchor.left.min(work.right - layout.width).max(work.left);
+            let target = rect(x, y, layout.width, layout.height);
+            let mut current = RECT::default();
+            let _ = GetWindowRect(self.hwnd, &mut current);
+            let Some(data) = data_of(self.hwnd) else { return; };
+            if IsWindowVisible(self.hwnd).as_bool() && current == target && data.view == view { return; }
+            data.pressed = None;
+            data.painted_revision = 0;
+            data.hovered = None;
+            data.view = view;
+            data.layout = layout;
+            data.scale = scale;
+            let _ = SetWindowPos(self.hwnd, Some(HWND_TOPMOST), x, y, target.right-x, target.bottom-y, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            let _ = InvalidateRect(Some(self.hwnd), None, false);
+            let _ = UpdateWindow(self.hwnd);
+        }
+    }
+}
+
+impl Drop for EditorWindow {
+    fn drop(&mut self) {
+        if self.alive.get() { unsafe { let _ = DestroyWindow(self.hwnd); } }
     }
 }
 

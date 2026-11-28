@@ -285,6 +285,8 @@ pub struct View {
 /// 会话的设置（外壳从自己的配置里抄过来）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Config {
+    /// 独立整句编辑区与对应快捷键；关闭时保留普通候选操作。
+    pub sentence_editor: bool,
     /// 一页几个候选（数字按键 emoji 只在第一页里找数字字）。
     pub page_size: usize,
     /// V 模式计算器（v 后面打算式）。双拼时用大写 V（小写 v 是声母键）。
@@ -310,6 +312,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            sentence_editor: false,
             page_size: 9,
             calculator: true,
             date_time: true,
@@ -595,6 +598,11 @@ impl<'e> Session<'e> {
     }
 
     pub fn configure(&mut self, config: Config) {
+        if self.config.sentence_editor && !config.sentence_editor {
+            // 关闭区域后不能留下不可见的词块焦点或编辑约束。
+            self.sentence = crate::sentence::State::default();
+            self.caret = None;
+        }
         if self.config != config {
             if config.arrow_keys == ArrowKeys::Candidates {
                 self.caret = None; // 方向键换回选词：拼音里的光标回到末尾
@@ -673,7 +681,7 @@ impl<'e> Session<'e> {
             return false;
         }
         if self.composing() && key.is_forget() {
-            self.forget_current();
+            self.forget_current(true);
             return true;
         }
         if key.has_command_modifier() {
@@ -706,7 +714,7 @@ impl<'e> Session<'e> {
         let sym = key.keysym;
         // 先把候选算好：候选重算时候选框回到开头，别在读页和光标以后才重算
         let n = self.candidates().len();
-        if !self.calc_active() && !self.expanded && !self.sentence.view.blocks.is_empty() {
+        if self.config.sentence_editor && !self.calc_active() && !self.expanded && !self.sentence.view.blocks.is_empty() {
             if matches!(sym, keysym::TAB | keysym::ISO_LEFT_TAB) && self.sentence.view.blocks.len()>1 && self.config.page_keys & page_keys::TAB==0 {
                 self.sentence_action(crate::sentence::Action::Move { backward: sym == keysym::ISO_LEFT_TAB || key.modifiers & modifier::SHIFT != 0 });
                 return Some(true);
@@ -1081,11 +1089,11 @@ impl<'e> Session<'e> {
     /// Ctrl+Delete：让引擎忘掉光标处的候选（用户词库里的词、选词热度、搭配），
     /// 候选原地重算，编辑区不动，候选框停在原来的页和位置。只管引擎的词（计算结果、
     /// emoji、日期时间这类没学过）；什么也没学过、是自定义词时什么也不做。
-    fn forget_current(&mut self) {
+    fn forget_current(&mut self, editor_shortcut: bool) {
         let Some(engine) = self.engine else {
             return;
         };
-        if let Some(word)=self.sentence.view.blocks.iter().find(|b|b.focused).map(|b|b.text.clone()) {
+        if let Some(word)=self.sentence.view.blocks.iter().find(|b|editor_shortcut && b.focused).map(|b|b.text.clone()) {
             if self.defer_learning(){return;}
             let changed=engine.forget_word(&word);self.sentence.forget(&word);self.fresh=false;self.forgot|=changed;return;
         }
@@ -1132,7 +1140,8 @@ impl<'e> Session<'e> {
             self.page = global / self.page_size();
         }
         let carried = std::mem::take(&mut self.forgot);
-        self.forget_current();
+        // 鼠标菜单明确指向普通候选，不借用独立编辑区的键盘焦点。
+        self.forget_current(false);
         let done = self.forgot;
         self.forgot |= carried;
         done.then_some(word)
@@ -1346,6 +1355,7 @@ impl<'e> Session<'e> {
 
     /// Sentence metadata is independent of the optional enhancement model.
     pub fn sentence_view(&mut self) -> Option<&crate::sentence::View> {
+        if !self.config.sentence_editor { return None; }
         self.candidates();
         (!self.sentence.view.blocks.is_empty() && self.selections.is_empty()).then_some(&self.sentence.view)
     }
@@ -1353,6 +1363,7 @@ impl<'e> Session<'e> {
     /// Keyboard and pointer commands share one state transition. Picking a block
     /// keeps composing; only the ordinary commit path writes the final sentence.
     pub fn sentence_action(&mut self, action: crate::sentence::Action) -> Frame {
+        if !self.config.sentence_editor { return self.frame(false); }
         self.candidates();
         if let crate::sentence::Action::Caret{at}=action {self.caret=Some(at.min(self.input.len()));}
         if matches!(action,crate::sentence::Action::Leave){self.caret=None;}

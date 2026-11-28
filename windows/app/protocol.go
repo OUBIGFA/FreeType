@@ -41,6 +41,7 @@ type Config struct {
 	CandidateWheel      bool   `json:"candidate_wheel"`
 	InlinePreedit       string `json:"inline_preedit"`
 	CandidatePreedit    bool   `json:"candidate_preedit"`
+	SentenceEditor      bool   `json:"sentence_editor"`
 	PreeditSize         int    `json:"preedit_size"`
 	CandidateFollow     bool   `json:"candidate_follow"`
 	CandidateSingleLine bool   `json:"candidate_single_line"`

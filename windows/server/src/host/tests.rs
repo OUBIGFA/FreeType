@@ -2935,14 +2935,37 @@ fn typing_while_the_dictionary_loads_says_so_and_recovers_once_ready() {
 #[test]
 fn sentence_actions_require_current_display_and_preserve_session(){
     let mut host=host("sentence-actions");
+    configure(&mut host, |c| c.sentence_editor = true);
     let frame=typing(&mut host,"nihaoshijie");let revision=frame.page_revision;
     let stale=host.handle(1,Request::CandidateAction{revision:revision.wrapping_add(1),action:CandidateAction::SentenceFocus{at:5}}).frame.unwrap();
     assert!(stale.sentence.unwrap().cursor.is_none());
     let revision=stale.page_revision;
     let focus=host.handle(1,Request::CandidateAction{revision,action:CandidateAction::SentenceFocus{at:5}}).frame.unwrap();
+    assert_eq!(focus.candidates, frame.candidates, "词块焦点不能替换普通候选");
+    assert_eq!(focus.preedit, frame.preedit);
+    assert_eq!(focus.title, frame.title);
     assert_eq!(focus.sentence.unwrap().cursor,Some(5));assert!(focus.commit.is_none());
     let reset=host.handle(1,Request::Reset{commit:false}).frame.unwrap();assert!(reset.sentence.is_none());
     let late=host.handle(1,Request::RefreshEnhancement{revision:focus.page_revision});assert!(late.frame.is_none());
+    cleanup(&host);
+}
+
+#[test]
+fn sentence_editor_defaults_off_and_disabling_restores_ordinary_selection() {
+    let mut host = host("sentence-default-off");
+    assert!(!host.config.sentence_editor);
+    let frame = typing(&mut host, "nihaoshijie");
+    assert!(frame.sentence.is_none());
+    configure(&mut host, |c| c.sentence_editor = true);
+    let frame = host.handle(1, Request::CandidateAction { revision: frame.page_revision,
+        action: CandidateAction::SentenceFocus { at: 5 } }).frame.unwrap();
+    configure(&mut host, |c| c.sentence_editor = false);
+    let current = host.handle(1, Request::CandidateAction { revision: frame.page_revision,
+        action: CandidateAction::SentenceFocus { at: 5 } }).frame.unwrap();
+    assert!(current.sentence.is_none());
+    let first = current.candidates[0].clone();
+    let selected = press(&mut host, '1' as u32);
+    assert_eq!(selected.commit.as_deref(), Some(first.as_str()));
     cleanup(&host);
 }
 
