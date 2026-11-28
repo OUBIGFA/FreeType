@@ -227,6 +227,11 @@ impl ITextStoreACP_Impl for Store_Impl {
     ) -> Result<()> {
         let buffer = self.text.borrow();
         let end = if end < 0 { buffer.len() } else { end as usize };
+        // 真实文本存储对越界位置返回 TS_E_INVALIDPOS；替身不能在 COM 回调里 panic，
+        // 否则定时器在文本变短后读旧位置时会让整个测试进程中止。
+        if start < 0 || start as usize > end || end > buffer.len() {
+            return Err(TS_E_INVALIDPOS.into());
+        }
         let slice = &buffer[start as usize..end];
         let size = slice.len().min(capacity as usize);
         unsafe {

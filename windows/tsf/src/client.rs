@@ -452,8 +452,9 @@ mod tests {
             }
             let _ = CloseHandle(handle);
         });
+        // 连接本身不在这次检查范围内；繁忙的测试机上连接可能超过 100 毫秒。
+        let mut connection = Connection::open(&name, now_ms() + 5_000).unwrap();
         let deadline = now_ms() + 100;
-        let mut connection = Connection::open(&name, deadline).unwrap();
         let response = connection.call(&Request::Status, deadline);
         drop(connection);
         worker.join().unwrap();
