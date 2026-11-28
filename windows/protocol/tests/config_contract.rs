@@ -3,7 +3,10 @@
 //! Go 端（`windows/app/protocol_contract_test.go`）核对读入再写出不丢字段、不改取值。
 use freetype_protocol::Config;
 
-const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/config-default.json");
+const FIXTURE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/config-default.json"
+);
 
 #[test]
 fn default_config_matches_the_shared_fixture() {
