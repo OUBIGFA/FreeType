@@ -111,7 +111,8 @@ pub(super) fn verified_pair_key(
             && action == PairEdit::Skip
             && s.composition.is_none()
             && s.caret_move.is_some()
-            && s.pair_delivery.untouched();
+            && s.pair_delivery.untouched()
+            && !s.pair_delivery.absorbed;
         (action, s.composition.clone(), s.client_id, arrow_pending)
     };
     let accepted = Rc::new(std::cell::Cell::new(None));
@@ -134,8 +135,8 @@ pub(super) fn verified_pair_key(
             if last.permits(&doc, ec, &caret, action) {
                 out.set(Some(false));
             } else if arrow_pending && last.caret_after_closing(&doc, ec, &caret) {
-                // 光标已经在右标点后面，正是跳过后的位置：吞掉这个右键，
-                // 由 OnKeyDown 撤销待发的左移键，不再插入第二个右标点（Issue #13）。
+                // 光标还在补全的右标点后面：吞掉这个右键，不再插入第二个右标点；
+                // 待发的左移键照常发出，光标回到两半之间（Issue #13）。
                 out.set(Some(true));
             }
         }

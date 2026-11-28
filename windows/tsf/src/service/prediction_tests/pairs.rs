@@ -405,7 +405,8 @@ fn passed_through_typing_cancels_the_pending_pair_arrow() {
 }
 
 /// Issue #13：习惯连打左右两半的用户，在补全的左移键送达前就按下右半标点。
-/// 这时光标还在补全的右标点后面，右键只应撤销待发的左移、不再插入第二个右标点。
+/// 这时光标还在补全的右标点后面：右键只被吞掉，不插入第二个右标点；
+/// 待发的左移键照常保留，光标最后仍回到两半之间。同一次补全只吞一次右键。
 #[test]
 fn closing_key_before_the_pair_arrow_lands_keeps_a_single_closing_mark() {
     in_editor(|editor, state, sink| unsafe {
@@ -440,22 +441,29 @@ fn closing_key_before_the_pair_arrow_lands_keeps_a_single_closing_mark() {
             tested && handled,
             "the closing key must not reach the application"
         );
-        assert!(
-            state.borrow().caret_move.is_none(),
-            "the pending Left must be dropped"
+        assert_eq!(
+            String::from_utf16_lossy(&editor.store.text.borrow()),
+            "【】"
         );
-        let mut message = windows::Win32::UI::WindowsAndMessaging::MSG::default();
-        while windows::Win32::UI::WindowsAndMessaging::PeekMessageW(
-            &mut message,
-            None,
-            0,
-            0,
-            windows::Win32::UI::WindowsAndMessaging::PM_REMOVE,
-        )
-        .as_bool()
-        {
-            windows::Win32::UI::WindowsAndMessaging::DispatchMessageW(&message);
-        }
+        assert!(
+            state.borrow().caret_move.is_some(),
+            "the pending Left must still bring the caret between the halves"
+        );
+        let closing = Key {
+            keysym: u32::from(b']'),
+            ..Key::default()
+        };
+        assert!(
+            verified_pair_key(&state, Some(&editor.context), closing).is_none(),
+            "a second closing key is ordinary input"
+        );
+        // 左移键送达：光标回到两半之间，成对标点的位置仍在，之后的右键照常跳过。
+        editor.store.move_caret(1);
+        pair::finish(&state, true);
+        assert!(sink
+            .OnKeyDown(&editor.context, WPARAM(0xDD), LPARAM(0))
+            .unwrap()
+            .as_bool());
         assert_eq!(
             String::from_utf16_lossy(&editor.store.text.borrow()),
             "【】"

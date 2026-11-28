@@ -323,6 +323,8 @@ fn closes_with(open: char, close: char, key: char) -> bool {
 pub(super) struct Delivery {
     pub sent: bool,
     pub released: bool,
+    /// 左移键发出前已吞掉一个右键；同一次补全只吞一次，再按的右标点是用户要输入的。
+    pub absorbed: bool,
     frames: Vec<freetype_protocol::Frame>,
 }
 

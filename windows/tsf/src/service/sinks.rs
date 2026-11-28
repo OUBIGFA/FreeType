@@ -286,14 +286,15 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         if prediction_escape_down(&self.state, Some(&context), key, repeat) {
             return Ok(true.into());
         }
-        if let Some((action, cancel_arrow)) = verified_pair_key(&self.state, Some(&context), key) {
-            if cancel_arrow {
-                let mut s = self.state.borrow_mut();
-                s.caret_move = None;
-                s.pair_delivery = Default::default();
-            }
+        if let Some((action, early)) = verified_pair_key(&self.state, Some(&context), key) {
             if let Some(mut frame) = call(&self.state, &Request::ClosePair) {
-                frame.pair_edit = Some(action);
+                if early {
+                    // 左移键还没发：只吞掉右键，保留待发的左移键，光标照常回到两半之间。
+                    // 不交给 Pair::apply，它会取走成对标点的位置，之后的跳过和退格删整对就失效。
+                    self.state.borrow_mut().pair_delivery.absorbed = true;
+                } else {
+                    frame.pair_edit = Some(action);
+                }
                 apply(&self.state, Some(&context), frame, true);
                 return Ok(true.into());
             }

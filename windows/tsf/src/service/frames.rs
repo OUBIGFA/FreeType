@@ -424,6 +424,7 @@ pub(super) fn caret_back(state: &Rc<RefCell<State>>, frame: &Frame) {
         s.caret_move = Some(keys::CaretMove::new(frame.caret_back, now_ms()));
         s.pair_delivery.sent = false;
         s.pair_delivery.released = false;
+        s.pair_delivery.absorbed = false;
     } else {
         crate::log::write("发送辅助按键失败", "无法安排成对标点的光标移动");
     }
