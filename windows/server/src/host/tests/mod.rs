@@ -3,11 +3,14 @@
 use super::*;
 use freetype_protocol::{digit_punct, keysym, Panel};
 
+mod backup;
 mod composing;
 mod data;
 mod modes;
+mod phrases;
 mod prediction;
 mod sentence;
+mod sync;
 
 fn host(name: &str) -> Host {
     let dir = std::env::temp_dir().join(format!("freetype-host-{name}-{}", std::process::id()));
