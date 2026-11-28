@@ -351,6 +351,16 @@ func TestTypingPageFuzzyGroups(t *testing.T) {
 	if b.config.ArrowKeys != "caret" {
 		t.Fatalf("左右方向键设置没有保存：%+v", b.config)
 	}
+	if b.config.AutoPairAbsorb {
+		t.Fatal("连打两半时不重复右标点应默认关闭")
+	}
+	tt.Frame()
+	if err := tt.Click("连打两半时不重复右标点"); err != nil {
+		t.Fatal(err)
+	}
+	if !b.config.AutoPairAbsorb {
+		t.Fatal("连打两半时不重复右标点没有保存")
+	}
 	if err := tt.Click("成对标点自动补全"); err != nil {
 		t.Fatal(err)
 	}

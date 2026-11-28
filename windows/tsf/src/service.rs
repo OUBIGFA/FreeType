@@ -131,6 +131,8 @@ struct State {
     space: Option<PredictionSpace>,
     pairs: Vec<pair::Pair>,
     pair_enabled: bool,
+    /// 设置允许：补全的左移键发出前按下的右半标点只跳过，不再插入。
+    pair_absorb_closing: bool,
     window: Option<CandidateWindow>,
     caret: Option<RECT>,
     /// 上一次拿到的光标位置（应用一时给不出位置时用）。
@@ -222,6 +224,7 @@ impl TextService {
                 space: None,
                 pairs: Vec::new(),
                 pair_enabled: false,
+                pair_absorb_closing: false,
                 window: None,
                 caret: None,
                 last_caret: None,
@@ -993,6 +996,7 @@ fn note_frame(state: &Rc<RefCell<State>>, frame: &Frame) {
         s.prediction_caret = None;
     }
     s.pair_enabled = frame.pair_enabled;
+    s.pair_absorb_closing = frame.pair_absorb_closing;
     if !frame.pair_enabled {
         s.pairs.clear();
     }
@@ -1382,7 +1386,8 @@ fn verified_pair_key(
         let action = s.pairs.last()?.for_key(key, s.composition.is_some())?;
         // 左右两半都要按 Shift（（）、《》）时，用户常一直按着 Shift 连打两半；
         // 补全的左移键要等 Shift 松开才发，右半标点会先到。
-        let arrow_pending = action == PairEdit::Skip
+        let arrow_pending = s.pair_absorb_closing
+            && action == PairEdit::Skip
             && s.composition.is_none()
             && s.caret_move.is_some()
             && s.pair_delivery.untouched();

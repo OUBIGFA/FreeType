@@ -73,6 +73,7 @@ type Config struct {
 	DigitPunctFullwidth  int         `json:"digit_punct_fullwidth"`
 	CornerQuotes         bool        `json:"corner_quotes"`
 	AutoPair             bool        `json:"auto_pair"`
+	AutoPairAbsorb       bool        `json:"auto_pair_absorb_closing"`
 	Autospace            bool        `json:"autospace"`
 	AutospaceLetters     bool        `json:"autospace_letters"`
 	AutospaceDigits      bool        `json:"autospace_digits"`

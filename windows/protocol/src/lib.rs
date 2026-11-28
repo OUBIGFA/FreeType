@@ -385,6 +385,8 @@ pub struct Config {
     pub corner_quotes: bool,
     /// 成对标点自动补全：打（ “ 《 【 时补上另一半，光标放中间。
     pub auto_pair: bool,
+    /// 习惯连打左右两半时，补全后紧接着按下的右半标点不再重复插入（默认关）。
+    pub auto_pair_absorb_closing: bool,
     /// 中英文之间自动加空格（总开关，默认开）；字母、数字两种分别控制。
     pub autospace: bool,
     pub autospace_letters: bool,
@@ -520,6 +522,7 @@ impl Default for Config {
             digit_punct_fullwidth: digit_punct::DEFAULT,
             corner_quotes: false,
             auto_pair: true,
+            auto_pair_absorb_closing: false,
             autospace: true,
             autospace_letters: true,
             autospace_digits: true,
@@ -1207,6 +1210,9 @@ pub struct Frame {
     pub caret_back: usize,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pair_enabled: bool,
+    /// 设置「连打两半时不重复右标点」：补全的左移键发出前按下的右半标点只跳过。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pair_absorb_closing: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pair_edit: Option<PairEdit>,
     /// 编辑区（组字）文字；空串表示没有在组字。

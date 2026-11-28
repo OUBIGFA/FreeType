@@ -936,7 +936,11 @@ func (s *settings) typingPage(c *ui.Context) {
 			})
 		})
 		changed = s.settingSwitch(c, "typing/双引号改用直角引号", false, &s.config.CornerQuotes) || changed
-		changed = s.settingSwitch(c, "typing/成对标点自动补全", false, &s.config.AutoPair) || changed
+		settingGroup(c, func() {
+			changed = s.settingSwitch(c, "typing/成对标点自动补全", false, &s.config.AutoPair) || changed
+		}, s.config.AutoPair || s.showSetting("typing/连打两半时不重复右标点"), func() {
+			changed = s.settingSwitch(c, "typing/连打两半时不重复右标点", true, &s.config.AutoPairAbsorb) || changed
+		})
 		changed = s.settingSwitch(c, "typing/小键盘的点输入「.」", false, &s.config.NumpadDot) || changed
 	})
 	section(c, "中英文混排", func() {

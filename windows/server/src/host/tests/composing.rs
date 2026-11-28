@@ -355,6 +355,19 @@ fn auto_pair_puts_caret_inside() {
     cleanup(&host);
 }
 
+/// 「连打两半时不重复右标点」默认关闭，开启后随成对标点一起告诉 DLL；关掉补全时不生效。
+#[test]
+fn absorbing_a_typed_closing_mark_follows_its_switch() {
+    let mut host = host("pair-absorb");
+    let frame = press(&mut host, '(' as u32);
+    assert!(frame.pair_enabled && !frame.pair_absorb_closing);
+    configure(&mut host, |c| c.auto_pair_absorb_closing = true);
+    assert!(press(&mut host, '(' as u32).pair_absorb_closing);
+    configure(&mut host, |c| c.auto_pair = false);
+    assert!(!press(&mut host, '(' as u32).pair_absorb_closing);
+    cleanup(&host);
+}
+
 #[test]
 fn test_then_real_key_uses_one_result() {
     let mut host = host("test-key");

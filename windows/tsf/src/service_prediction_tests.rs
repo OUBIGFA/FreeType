@@ -2758,6 +2758,7 @@ fn closing_key_before_the_pair_arrow_lands_keeps_a_single_closing_mark() {
                 commit: Some("【】".into()),
                 caret_back: 1,
                 pair_enabled: true,
+                pair_absorb_closing: true,
                 ..Frame::default()
             },
             true,
@@ -2835,5 +2836,33 @@ fn closing_key_inside_a_pair_skips_the_existing_closing_mark() {
             "【】"
         );
         assert_eq!(editor.store.selection.get().acpStart, 2);
+    });
+}
+
+/// 「连打两半时不重复右标点」默认关闭：关闭时右键照常交给服务进程，不撤销待发的左移键。
+#[test]
+fn closing_key_before_the_pair_arrow_is_ordinary_input_when_the_switch_is_off() {
+    in_editor(|editor, state, sink| unsafe {
+        use_test_host(&state);
+        assert!(!freetype_protocol::Config::default().auto_pair_absorb_closing);
+        apply(
+            &state,
+            Some(&editor.context),
+            Frame {
+                commit: Some("【】".into()),
+                caret_back: 1,
+                pair_enabled: true,
+                ..Frame::default()
+            },
+            true,
+        );
+        sink.OnTestKeyDown(&editor.context, WPARAM(0xDD), LPARAM(0))
+            .unwrap();
+        sink.OnKeyDown(&editor.context, WPARAM(0xDD), LPARAM(0))
+            .unwrap();
+        assert!(
+            state.borrow().caret_move.is_some(),
+            "without the switch the pending Left stays scheduled"
+        );
     });
 }

@@ -3,6 +3,7 @@
   "app_presets": false,
   "arrow_keys": "candidates",
   "auto_pair": true,
+  "auto_pair_absorb_closing": false,
   "auto_update": false,
   "autospace": true,
   "autospace_digits": true,

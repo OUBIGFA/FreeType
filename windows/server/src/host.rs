@@ -2303,6 +2303,8 @@ impl Host {
                 if let (Some(client), Some(frame)) = (self.clients.get(&id), &mut response.frame) {
                     frame.pair_enabled =
                         frame.mode == Mode::Chinese && client.state.pairs_enabled(&self.config);
+                    frame.pair_absorb_closing =
+                        frame.pair_enabled && self.config.auto_pair_absorb_closing;
                 }
                 let learned = self
                     .clients
